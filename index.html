@@ -1,0 +1,2636 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ANyone Protocol — Global Relay Network</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.8.5/d3.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/topojson/3.0.2/topojson.min.js"></script>
+<link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Orbitron:wght@400;700;900&family=Rajdhani:wght@400;600;700&display=swap" rel="stylesheet">
+<style>
+:root{
+  --cyan:#00f5ff;--cyan-dim:#006e7a;
+  --green:#00ff88;--orange:#ff6b35;--gold:#ffd700;
+  --bg:#020b12;--panel:rgba(2,14,24,0.96);--border:rgba(0,245,255,0.13);
+}
+body.light{
+  --bg:#f0f4f8;--panel:rgba(240,244,248,0.97);--border:rgba(0,40,80,0.15);
+  --cyan:#0077aa;--cyan-dim:#005577;
+  --green:#007744;--orange:#cc4400;--gold:#886600;
+  background:#ddeef5;color:#2a5060;
+}
+body.light #hdr       { background:rgba(10,22,40,0.97); }
+body.light #map-wrap  { background:#0a1628; }
+body.light .sphere    { fill:#0a1628; }
+body.light .country   { fill:rgba(15,35,65,.92); stroke:rgba(0,210,230,.18); }
+body.light .cmesh     { stroke:rgba(0,210,230,.08); }
+body.light .graticule { stroke:rgba(0,210,230,.04); }
+body.light .equator-line { stroke:rgba(0,210,230,.20); }
+body.light #ticker    { background:rgba(10,22,40,0.97); }
+body.light #tktext    { color:#7ecfdf; }
+body.light #legend    { background:rgba(10,22,40,0.95); }
+body.light .zb        { background:rgba(15,35,65,.95); color:#00d4e8; }
+body.light #tip       { background:rgba(10,22,40,0.97); border-color:#00d4e8; }
+body.light .tth       { color:#00d4e8; }
+body.light .ttv       { color:#7ecfdf; }
+body.light #status    { color:#7ecfdf; }
+body.light #btn-refresh { color:#00d4e8; }
+#refresh-age { display:inline-block; min-width:72px; text-align:center; }
+body.light #btn-theme   { color:#00d4e8; }
+@keyframes pulse-dot{0%,100%{opacity:1;transform:scale(1);}50%{opacity:0.4;transform:scale(0.7);}}
+*{margin:0;padding:0;box-sizing:border-box;}
+html,body{width:100%;height:100%;background:var(--bg);font-family:'Rajdhani',sans-serif;overflow:hidden;color:#8abcc4;}
+
+#hdr{
+  position:fixed;top:0;left:0;right:0;z-index:300;height:60px;
+  background:rgba(1,7,14,0.98);border-bottom:1px solid var(--border);
+  display:flex;align-items:center;justify-content:space-between;padding:0 22px;
+}
+.logo{display:flex;align-items:center;gap:11px;}
+.logo-box{
+  width:42px;height:42px;border-radius:50%;
+  display:flex;align-items:center;justify-content:center;
+  box-shadow:0 0 18px rgba(0,245,255,0.35);animation:glo 3s ease-in-out infinite;
+  overflow:hidden;flex-shrink:0;
+}
+.logo-box img{width:100%;height:100%;object-fit:cover;border-radius:50%;}
+@keyframes glo{0%,100%{box-shadow:0 0 14px rgba(0,245,255,.28);}50%{box-shadow:0 0 32px rgba(0,245,255,.65);}}
+.logo-name{font-family:'Orbitron',sans-serif;font-size:16px;font-weight:900;color:#fff;letter-spacing:3px;}
+.logo-name em{color:var(--cyan);font-style:normal;}
+.logo-sub{font-size:11px;color:#ffffff;letter-spacing:2px;text-transform:uppercase;margin-top:2px;font-weight:600;}
+body.light .logo-sub{color:#7ecfdf;}
+.stats{display:flex;align-items:center;flex-shrink:1;overflow:hidden;}
+.sb{display:flex;flex-direction:column;align-items:flex-end;padding:0 10px;border-right:1px solid var(--border);min-width:70px;flex-shrink:1;}
+.sb:last-child{border-right:none;padding-right:0;}
+.sb.center{align-items:center;min-width:100px;max-width:115px;}
+.sv{font-family:'Orbitron',sans-serif;font-size:13px;font-weight:700;display:flex;align-items:center;gap:5px;}
+.sv.c{color:var(--cyan);}.sv.g{color:var(--green);}.sv.w{color:#fff;}.sv.o{color:var(--orange);font-variant-numeric:tabular-nums;}.sv.y{color:var(--gold);}
+.sl{font-size:11px;letter-spacing:1.5px;text-transform:uppercase;color:#ffffff;margin-top:2px;font-weight:600;}
+body.light .sl{color:#7ecfdf;}
+.dot{width:6px;height:6px;border-radius:50%;background:var(--green);animation:blink 1.4s ease-in-out infinite;}
+@keyframes blink{0%,100%{opacity:1;}50%{opacity:.05;}}
+
+#map-wrap{position:fixed;top:60px;left:0;right:0;bottom:28px;overflow:hidden;background:#001428;}
+#map{width:100%;height:100%;}
+.sphere{fill:#001428;pointer-events:none;}
+.graticule{fill:none;stroke:rgba(0,245,255,.038);stroke-width:.4;}
+.equator-line{fill:none;stroke:rgba(0,245,255,.15);stroke-width:.8;stroke-dasharray:8,12;}
+.country{fill:rgba(8,42,72,.95);stroke:rgba(0,210,230,.22);stroke-width:.35;}
+.cmesh{fill:none;stroke:rgba(0,245,255,.11);stroke-width:.5;}
+
+/* Country labels */
+.clabel{
+  font-family:'Rajdhani',sans-serif;
+  fill:rgba(0,245,255,0.75);
+  font-weight:700;
+  text-anchor:middle;
+  dominant-baseline:middle;
+  pointer-events:none;
+  letter-spacing:.3px;
+  text-transform:uppercase;
+  paint-order:stroke;
+  stroke:rgba(0,0,0,0.85);
+  stroke-width:2.5px;
+  stroke-linejoin:round;
+}
+body.light .clabel{ fill:rgba(180,220,235,0.9); stroke:rgba(5,15,30,0.8); }
+
+#ticker{
+  position:fixed;bottom:0;left:0;right:0;height:28px;z-index:300;
+  background:rgba(1,5,11,.98);border-top:1px solid var(--border);
+  display:flex;align-items:center;overflow:hidden;
+}
+.tk-badge{
+  flex-shrink:0;width:48px;height:100%;background:var(--cyan);
+  display:flex;align-items:center;justify-content:center;
+  font-family:'Orbitron',sans-serif;font-size:8px;font-weight:700;color:#000;letter-spacing:1px;
+}
+#tk{
+  flex:1;overflow:hidden;position:relative;height:100%;display:flex;align-items:center;
+}
+#tktext{
+  position:absolute;white-space:nowrap;
+  font-family:'Share Tech Mono',monospace;font-size:11px;color:var(--cyan-dim);padding-left:18px;
+  will-change:transform;
+  transform:translateZ(0);
+  -webkit-font-smoothing:antialiased;
+  backface-visibility:hidden;
+}
+
+#legend{
+  position:fixed;bottom:36px;left:14px;z-index:300;
+  background:var(--panel);border:1px solid var(--border);
+  border-radius:9px;padding:11px 14px;backdrop-filter:blur(10px);
+}
+.lh{font-family:'Orbitron',sans-serif;font-size:11px;letter-spacing:2px;color:#ffffff;margin-bottom:10px;font-weight:700;}
+.lr{display:flex;align-items:center;gap:9px;margin-bottom:6px;font-size:12px;color:#ffffff;font-weight:600;}
+.ld{width:10px;height:10px;border-radius:50%;flex-shrink:0;}
+body.light .lh{color:#00d4e8;}
+body.light .lr{color:#e0f4ff;}
+
+#zc{position:fixed;right:14px;top:50%;transform:translateY(-50%);z-index:300;display:flex;flex-direction:column;gap:4px;}
+#zoom-level{width:30px;height:22px;background:var(--panel);border:1px solid var(--border);border-radius:5px;
+  color:var(--cyan);font-family:'Orbitron',sans-serif;font-size:7px;font-weight:700;
+  display:flex;align-items:center;justify-content:center;letter-spacing:0.5px;
+  opacity:0.85;}
+.zb{width:30px;height:30px;background:var(--panel);border:1px solid var(--border);border-radius:5px;
+  color:var(--cyan);font-size:17px;display:flex;align-items:center;justify-content:center;cursor:pointer;user-select:none;}
+.zb:hover{background:rgba(0,245,255,.1);}
+
+#tip{
+  display:none;position:fixed;z-index:9999;pointer-events:none;
+  background:rgba(1,9,19,.98);border:1px solid var(--cyan);border-radius:9px;
+  padding:11px 14px;min-width:195px;box-shadow:0 0 24px rgba(0,245,255,.22);
+}
+.tth{font-family:'Orbitron',sans-serif;font-size:10px;font-weight:700;color:#fff;
+  margin-bottom:7px;border-bottom:1px solid var(--border);padding-bottom:5px;}
+.ttr{display:flex;justify-content:space-between;gap:12px;margin-bottom:3px;font-size:10px;}
+.ttk{color:rgba(138,188,196,.48);letter-spacing:1px;text-transform:uppercase;}
+.ttv{font-family:'Share Tech Mono',monospace;color:var(--cyan);font-weight:700;}
+.ttbar{margin-top:8px;height:2px;background:rgba(0,245,255,.1);border-radius:2px;}
+.ttfill{height:100%;border-radius:2px;}
+
+#status{
+  position:fixed;top:68px;right:14px;z-index:400;
+  font-family:'Share Tech Mono',monospace;font-size:12px;color:#ffffff;letter-spacing:1px;font-weight:600;
+}
+body.light #status{color:#7ecfdf;}
+
+#btn-relays,#btn-refresh,#btn-theme,#btn-signal{
+  margin-left:8px;padding:0 12px;height:28px;border:1px solid var(--border);
+  background:rgba(0,245,255,.06);border-radius:5px;color:var(--cyan);
+  font-family:'Orbitron',sans-serif;font-size:8px;letter-spacing:2px;
+  cursor:pointer;display:flex;align-items:center;gap:5px;transition:background .2s;
+}
+#btn-relays:hover,#btn-refresh:hover,#btn-theme:hover,#btn-signal:hover{background:rgba(0,245,255,.14);}
+#btn-signal.active{background:rgba(0,245,255,.18);border-color:var(--cyan);box-shadow:0 0 8px rgba(0,245,255,.25);}
+#btn-refresh{min-width:116px;justify-content:center;}
+#btn-refresh.spin .ri{animation:spinr .65s linear infinite;}
+.ri{font-size:13px;display:inline-block;}
+@keyframes spinr{to{transform:rotate(360deg);}}
+
+/* ── CONNECTION WEB ── */
+.conn-line{fill:none;pointer-events:none;}
+/* ── SIGNAL ARCS ── */
+.arc-out{fill:none;pointer-events:none;}
+.arc-in {fill:none;pointer-events:none;}
+.arc-dot{pointer-events:none;}
+/* Relay Browser Panel */
+#relay-panel{
+  position:fixed;top:52px;right:14px;z-index:400;
+  background:var(--panel);border:1px solid var(--border);
+  border-radius:8px;padding:10px 13px;width:260px;
+  font-family:'Rajdhani',sans-serif;
+  display:none;
+}
+#relay-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;gap:8px;}
+#relay-close{background:none;border:none;color:rgba(0,245,255,.4);cursor:pointer;font-size:11px;padding:0 2px;}
+#relay-close:hover{color:var(--cyan);}
+#relay-search{
+  width:100%;box-sizing:border-box;
+  background:rgba(0,245,255,.06);border:1px solid var(--border);
+  border-radius:4px;padding:5px 8px;color:#fff;font-size:11px;
+  font-family:'Rajdhani',sans-serif;outline:none;margin-bottom:8px;
+}
+#relay-search::placeholder{color:rgba(138,188,196,.4);}
+#relay-search:focus{border-color:var(--cyan);}
+#relay-stats{display:flex;gap:0;margin-bottom:8px;border-bottom:1px solid var(--border);padding-bottom:8px;}
+.rs-stat{flex:1;text-align:center;}
+.rs-v{display:block;font-family:'Orbitron',sans-serif;font-size:12px;font-weight:700;color:var(--cyan);}
+.rs-k{display:block;font-size:9px;letter-spacing:1px;color:rgba(138,188,196,.5);text-transform:uppercase;}
+#relay-list{max-height:220px;overflow-y:auto;scrollbar-width:thin;scrollbar-color:var(--border) transparent;}
+/* Type filter buttons */
+.rf-btn{
+  flex:1;padding:3px 6px;border-radius:4px;font-family:'Orbitron',sans-serif;font-size:7px;
+  font-weight:700;letter-spacing:.5px;cursor:pointer;border:1px solid rgba(138,188,196,.2);
+  background:rgba(138,188,196,.05);color:rgba(138,188,196,.5);transition:all .15s;
+}
+.rf-btn:hover{border-color:rgba(138,188,196,.4);color:rgba(138,188,196,.8);}
+.rf-btn.active{background:rgba(0,245,255,.12);border-color:rgba(0,245,255,.4);color:#00f5ff;}
+.rf-btn.exit.active{background:rgba(255,107,53,.12);border-color:rgba(255,107,53,.5);color:#ff6b35;}
+.rf-btn.guard.active{background:rgba(167,139,250,.12);border-color:rgba(167,139,250,.5);color:#a78bfa;}
+.rf-btn.middle.active{background:rgba(45,212,191,.10);border-color:rgba(45,212,191,.4);color:#2dd4bf;}
+/* Country bars */
+.cb-row{display:flex;align-items:center;gap:5px;margin-bottom:3px;}
+.cb-flag{font-size:10px;width:16px;text-align:center;flex-shrink:0;}.cb-iso{font-size:8px;color:rgba(0,245,255,.75);width:18px;flex-shrink:0;font-family:"Share Tech Mono",monospace;letter-spacing:0;font-weight:700;}
+.cb-name{font-size:9px;color:#e0f4ff;width:76px;flex-shrink:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-weight:500;}
+.cb-bar-wrap{flex:1;background:rgba(0,245,255,.12);border-radius:2px;height:7px;overflow:hidden;}
+.cb-bar{height:100%;border-radius:2px;transition:width .4s ease;}
+.cb-count{font-size:9px;color:#00f5ff;width:32px;text-align:right;flex-shrink:0;font-family:"Share Tech Mono",monospace;font-weight:700;}
+#relay-detail{margin-top:10px;padding:10px;background:rgba(0,245,255,.04);border:1px solid rgba(0,245,255,.15);border-radius:6px;display:none;font-size:11px;}
+.rd-actions{display:flex;gap:6px;margin-top:10px;}
+.rd-btn{flex:1;display:flex;align-items:center;justify-content:center;gap:5px;padding:5px 8px;border-radius:5px;font-size:9px;font-family:Orbitron,sans-serif;font-weight:700;letter-spacing:.05em;cursor:pointer;border:none;transition:all .15s;text-decoration:none;}
+.rd-btn.copy{background:rgba(0,245,255,.1);color:#00f5ff;border:1px solid rgba(0,245,255,.25);}
+.rd-btn.copy:hover{background:rgba(0,245,255,.2);border-color:rgba(0,245,255,.5);}
+.rd-btn.copy.copied{background:rgba(52,211,153,.15);color:#34d399;border-color:rgba(52,211,153,.4);}
+#relay-detail.visible{display:block;}
+.rd-title{font-family:'Orbitron',sans-serif;font-size:11px;color:var(--cyan);margin-bottom:8px;display:flex;align-items:center;justify-content:space-between;}
+.rd-row{display:flex;justify-content:space-between;align-items:center;padding:3px 0;border-bottom:1px solid rgba(0,245,255,.05);}
+.rd-row:last-child{border-bottom:none;}
+.rd-key{color:rgba(138,188,196,.6);font-size:10px;}
+.rd-val{color:var(--fg);font-weight:600;font-size:11px;text-align:right;max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.rd-flags{display:flex;flex-wrap:wrap;gap:3px;margin-top:6px;}
+.rd-flag{padding:1px 5px;border-radius:3px;font-size:9px;font-weight:700;background:rgba(0,245,255,.1);color:var(--cyan);border:1px solid rgba(0,245,255,.2);}
+.rd-flag.exit{background:rgba(255,107,53,.15);color:#ff6b35;border-color:rgba(255,107,53,.4);}
+.rd-flag.guard{background:rgba(167,139,250,.15);color:#a78bfa;border-color:rgba(167,139,250,.4);}
+.rd-flag.middle{background:rgba(45,212,191,.15);color:#2dd4bf;border-color:rgba(45,212,191,.4);}
+.rd-flag.hw{background:rgba(251,191,36,.15);color:#fbbf24;border-color:rgba(251,191,36,.4);}
+.rd-flag.hsdir{background:rgba(34,211,238,.15);color:#22d3ee;border-color:rgba(34,211,238,.4);}
+.rd-flag.stable{background:rgba(52,211,153,.15);color:#34d399;border-color:rgba(52,211,153,.4);}
+.rd-flag.fast{background:rgba(250,204,21,.15);color:#facc15;border-color:rgba(250,204,21,.4);}
+.rd-flag.v2dir{background:rgba(244,114,182,.15);color:#f472b6;border-color:rgba(244,114,182,.4);}
+.rd-flag.running{background:rgba(74,222,128,.15);color:#4ade80;border-color:rgba(74,222,128,.4);}
+.rd-flag.valid{background:rgba(148,163,184,.12);color:#94a3b8;border-color:rgba(148,163,184,.3);}
+.rd-isp{font-size:9px;color:rgba(138,188,196,.5);margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+#rd-loading{text-align:center;padding:10px;color:rgba(138,188,196,.5);font-size:11px;}
+.rl-item{padding:6px 4px;border-bottom:1px solid rgba(0,245,255,.05);cursor:pointer;}
+.rl-item:hover{background:rgba(0,245,255,.06);border-radius:4px;padding-left:6px;}
+.rl-fp{font-family:'Share Tech Mono',monospace;font-size:8px;color:var(--cyan);opacity:.7;word-break:break-all;}
+.rl-loc{font-size:11px;color:#fff;font-weight:600;margin:2px 0 1px;}
+.rl-isp{font-size:10px;color:rgba(138,188,196,.55);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.rl-badges{display:flex;gap:3px;margin-top:3px;flex-wrap:wrap;align-items:center;}
+.rl-badge{font-size:8px;font-weight:700;padding:1px 5px;border-radius:3px;border:1px solid;letter-spacing:.5px;}
+.rl-badge.exit{background:rgba(255,107,53,.15);color:#ff6b35;border-color:rgba(255,107,53,.4);}
+.rl-badge.guard{background:rgba(167,139,250,.15);color:#a78bfa;border-color:rgba(167,139,250,.4);}
+.rl-badge.middle{background:rgba(45,212,191,.12);color:#2dd4bf;border-color:rgba(45,212,191,.3);}
+.rl-badge.loading{background:rgba(255,255,255,.05);color:rgba(138,188,196,.4);border-color:rgba(138,188,196,.2);}
+@keyframes ringPulse{0%{stroke-opacity:0.06}50%{stroke-opacity:0.42}100%{stroke-opacity:0.06}}
+.ring-pulse{animation:ringPulse 4.4s ease-in-out infinite;}
+/* signal counter + legend overlay */
+#sig-counts{
+  position:fixed;top:68px;left:14px;z-index:400;
+  font-family:'Rajdhani',sans-serif;font-size:13px;font-weight:700;letter-spacing:.5px;
+  display:none;flex-direction:column;gap:4px;
+  background:rgba(2,14,28,0.96);border:1px solid rgba(0,245,255,.35);
+  border-radius:8px;padding:12px 15px;min-width:185px;
+  box-shadow:0 4px 20px rgba(0,0,0,.6);
+}
+.sc-title{font-family:'Orbitron',sans-serif;font-size:10px;letter-spacing:2px;
+  color:#00f5ff;margin-bottom:4px;text-transform:uppercase;font-weight:700;}
+.sc-row{display:flex;align-items:center;gap:9px;margin-bottom:3px;font-size:13px;color:#ffffff;font-weight:700;}
+.sc-row span{color:#ffffff;}
+.sc-dot{width:9px;height:9px;border-radius:50%;flex-shrink:0;}
+.sc-divider{border:none;border-top:1px solid rgba(0,210,230,.3);margin:6px 0;}
+body.light #sig-counts{background:rgba(10,22,40,0.95);border-color:rgba(0,210,230,.3);}
+body.light .sc-title{color:#00d4e8;}
+body.light .sc-row{color:#e0f4ff;}
+body.light .sc-row span{color:#e0f4ff;}
+/* ── COMPASS ── */
+#compass{
+  position:fixed;bottom:40px;right:60px;z-index:400;
+  width:72px;height:72px;pointer-events:none;
+  filter:drop-shadow(0 0 8px rgba(0,245,255,0.35));
+}
+body.light #compass{ filter:drop-shadow(0 0 6px rgba(0,100,180,0.25)); }
+
+</style>
+</head>
+<body>
+
+<!-- HEADER -->
+<div id="hdr">
+  <div class="logo">
+    <div class="logo-box"><img src="data:image/png;base64,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" alt="ANyone Protocol"></div>
+    <div>
+      <div class="logo-name">AN<em>Y</em>ONE <em>PROTOCOL</em></div>
+      <div class="logo-sub">Global Relay Network · Live</div>
+    </div>
+  </div>
+  <div class="stats">
+    <div class="sb"><div class="sv c"><div class="dot"></div><span id="sR">—</span></div><div class="sl">Total Relays</div></div>
+    <div class="sb"><div class="sv" style="color:#22d3ee"><span id="sBW">—</span></div><div class="sl">Total BW</div></div>
+    <div class="sb"><div class="sv" style="color:#ff6b35"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 16" width="16" height="13" style="vertical-align:middle;margin-right:5px;flex-shrink:0;" fill="none" stroke="#ff6b35" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3.5" width="7" height="9" rx="1" stroke-width="1.5" fill="rgba(255,107,53,0.09)"/><line x1="1" y1="5.5" x2="3" y2="5.5" stroke-width="1.3"/><line x1="1" y1="8" x2="3" y2="8" stroke-width="1.3"/><line x1="1" y1="10.5" x2="3" y2="10.5" stroke-width="1.3"/><circle cx="6.5" cy="8" r="1.2" fill="#ff6b35" stroke="none"/><line x1="10" y1="8" x2="19" y2="8" stroke-width="1.8"/><polyline points="16.2,5.8 19,8 16.2,10.2" stroke-width="1.8"/></svg><span id="sX">—</span></div><div class="sl">Exit Relays</div></div>
+    <div class="sb"><div class="sv" style="color:#a78bfa"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 16" width="15" height="12" style="vertical-align:middle;margin-right:4px;flex-shrink:0;" fill="none" stroke="#a78bfa" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="8" r="5.2" stroke-width="1.6" fill="rgba(167,139,250,0.07)"/><path d="M6.2,8.8 L6.2,7 A1.8,1.8 0 0,1 9.8,7 L9.8,8.8" stroke-width="1.5"/><rect x="5.8" y="8.8" width="4.4" height="3" rx="0.7" stroke-width="1.4" fill="rgba(167,139,250,0.18)"/><circle cx="8" cy="10.4" r="0.8" fill="#a78bfa" stroke="none"/><line x1="13.8" y1="8" x2="18.5" y2="8" stroke-width="1.7"/><polyline points="15.5,5.8 13.2,8 15.5,10.2" stroke-width="1.7"/></svg><span id="sG">—</span></div><div class="sl">Guard Relays</div></div>
+    <div class="sb"><div class="sv" style="color:#34d399"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 22 16" width="16" height="12" style="vertical-align:middle;margin-right:4px;flex-shrink:0;" fill="none" stroke="#34d399" stroke-linecap="round" stroke-linejoin="round"><circle cx="3" cy="8" r="2.2" stroke-width="1.4" opacity="0.4"/><line x1="5.2" y1="8" x2="7" y2="8" stroke-width="1.5" opacity="0.4"/><circle cx="11" cy="8" r="4.2" stroke-width="2" fill="rgba(52,211,153,0.12)"/><circle cx="11" cy="8" r="1.5" fill="#34d399" stroke="none"/><line x1="15" y1="8" x2="16.8" y2="8" stroke-width="1.5" opacity="0.4"/><circle cx="19" cy="8" r="2.2" stroke-width="1.4" opacity="0.4"/></svg><span id="sMD">—</span></div><div class="sl">Middle Relays</div></div>
+    <div class="sb"><div class="sv g"><span id="sZ">—</span></div><div class="sl">Zones</div></div>
+    <div class="sb"><div class="sv y"><span id="sM">—</span></div><div class="sl">Top Zone</div></div>
+    <div class="sb"><div class="sv w"><span id="sA">—</span></div><div class="sl">Avg / Zone</div></div>
+    <div class="sb center"><div class="sv o"><span id="sT" style="display:inline-block;width:100px;min-width:100px;max-width:100px;text-align:center;font-family:'Orbitron',sans-serif;font-size:12px;font-weight:700;font-variant-numeric:tabular-nums;letter-spacing:0.5px;overflow:hidden;white-space:nowrap;">—</span></div><div class="sl">LOCAL TIME</div></div>
+    <button id="btn-relays" onclick="openRelayBrowser()" title="Relay Browser"><img src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABYAAAAWCAYAAADEtGw7AAABCGlDQ1BJQ0MgUHJvZmlsZQAAeJxjYGA8wQAELAYMDLl5JUVB7k4KEZFRCuwPGBiBEAwSk4sLGHADoKpv1yBqL+viUYcLcKakFicD6Q9ArFIEtBxopAiQLZIOYWuA2EkQtg2IXV5SUAJkB4DYRSFBzkB2CpCtkY7ETkJiJxcUgdT3ANk2uTmlyQh3M/Ck5oUGA2kOIJZhKGYIYnBncAL5H6IkfxEDg8VXBgbmCQixpJkMDNtbGRgkbiHEVBYwMPC3MDBsO48QQ4RJQWJRIliIBYiZ0tIYGD4tZ2DgjWRgEL7AwMAVDQsIHG5TALvNnSEfCNMZchhSgSKeDHkMyQx6QJYRgwGDIYMZAKbWPz9HbOBQAAADOUlEQVR42n2VwW4cRRCGv+qZtYW8jpM1CcaRcW7ET5AX4MAj+CHhwIEXQMoLREoOnByQEbaEZbJe7053VxWH7p7ZjYCWRjM7mv676q///1cuLy/d3XF3zAx3R1VRVXLO06WZnDIpZ7JlHj4teXxcMz84IKWEueNb+3sRoS0Rwd35t+UIjgACDiF0OGDiICAODrg7IkJo1bbrv5Z4OxziEDk/O+Pl1ycM6w0hBBxne3f/OfB6syHnhGadKMiG5lSe1dhsIpthIMVEjIkggdAFzBUqzgisqpgZR0dPSptmmDvmNnJfNoGZIcBiseCbV69YLpe8e/ee2Sww63vcjL5tauCH80P29/cxs0KnTRT5Fi2tcXN4/nzN999d8OHD7/z081vmB1/Qq+quEkzpzXA38DKMBu4UQDEHEcyd0HcsP6348Ye3EPaZ9R3uVoDNSrs5ZwQhBEG1qEUAAmC1Zq8TbFoxRyTw/tcbzJTjxTNyzvQpZ9wMVSNrLtIJAcyKEqTIy2VSxjR/KSeLsDh+CubknMvwUsqYK6aFDgGCCCEEcJ+I9TqL+mKbd8fRCmjVaAW4UlH4LpUEBBfBXJGuY68rSommBQSfBqyGm++4r48x7ljZq79adX0/Y7i/5+rujqzK6eGcvaMjckqlahHUJkm2IvsYI1NWFIW4FE5D1xPv/+aXzcD1ixe4KsePK97c3LL37OnYftKMuoFNRgsxRmKMpJhKmGyd3ItwdX/PzetvmV1fM/v4G3cXF3xcrQiVupwzmic6x4pTawlGLY+adsceVzxe/8H++TnkzPDnLfqwJNtX5JJipZhWkFpTRRqn3LTcgDfDwOliwZd3d9zODxDgyV93nMwP2dTurPpAdQJ3d/qmuxIFyjAMrNdrWidhb483qxVXV7ckNU5mPRw9Zb1agUPuOmKMmGqxeKVCTl+euVPti+NuOxHqZkjX0deszoDlXLVdrW3GsN6MXQP0KQ87Hz0slwzDgCBTvlbhtzzeDl53J4TAbDbbyXNZLBZu1a7ijosUd/mkZcxrN74TTFa723Fi4zi1toSRjlal11z08bePoNtg24DtuVfN9X/MxxtbFX9ezTbQ/737B0yMgWMINkHCAAAAAElFTkSuQmCC" style="width:20px;height:20px;vertical-align:middle;filter:drop-shadow(0 0 4px rgba(0,245,255,0.8));border-radius:2px;" alt="Relays"></button>
+    <button id="btn-refresh" onclick="refresh()"><span class="ri">⟳</span><span id="refresh-age">REFRESH</span></button>
+    <button id="btn-signal"  onclick="toggleSignals()"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 26 14" width="20" height="11" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:middle;flex-shrink:0;"><line x1="1" y1="7" x2="3" y2="7" stroke-width="1.5"/><polyline points="3,7 5,3 7,11 9,5 11,9 13,7" stroke-width="1.6"/><line x1="13" y1="7" x2="17" y2="7" stroke-width="1.5"/><circle cx="21" cy="7" r="2.8" stroke-width="1.5"/><circle cx="21" cy="7" r="4.8" stroke-width="0.9" opacity="0.3"/><circle cx="21" cy="7" r="1.1" fill="currentColor" stroke="none"/></svg> SIGNALS</button>
+    <button id="btn-theme"   onclick="toggleTheme()">☀ MODE</button>
+    <button id="btn-health" onclick="openHealthPanel()" title="Network Health Score" style="background:linear-gradient(135deg,rgba(0,245,255,.10),rgba(167,139,250,.10));border:1px solid rgba(0,245,255,.3);color:#00f5ff;font-family:'Orbitron',sans-serif;font-weight:700;padding:0 8px;height:36px;cursor:pointer;border-radius:4px;display:flex;align-items:center;gap:4px;transition:all .2s;white-space:nowrap;flex-shrink:0;">
+      <span id="btn-health-score" style="font-size:17px;font-weight:900;color:#00ff88;font-family:'Orbitron',sans-serif;letter-spacing:-1px;text-shadow:0 0 10px #00ff8888;">—</span>
+      <span style="font-size:7px;color:rgba(0,245,255,.65);letter-spacing:1.5px;line-height:1;">HEALTH</span>
+    </button>
+  </div>
+</div>
+
+<!-- MAP -->
+<div id="map-wrap"><svg id="map"></svg></div>
+
+<!-- COMPASS -->
+<svg id="compass" viewBox="0 0 72 72" xmlns="http://www.w3.org/2000/svg">
+  <!-- Outer ring -->
+  <circle cx="36" cy="36" r="34" fill="rgba(0,8,20,0.72)" stroke="rgba(0,245,255,0.3)" stroke-width="1.2"/>
+  <!-- Tick marks -->
+  <g stroke="rgba(0,245,255,0.35)" stroke-width="0.8">
+    <line x1="36" y1="4"  x2="36" y2="10"/>   <!-- N -->
+    <line x1="36" y1="62" x2="36" y2="68"/>  <!-- S -->
+    <line x1="4"  y1="36" x2="10" y2="36"/>  <!-- W -->
+    <line x1="62" y1="36" x2="68" y2="36"/>  <!-- E -->
+    <!-- Minor ticks at 45° -->
+    <line x1="12.1" y1="12.1" x2="16.3" y2="16.3"/>
+    <line x1="59.9" y1="12.1" x2="55.7" y2="16.3"/>
+    <line x1="12.1" y1="59.9" x2="16.3" y2="55.7"/>
+    <line x1="59.9" y1="59.9" x2="55.7" y2="55.7"/>
+  </g>
+  <!-- Inner ring -->
+  <circle cx="36" cy="36" r="26" fill="none" stroke="rgba(0,245,255,0.12)" stroke-width="0.6"/>
+  <!-- N needle (red/cyan) -->
+  <polygon points="36,8 39.5,36 36,30 32.5,36" fill="rgba(0,245,255,0.95)"/>
+  <!-- S needle (dim) -->
+  <polygon points="36,64 39.5,36 36,42 32.5,36" fill="rgba(0,245,255,0.22)"/>
+  <!-- Center dot -->
+  <circle cx="36" cy="36" r="3.5" fill="rgba(0,245,255,0.9)" stroke="rgba(0,8,20,0.8)" stroke-width="1"/>
+  <!-- Cardinal labels -->
+  <text x="36" y="19.5" text-anchor="middle" font-size="8" font-family="'Helvetica Neue',Arial,sans-serif"
+        font-weight="800" fill="rgba(0,245,255,1)" letter-spacing="0.5">N</text>
+  <text x="36" y="57"   text-anchor="middle" font-size="7" font-family="'Helvetica Neue',Arial,sans-serif"
+        font-weight="600" fill="rgba(0,245,255,0.5)" letter-spacing="0.5">S</text>
+  <text x="14.5" y="39" text-anchor="middle" font-size="7" font-family="'Helvetica Neue',Arial,sans-serif"
+        font-weight="600" fill="rgba(0,245,255,0.5)" letter-spacing="0.5">W</text>
+  <text x="57.5" y="39" text-anchor="middle" font-size="7" font-family="'Helvetica Neue',Arial,sans-serif"
+        font-weight="600" fill="rgba(0,245,255,0.5)" letter-spacing="0.5">E</text>
+</svg>
+
+<!-- STATUS -->
+<div id="status" id="status" style="display:none"></div>
+
+<!-- Relay Browser Panel -->
+<div id="relay-panel">
+  <div id="relay-header">
+    <span style="font-family:'Orbitron',sans-serif;font-size:10px;letter-spacing:2px;color:#00f5ff">⬡ RELAY BROWSER</span>
+    <div style="display:flex;gap:6px;align-items:center">
+      <span id="relay-count" style="font-size:9px;color:#00ff88;letter-spacing:1px">—</span>
+      <button id="relay-close" onclick="document.getElementById('relay-panel').style.display='none';document.getElementById('relay-detail').classList.remove('visible');svg.transition().duration(600).call(zoom.transform,d3.zoomIdentity);">✕</button>
+    </div>
+  </div>
+
+  <!-- Stats row -->
+  <div id="relay-stats">
+    <div class="rs-stat"><span class="rs-v" id="rs-total" style="color:#00f5ff;">—</span><span class="rs-k">Relays</span></div>
+    <div class="rs-stat"><span class="rs-v" id="rs-countries" style="color:#a78bfa;">—</span><span class="rs-k">Countries</span></div>
+    <div class="rs-stat"><span class="rs-v" id="rs-isps" style="color:#fbbf24;">—</span><span class="rs-k">ISPs</span></div>
+  </div>
+
+  <!-- Type filter buttons -->
+  <div id="relay-filters" style="display:flex;gap:5px;margin-bottom:8px;flex-wrap:wrap;">
+    <button class="rf-btn active" data-filter="all" onclick="applyRelayFilter('all')">ALL</button>
+    <button class="rf-btn exit" data-filter="exit" onclick="applyRelayFilter('exit')">🟠 EXIT</button>
+    <button class="rf-btn guard" data-filter="guard" onclick="applyRelayFilter('guard')">🟣 GUARD</button>
+    <button class="rf-btn middle" data-filter="middle" onclick="applyRelayFilter('middle')">🩵 MIDDLE</button>
+  </div>
+
+  <!-- Search -->
+  <input id="relay-search" type="text" placeholder="Search fingerprint, city, ISP…" oninput="filterRelays(this.value)">
+
+  <!-- Top Countries mini chart -->
+  <div id="top-countries" style="margin-bottom:8px;border-bottom:1px solid var(--border);padding-bottom:8px;">
+    <div style="font-family:'Orbitron',sans-serif;font-size:8px;letter-spacing:1.5px;color:rgba(0,245,255,.9);margin-bottom:5px;">TOP COUNTRIES</div>
+    <div id="country-bars"></div>
+  </div>
+
+  <div id="relay-list"></div>
+
+  <div id="relay-detail">
+    <div class="rd-title">
+      <span id="rd-nickname">—</span>
+      <span id="rd-status" style="font-size:9px"></span>
+    </div>
+    <div class="rd-row"><span class="rd-key">Fingerprint</span><span class="rd-val" id="rd-fp" style="font-size:9px;font-family:monospace">—</span></div>
+    <div class="rd-row"><span class="rd-key">IP Address</span><span class="rd-val" id="rd-ip">—</span></div>
+    <div class="rd-row"><span class="rd-key">Country</span><span class="rd-val" id="rd-country">—</span></div>
+    <div class="rd-row"><span class="rd-key">Bandwidth</span><span class="rd-val" id="rd-bw">—</span></div>
+    <div class="rd-row"><span class="rd-key">Uptime</span><span class="rd-val" id="rd-uptime">—</span></div>
+    <div class="rd-row"><span class="rd-key">Consensus Weight</span><span class="rd-val" id="rd-cw">—</span></div>
+    <div class="rd-row"><span class="rd-key">Location Boost</span><span class="rd-val" id="rd-loc">—</span></div>
+    <div class="rd-row"><span class="rd-key">Family Boost</span><span class="rd-val" id="rd-fam">—</span></div>
+    <div class="rd-flags" id="rd-flags"></div>
+  </div>
+</div>
+<!-- SIGNAL PANEL -->
+<div id="sig-counts">
+  <div class="sc-title">Connection Web</div>
+  <div class="sc-row"><div class="sc-dot" style="background:rgba(255,180,0,.9)"></div><span id="sc-strong">0 strong links</span></div>
+  <div class="sc-row"><div class="sc-dot" style="background:rgba(0,245,255,.6)"></div><span id="sc-med">0 medium links</span></div>
+  <div class="sc-row"><div class="sc-dot" style="background:rgba(0,245,255,.25)"></div><span id="sc-weak">0 weak links</span></div>
+  <hr class="sc-divider">
+  <div class="sc-title">Live Signals</div>
+  <div class="sc-row"><div class="sc-dot" style="background:#00f5ff"></div><span id="sc-out">0 outgoing</span></div>
+  <div class="sc-row"><div class="sc-dot" style="background:#00ff88"></div><span id="sc-in">0 incoming</span></div>
+</div>
+
+<!-- LEGEND -->
+<div id="legend">
+  <div class="lh">RELAY TYPES</div>
+  <div class="lr"><div class="ld" style="background:#ff6b35;box-shadow:0 0 8px #ff6b35aa"></div>Exit</div>
+  <div class="lr"><div class="ld" style="background:#a78bfa;box-shadow:0 0 8px #a78bfaaa"></div>Guard</div>
+  <div class="lr"><div class="ld" style="background:#2dd4bf;box-shadow:0 0 8px #2dd4bfaa"></div>Middle</div>
+  <div style="border-top:1px solid rgba(0,245,255,0.1);margin:8px 0 6px"></div>
+  <div class="lh" style="font-size:9px;margin-bottom:6px">SIZE = RELAY COUNT</div>
+  <div class="lr" style="font-size:10px"><div class="ld" style="width:14px;height:14px;background:rgba(255,255,255,0.9);box-shadow:0 0 8px #fffa"></div>500+</div>
+  <div class="lr" style="font-size:10px"><div class="ld" style="width:10px;height:10px;background:#00f5ff;box-shadow:0 0 6px #00f5ff88"></div>100–499</div>
+  <div class="lr" style="font-size:10px"><div class="ld" style="width:8px;height:8px;background:#00ff88;box-shadow:0 0 5px #00ff8866"></div>20–99</div>
+  <div class="lr" style="font-size:10px"><div class="ld" style="width:6px;height:6px;background:#ffd700;box-shadow:0 0 4px #ffd70066"></div>5–19</div>
+  <div class="lr" style="font-size:10px"><div class="ld" style="width:4px;height:4px;background:#ff6b35;box-shadow:0 0 3px #ff6b3566"></div>1–4</div>
+</div>
+
+<!-- ZOOM -->
+<div id="zc">
+  <div class="zb" id="zi">+</div>
+  <div class="zb" id="zo">−</div>
+  <div id="zoom-level">100%</div>
+  <div class="zb" id="zr" style="font-size:12px">↺</div>
+</div>
+
+<!-- TICKER -->
+<div id="ticker">
+  <div class="tk-badge" style="gap:5px;"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 13 16" width="10" height="13" fill="none" stroke="#000" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;"><path d="M1,15 L6.5,2 L12,15" stroke-width="2.2"/><line x1="3" y1="10.5" x2="10" y2="10.5" stroke-width="2"/><circle cx="6.5" cy="2" r="2" fill="#000" stroke="none"/></svg><span style="font-family:'Orbitron',sans-serif;font-size:8px;font-weight:700;color:#000;letter-spacing:1px;">LIVE</span></div>
+  <div id="tk"><div id="tktext">LOADING…</div></div>
+</div>
+
+<div id="relay-legend" style="position:fixed;bottom:18px;left:50%;transform:translateX(-50%);display:flex;gap:16px;align-items:center;background:rgba(6,18,32,0.75);backdrop-filter:blur(8px);border:1px solid rgba(138,188,196,.15);border-radius:20px;padding:6px 16px;font-size:10px;font-family:Orbitron,sans-serif;color:rgba(138,188,196,.7);letter-spacing:.05em;z-index:50;pointer-events:none;">
+  <span style="display:flex;align-items:center;gap:5px"><span style="width:8px;height:8px;border-radius:50%;background:#ff6b35;display:inline-block;box-shadow:0 0 6px #ff6b35"></span>EXIT</span>
+  <span style="display:flex;align-items:center;gap:5px"><span style="width:8px;height:8px;border-radius:50%;background:#a78bfa;display:inline-block;box-shadow:0 0 6px #a78bfa"></span>GUARD</span>
+  <span style="display:flex;align-items:center;gap:5px"><span style="width:8px;height:8px;border-radius:50%;background:#2dd4bf;display:inline-block;box-shadow:0 0 6px #2dd4bf"></span>MIDDLE</span>
+  <span id="legend-loading" style="display:flex;align-items:center;gap:5px">
+    <span style="width:8px;height:8px;border-radius:50%;background:#00f5ff;display:inline-block;box-shadow:0 0 6px #00f5ff;animation:pulse-dot 1s ease-in-out infinite"></span>
+    <span id="legend-loading-text">COLORING 0%</span>
+  </span>
+</div>
+
+<!-- TOOLTIP -->
+<div id="tip">
+  <div class="tth" id="tth">—</div>
+  <div class="ttr"><span class="ttk">Relays</span><span class="ttv" id="ttr">—</span></div>
+  <div class="ttr"><span class="ttk">Rank</span><span class="ttv" id="ttrk">—</span></div>
+  <div class="ttr"><span class="ttk">Location</span><span class="ttv" id="ttloc">—</span></div>
+  <div class="ttr"><span class="ttk">Lat / Lon</span><span class="ttv" id="ttll">—</span></div>
+  <div class="ttr"><span class="ttk">Top ISP</span><span class="ttv" id="ttisp">—</span></div>
+  <div class="ttr"><span class="ttk">Bandwidth</span><span class="ttv" id="ttbw">—</span></div>
+  <div class="ttr"><span class="ttk">H3 Index</span><span class="ttv" id="ttix" style="font-size:9px;opacity:.6">—</span></div>
+  <div class="ttr" id="tttype-row" style="display:none"><span class="ttk">Types</span><span class="ttv" id="tttype" style="font-size:9px;color:rgba(138,188,196,.6)">—</span></div>
+  <div class="ttbar"><div class="ttfill" id="ttfill"></div></div>
+</div>
+
+<script>
+/* ══════════════════════════════════════════
+   EMBEDDED FALLBACK DATA  (from live API)
+   This guarantees the map always renders even
+   if CORS blocks the browser fetch.
+══════════════════════════════════════════ */
+const FALLBACK = [{"index":"8408867ffffffff","relayCount":204,"geo":[59.338,17.981]},{"index":"841ea3dffffffff","relayCount":254,"geo":[44.038,12.292]},{"index":"841f833ffffffff","relayCount":17,"geo":[47.124,8.400]},{"index":"841fb47ffffffff","relayCount":248,"geo":[48.815,2.184]},{"index":"841ef33ffffffff","relayCount":252,"geo":[42.119,21.184]},{"index":"841f8e7ffffffff","relayCount":253,"geo":[46.980,9.551]},{"index":"841fa3dffffffff","relayCount":251,"geo":[49.770,6.055]},{"index":"841f857ffffffff","relayCount":138,"geo":[48.589,7.744]},{"index":"841facbffffffff","relayCount":652,"geo":[51.132,9.394]},{"index":"8439623ffffffff","relayCount":250,"geo":[42.524,1.617]},{"index":"8407463ffffffff","relayCount":149,"geo":[65.186,-17.918]},{"index":"841e34dffffffff","relayCount":74,"geo":[50.406,12.599]},{"index":"841fabbffffffff","relayCount":306,"geo":[49.555,11.245]},{"index":"841ec47ffffffff","relayCount":252,"geo":[42.769,23.096]},{"index":"84bcc3dffffffff","relayCount":253,"geo":[-26.415,28.081]},{"index":"84194adffffffff","relayCount":422,"geo":[51.325,-0.129]},{"index":"841faebffffffff","relayCount":502,"geo":[50.196,8.684]},{"index":"8426e3dffffffff","relayCount":253,"geo":[37.768,-97.563]},{"index":"841959bffffffff","relayCount":5,"geo":[50.762,-0.899]},{"index":"84396c1ffffffff","relayCount":3,"geo":[44.025,4.474]},{"index":"842aaa9ffffffff","relayCount":112,"geo":[39.156,-77.584]},{"index":"841eeebffffffff","relayCount":32,"geo":[44.293,25.901]},{"index":"841ec91ffffffff","relayCount":5,"geo":[40.937,28.996]},{"index":"841f99dffffffff","relayCount":52,"geo":[45.625,9.034]},{"index":"84196bbffffffff","relayCount":18,"geo":[51.874,4.365]},{"index":"8429a0bffffffff","relayCount":2,"geo":[33.874,-117.756]},{"index":"841f853ffffffff","relayCount":50,"geo":[48.888,8.163]},{"index":"841e52dffffffff","relayCount":311,"geo":[46.074,25.021]},{"index":"84195d3ffffffff","relayCount":82,"geo":[51.425,-0.727]},{"index":"841fa9dffffffff","relayCount":2,"geo":[50.280,10.933]},{"index":"841969dffffffff","relayCount":470,"geo":[52.471,5.201]},{"index":"842ba87ffffffff","relayCount":3,"geo":[45.273,-71.982]},{"index":"841f8d5ffffffff","relayCount":4,"geo":[48.160,11.264]},{"index":"841f8edffffffff","relayCount":193,"geo":[47.425,8.816]},{"index":"841f835ffffffff","relayCount":22,"geo":[46.887,7.418]},{"index":"84195dbffffffff","relayCount":10,"geo":[51.705,-0.339]},{"index":"841e037ffffffff","relayCount":23,"geo":[47.481,19.246]},{"index":"842a957ffffffff","relayCount":8,"geo":[40.009,-82.874]},{"index":"841e63bffffffff","relayCount":6,"geo":[50.342,30.786]},{"index":"8419693ffffffff","relayCount":5,"geo":[51.797,5.572]},{"index":"84bce91ffffffff","relayCount":2,"geo":[-28.906,24.204]},{"index":"84390cbffffffff","relayCount":119,"geo":[40.373,-3.618]},{"index":"8426cb9ffffffff","relayCount":5,"geo":[32.618,-96.719]},{"index":"842ab47ffffffff","relayCount":4,"geo":[42.938,-81.248]},{"index":"842c105ffffffff","relayCount":36,"geo":[36.328,44.103]},{"index":"841fa0bffffffff","relayCount":24,"geo":[50.768,6.115]},{"index":"84182c1ffffffff","relayCount":134,"geo":[53.249,-6.480]},{"index":"8412cc9ffffffff","relayCount":8,"geo":[51.004,-113.583]},{"index":"841e065ffffffff","relayCount":130,"geo":[48.444,16.170]},{"index":"84260a1ffffffff","relayCount":1,"geo":[40.636,-96.674]},{"index":"841ec53ffffffff","relayCount":2,"geo":[42.971,25.117]},{"index":"8419431ffffffff","relayCount":9,"geo":[52.737,-0.372]},{"index":"8419695ffffffff","relayCount":16,"geo":[52.173,4.781]},{"index":"84262a1ffffffff","relayCount":1,"geo":[43.043,-94.861]},{"index":"841f6e7ffffffff","relayCount":4,"geo":[55.904,26.806]},{"index":"842a10dffffffff","relayCount":33,"geo":[41.245,-73.901]},{"index":"841f12bffffffff","relayCount":1,"geo":[51.891,8.444]},{"index":"8428843ffffffff","relayCount":8,"geo":[43.643,-116.414]},{"index":"842a101ffffffff","relayCount":15,"geo":[40.858,-73.782]},{"index":"841942dffffffff","relayCount":2,"geo":[53.962,-1.667]},{"index":"8443a3dffffffff","relayCount":19,"geo":[23.829,54.651]},{"index":"841e10bffffffff","relayCount":16,"geo":[47.126,15.513]},{"index":"8428347ffffffff","relayCount":7,"geo":[37.503,-121.985]},{"index":"8429ad1ffffffff","relayCount":1,"geo":[35.512,-120.862]},{"index":"841f8c3ffffffff","relayCount":6,"geo":[48.240,10.676]},{"index":"842aaabffffffff","relayCount":11,"geo":[38.783,-77.440]},{"index":"841f865ffffffff","relayCount":1,"geo":[47.480,4.972]},{"index":"841e193ffffffff","relayCount":15,"geo":[45.904,21.308]},{"index":"841f1a9ffffffff","relayCount":16,"geo":[51.486,12.141]},{"index":"841f15bffffffff","relayCount":1,"geo":[53.711,9.913]},{"index":"842b83bffffffff","relayCount":2,"geo":[45.320,-75.804]},{"index":"8419683ffffffff","relayCount":22,"geo":[52.507,4.592]},{"index":"842b9bdffffffff","relayCount":18,"geo":[43.754,-79.498]},{"index":"84bb501ffffffff","relayCount":1,"geo":[-36.841,174.792]},{"index":"841e51bffffffff","relayCount":11,"geo":[46.923,28.603]},{"index":"8419587ffffffff","relayCount":4,"geo":[51.422,-2.936]},{"index":"842aac9ffffffff","relayCount":2,"geo":[40.155,-75.519]},{"index":"8444465ffffffff","relayCount":1,"geo":[30.004,-90.025]},{"index":"841f607ffffffff","relayCount":12,"geo":[56.803,24.087]},{"index":"8430e0bffffffff","relayCount":1,"geo":[37.585,126.688]},{"index":"841e15bffffffff","relayCount":22,"geo":[48.063,16.300]},{"index":"841f96bffffffff","relayCount":1,"geo":[45.913,3.062]},{"index":"84195c9ffffffff","relayCount":3,"geo":[52.937,-1.608]},{"index":"841f317ffffffff","relayCount":1,"geo":[54.717,9.394]},{"index":"84be085ffffffff","relayCount":3,"geo":[-33.686,150.754]},{"index":"842b9b5ffffffff","relayCount":6,"geo":[43.454,-79.897]},{"index":"842a14bffffffff","relayCount":4,"geo":[41.664,-72.528]},{"index":"8419699ffffffff","relayCount":7,"geo":[52.430,5.812]},{"index":"8409991ffffffff","relayCount":2,"geo":[59.792,10.356]},{"index":"8419691ffffffff","relayCount":16,"geo":[52.135,5.388]},{"index":"8419583ffffffff","relayCount":2,"geo":[51.332,-2.324]},{"index":"8419465ffffffff","relayCount":5,"geo":[54.606,-1.493]},{"index":"841e355ffffffff","relayCount":46,"geo":[50.141,14.424]},{"index":"841e365ffffffff","relayCount":1,"geo":[49.108,11.996]},{"index":"8419553ffffffff","relayCount":1,"geo":[54.059,-2.304]},{"index":"840982bffffffff","relayCount":1,"geo":[59.111,5.680]},{"index":"84be0e3ffffffff","relayCount":6,"geo":[-33.741,151.286]},{"index":"842e60dffffffff","relayCount":6,"geo":[34.962,137.165]},{"index":"843f4dbffffffff","relayCount":17,"geo":[34.878,33.009]},{"index":"841eebbffffffff","relayCount":2,"geo":[43.205,28.155]},{"index":"841954dffffffff","relayCount":1,"geo":[55.627,-3.954]},{"index":"842a847ffffffff","relayCount":1,"geo":[40.273,-80.009]},{"index":"842664dffffffff","relayCount":6,"geo":[41.925,-87.559]},{"index":"841126dffffffff","relayCount":12,"geo":[60.222,25.229]},{"index":"8439681ffffffff","relayCount":6,"geo":[43.212,5.348]},{"index":"841e543ffffffff","relayCount":1,"geo":[47.589,26.329]},{"index":"84694edffffffff","relayCount":2,"geo":[14.584,121.007]},{"index":"84441adffffffff","relayCount":2,"geo":[27.824,-82.237]},{"index":"841eda7ffffffff","relayCount":10,"geo":[37.864,23.593]},{"index":"841f903ffffffff","relayCount":3,"geo":[45.766,4.717]},{"index":"8439227ffffffff","relayCount":1,"geo":[40.869,-8.455]},{"index":"8444ae9ffffffff","relayCount":1,"geo":[26.598,-80.039]},{"index":"84b9169ffffffff","relayCount":3,"geo":[-34.890,138.625]},{"index":"8428f43ffffffff","relayCount":1,"geo":[44.791,-122.984]},{"index":"842db63ffffffff","relayCount":11,"geo":[31.658,34.597]},{"index":"848c107ffffffff","relayCount":2,"geo":[-6.275,106.714]},{"index":"8444f4dffffffff","relayCount":1,"geo":[28.867,-81.949]},{"index":"841f8e9ffffffff","relayCount":1,"geo":[47.724,9.236]},{"index":"841f107ffffffff","relayCount":5,"geo":[52.179,8.888]},{"index":"8426567ffffffff","relayCount":1,"geo":[38.844,-94.692]},{"index":"841f147ffffffff","relayCount":1,"geo":[52.919,7.920]},{"index":"841e805ffffffff","relayCount":6,"geo":[41.751,12.563]},{"index":"8444f61ffffffff","relayCount":1,"geo":[29.497,-81.046]},{"index":"8426cedffffffff","relayCount":1,"geo":[34.450,-98.121]},{"index":"8412ccdffffffff","relayCount":2,"geo":[50.908,-114.178]},{"index":"841f1d5ffffffff","relayCount":13,"geo":[52.663,13.399]},{"index":"8444d5dffffffff","relayCount":1,"geo":[31.958,-81.059]},{"index":"841f105ffffffff","relayCount":1,"geo":[52.236,8.271]},{"index":"841f101ffffffff","relayCount":1,"geo":[52.523,8.716]},{"index":"841f125ffffffff","relayCount":3,"geo":[51.309,7.569]},{"index":"84608b1ffffffff","relayCount":3,"geo":[18.912,72.770]},{"index":"8408f63ffffffff","relayCount":1,"geo":[63.764,19.990]},{"index":"841e367ffffffff","relayCount":1,"geo":[49.023,12.593]},{"index":"8439235ffffffff","relayCount":1,"geo":[41.168,-7.589]},{"index":"842aa6dffffffff","relayCount":19,"geo":[42.878,-78.586]},{"index":"84a91b5ffffffff","relayCount":2,"geo":[-27.634,-48.410]},{"index":"84089b1ffffffff","relayCount":2,"geo":[59.573,24.934]},{"index":"84194d1ffffffff","relayCount":2,"geo":[51.050,3.171]},{"index":"8464a4bffffffff","relayCount":6,"geo":[13.814,100.360]},{"index":"842a105ffffffff","relayCount":2,"geo":[40.974,-74.313]},{"index":"8439195ffffffff","relayCount":1,"geo":[36.735,-4.199]},{"index":"84268c3ffffffff","relayCount":1,"geo":[38.962,-104.239]},{"index":"8426165ffffffff","relayCount":1,"geo":[43.983,-103.230]},{"index":"841f985ffffffff","relayCount":1,"geo":[45.086,7.665]},{"index":"841969bffffffff","relayCount":3,"geo":[52.093,5.996]},{"index":"8439541ffffffff","relayCount":1,"geo":[39.553,-0.363]},{"index":"8426463ffffffff","relayCount":1,"geo":[38.707,-90.504]},{"index":"841f53dffffffff","relayCount":11,"geo":[52.396,21.185]},{"index":"841f16dffffffff","relayCount":1,"geo":[52.387,6.425]},{"index":"841f031ffffffff","relayCount":1,"geo":[53.709,12.936]},{"index":"84a9013ffffffff","relayCount":1,"geo":[-30.125,-51.347]},{"index":"8444467ffffffff","relayCount":1,"geo":[30.378,-90.261]},{"index":"841e841ffffffff","relayCount":6,"geo":[42.950,12.153]},{"index":"842608dffffffff","relayCount":1,"geo":[41.330,-95.620]},{"index":"84be08dffffffff","relayCount":2,"geo":[-34.097,150.962]},{"index":"8419421ffffffff","relayCount":2,"geo":[53.589,-1.437]},{"index":"8408c69ffffffff","relayCount":1,"geo":[65.589,22.173]},{"index":"8439619ffffffff","relayCount":1,"geo":[44.182,2.857]},{"index":"841faa5ffffffff","relayCount":7,"geo":[48.823,8.751]},{"index":"841ec1dffffffff","relayCount":1,"geo":[42.301,24.733]},{"index":"841ea27ffffffff","relayCount":2,"geo":[43.441,11.459]},{"index":"8444d07ffffffff","relayCount":1,"geo":[32.872,-79.890]},{"index":"841e0b3ffffffff","relayCount":3,"geo":[46.778,23.792]},{"index":"842a86dffffffff","relayCount":1,"geo":[40.818,-81.263]},{"index":"841eec7ffffffff","relayCount":5,"geo":[44.538,26.378]},{"index":"8428309ffffffff","relayCount":4,"geo":[37.790,-122.345]},{"index":"842a12bffffffff","relayCount":2,"geo":[40.701,-74.720]},{"index":"8428de9ffffffff","relayCount":1,"geo":[49.100,-123.138]},{"index":"841f153ffffffff","relayCount":2,"geo":[53.371,10.083]},{"index":"841fa51ffffffff","relayCount":1,"geo":[51.410,6.358]},{"index":"8419425ffffffff","relayCount":5,"geo":[53.686,-2.069]},{"index":"841e55dffffffff","relayCount":1,"geo":[47.822,26.826]},{"index":"842aac5ffffffff","relayCount":1,"geo":[39.985,-76.438]},{"index":"841e159ffffffff","relayCount":1,"geo":[48.170,15.707]},{"index":"842a127ffffffff","relayCount":1,"geo":[40.537,-75.651]},{"index":"84195cbffffffff","relayCount":2,"geo":[52.561,-1.383]},{"index":"8427521ffffffff","relayCount":1,"geo":[45.422,-92.811]},{"index":"84262ddffffffff","relayCount":2,"geo":[43.990,-92.266]},{"index":"8427593ffffffff","relayCount":3,"geo":[41.975,-88.119]},{"index":"841fa19ffffffff","relayCount":4,"geo":[51.015,7.139]},{"index":"8418613ffffffff","relayCount":1,"geo":[47.780,0.148]},{"index":"8411aa7ffffffff","relayCount":1,"geo":[55.831,37.756]},{"index":"8465263ffffffff","relayCount":2,"geo":[1.592,103.907]},{"index":"842ab2dffffffff","relayCount":5,"geo":[42.486,-83.133]},{"index":"841f513ffffffff","relayCount":1,"geo":[52.970,23.372]},{"index":"8427527ffffffff","relayCount":2,"geo":[45.080,-93.119]},{"index":"841fa4bffffffff","relayCount":1,"geo":[51.498,5.153]},{"index":"84186edffffffff","relayCount":1,"geo":[47.581,-0.778]},{"index":"8460a25ffffffff","relayCount":1,"geo":[17.330,78.278]},{"index":"8429a19ffffffff","relayCount":1,"geo":[34.089,-118.609]},{"index":"841e849ffffffff","relayCount":2,"geo":[43.346,12.014]},{"index":"842a9a5ffffffff","relayCount":1,"geo":[37.527,-84.499]},{"index":"8429a1dffffffff","relayCount":14,"geo":[34.188,-118.101]},{"index":"8412db7ffffffff","relayCount":9,"geo":[47.537,-117.599]},{"index":"84446c1ffffffff","relayCount":1,"geo":[29.645,-95.078]},{"index":"842a845ffffffff","relayCount":1,"geo":[40.650,-80.177]},{"index":"841e12bffffffff","relayCount":2,"geo":[46.175,14.747]},{"index":"841949dffffffff","relayCount":1,"geo":[50.515,2.396]},{"index":"841e1cdffffffff","relayCount":1,"geo":[47.066,17.725]},{"index":"841f441ffffffff","relayCount":5,"geo":[55.555,23.839]},{"index":"842b1a7ffffffff","relayCount":1,"geo":[44.319,-69.615]},{"index":"8428f0bffffffff","relayCount":6,"geo":[45.423,-123.218]},{"index":"8429a41ffffffff","relayCount":1,"geo":[32.826,-117.236]},{"index":"84196b9ffffffff","relayCount":11,"geo":[52.209,4.176]},{"index":"841e183ffffffff","relayCount":1,"geo":[45.908,19.693]},{"index":"841e1b3ffffffff","relayCount":3,"geo":[44.976,20.477]},{"index":"841fa53ffffffff","relayCount":8,"geo":[51.361,6.963]},{"index":"842e611ffffffff","relayCount":1,"geo":[34.687,135.640]},{"index":"8461893ffffffff","relayCount":4,"geo":[12.940,77.779]},{"index":"84489e3ffffffff","relayCount":4,"geo":[30.337,-97.592]},{"index":"84268cdffffffff","relayCount":6,"geo":[39.643,-104.894]},{"index":"841e131ffffffff","relayCount":7,"geo":[45.961,15.901]},{"index":"842aa5bffffffff","relayCount":1,"geo":[41.584,-75.517]},{"index":"8448ebbffffffff","relayCount":8,"geo":[33.331,-111.764]},{"index":"84441a1ffffffff","relayCount":3,"geo":[28.193,-82.425]},{"index":"8409993ffffffff","relayCount":2,"geo":[60.044,10.879]},{"index":"841f1abffffffff","relayCount":1,"geo":[51.406,12.759]},{"index":"84a8101ffffffff","relayCount":2,"geo":[-23.709,-46.633]},{"index":"84be635ffffffff","relayCount":8,"geo":[-37.621,145.033]},{"index":"841f1d5ffffffff","relayCount":13,"geo":[52.663,13.399]},{"index":"8444d5dffffffff","relayCount":1,"geo":[31.958,-81.059]}];
+
+/* ══════════════════════════════════════════
+   CONFIG & STATE
+══════════════════════════════════════════ */
+const API_URL       = 'https://api.ec.anyone.tech/fingerprint-map';
+// Relay browser uses fingerprint-map data directly — no secondary URL needed
+const TOPO_URL = 'https://cdn.jsdelivr.net/npm/world-atlas@2/countries-110m.json';
+const PROXIES  = [
+  u => `https://api.allorigins.win/raw?url=${encodeURIComponent(u)}`,
+  u => `https://corsproxy.io/?${encodeURIComponent(u)}`
+];
+
+let relayData = [], ranked = [], maxCount = 1;
+let exitFps = new Set();   // fingerprints with Exit flag
+let guardFps = new Set();  // fingerprints with Guard flag
+let svg, g, proj, gpath, zoom;
+let worldTopo = null;
+let tkAnim    = null;
+
+/* ══════════════════════════════════════════
+   NODE STYLE
+══════════════════════════════════════════ */
+// Type colors: exit=orange, guard=purple, middle=teal, unknown=cyan
+const TYPE_COL = { exit:'#ff6b35', guard:'#a78bfa', middle:'#2dd4bf', unknown:'#00f5ff' };
+
+function ns(n, type){
+  const col = TYPE_COL[type] || TYPE_COL.unknown;
+  if(n>=500)return{col,r:9,  rings:[14,20],glow:'gl'};
+  if(n>=100)return{col,r:7,  rings:[11,16],glow:'gm'};
+  if(n>= 20)return{col,r:5,  rings:[8],    glow:'gs'};
+  if(n>=  5)return{col,r:3.5,rings:[],     glow:null};
+  return          {col,r:2,  rings:[],     glow:null};
+}
+
+/* ══════════════════════════════════════════
+   FETCH (live, with fallback)
+══════════════════════════════════════════ */
+async function fetchData(){
+  setStatus('Fetching live data…');
+  const srcs=[
+    ()=>fetch(API_URL,{cache:'no-store'}),
+    ...PROXIES.map(p=>()=>fetch(p(API_URL),{cache:'no-store'}))
+  ];
+  for(const s of srcs){
+    try{
+      const r=await s();
+      if(!r.ok)continue;
+      const raw=await r.json();
+      // New fingerprint-map API returns object keyed by fingerprint
+      if(raw && typeof raw==='object' && !Array.isArray(raw)){
+        const parsed = parseFingerprintMap(raw);
+        // Inject proportional BW per zone from global total
+        const _bwEl = document.getElementById('sBW');
+        const _bwStr = _bwEl ? _bwEl.textContent.replace(' GB/s','').trim() : '';
+        const _bwTotal = _bwStr && _bwStr !== '—' ? parseFloat(_bwStr) * 1024 : 0; // convert GB back to MiB
+        const _totalR = parsed.reduce((s,z)=>s+z.relayCount,0)||1;
+        if(_bwTotal > 0) parsed.forEach(z=>{ z.bwMibs = (_bwTotal * z.relayCount / _totalR); });
+        if(parsed.length>10){
+          window._rawFingerprintData = raw;   // save for relay browser
+          buildRelayList(raw);                // populate relay browser
+          setStatus(`Live · ${parsed.length} zones · ${new Date().toLocaleTimeString()}`);
+          return parsed;
+        }
+      }
+      // Old relay-map returns array
+      if(Array.isArray(raw)&&raw.length>10){
+        setStatus(`Live · ${raw.length} zones · ${new Date().toLocaleTimeString()}`);
+        return raw;
+      }
+    }catch(_){}
+  }
+  setStatus(`Offline · using cached data · ${new Date().toLocaleTimeString()}`);
+  return FALLBACK;
+}
+
+/* ── Parse fingerprint-map into grouped hex zones ── */
+function parseFingerprintMap(raw){
+  const hexMap = new Map();
+  Object.entries(raw).forEach(([fingerprint, relay])=>{
+    const hex = relay.hexId;
+    if(!hex) return;
+    if(!hexMap.has(hex)){
+      hexMap.set(hex, {
+        index: hex,
+        geo: [relay.coordinates[0], relay.coordinates[1]],
+        relayCount: 0,
+        fingerprints: [],
+        countryCode: relay.countryCode || '',
+        countryName: relay.countryName || '',
+        regionName:  relay.regionName  || '',
+        cityName:    relay.cityName    || '',
+        isps: {},
+        topIsps: [],
+        bwMibs: 0,
+      });
+    }
+    const zone = hexMap.get(hex);
+    zone.relayCount++;
+    zone.fingerprints.push(fingerprint);
+    // Track ISP counts
+    const isp = relay.asName || 'Unknown';
+    zone.isps[isp] = (zone.isps[isp]||0)+1;
+  });
+  // Finalise each zone: compute topIsps
+  hexMap.forEach(zone=>{
+    zone.topIsps = Object.entries(zone.isps)
+      .sort((a,b)=>b[1]-a[1])
+      .slice(0,3)
+      .map(([name,count])=>({name,count}));
+  });
+  const zones = Array.from(hexMap.values());
+  if(exitFps.size || guardFps.size) tagZones(zones);
+  return zones;
+}
+
+/* ══════════════════════════════════════════
+   STATS
+══════════════════════════════════════════ */
+/* ══════════════════════════════════════════
+   LIVE EXIT RELAY COUNT (dev.anyone-wallet-lookup.info)
+══════════════════════════════════════════ */
+let _fpRetryCount = 0;
+async function fetchFlagIndex(){
+  if(location.protocol === 'file:'){
+    console.info('[AnyMap] file:// — dot coloring skipped');
+    const _ll=document.getElementById('legend-loading'); if(_ll) _ll.style.display='none';
+    return;
+  }
+  const _ll = document.getElementById('legend-loading');
+  const _ls = document.getElementById('legend-loading-text');
+  if(_ls) _ls.textContent = 'COLORING…';
+
+  // ── Fast path: single call to proxy /api/fp-index ──
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 15000); // 15s timeout
+    const t0 = Date.now();
+    const r = await fetch('https://anyclip-proxy.anyone-map.workers.dev/api/fp-index',
+      { signal: controller.signal });
+    clearTimeout(timer);
+
+    if(!r.ok) throw new Error('fp-index HTTP ' + r.status);
+    const data = await r.json();
+    const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
+    const xCache  = r.headers.get('X-Cache') || '?';
+
+    // If index is empty (proxy still building), retry with backoff
+    const fpCount = Object.keys(data.index || {}).length;
+    if(fpCount === 0 && _fpRetryCount < 6){
+      _fpRetryCount++;
+      const delay = Math.min(15000 * _fpRetryCount, 60000);
+      console.log(`[AnyMap] fp-index empty (cache:${xCache}) — retry #${_fpRetryCount} in ${delay/1000}s`);
+      if(_ll) _ll.style.display = 'none';
+      setTimeout(fetchFlagIndex, delay);
+      return;
+    }
+    _fpRetryCount = 0;
+
+    // Populate Sets
+    exitFps  = new Set();
+    guardFps = new Set();
+    for(const [fp, type] of Object.entries(data.index || {})){
+      const FP = fp.toUpperCase();
+      if(type === 'e') exitFps.add(FP);
+      else if(type === 'g') guardFps.add(FP);
+    }
+
+    console.log(`[AnyMap] fp-index ready in ${elapsed}s — ${exitFps.size} exits, ${guardFps.size} guards (cache:${xCache})`);
+    setTimeout(updateHealthButton, 300);
+    if(_ll) _ll.style.display = 'none';
+
+    if(relayData.length){
+      tagZones(relayData);
+      drawNodes(relayData);
+      const listToRender = (filteredRelays && filteredRelays.length) ? filteredRelays : allRelays;
+      if(listToRender.length) renderRelayList(listToRender.slice(0, 80));
+    }
+    // If partial (shouldn't happen with new proxy), re-fetch after 45s
+    if(data.partial){
+      console.log('[AnyMap] Partial fp-index received — refetching in 45s');
+      setTimeout(fetchFlagIndex, 45000);
+    }
+
+  } catch(e){
+    // Network failure (offline, CORS, abort) — retry quietly with backoff, no console.warn spam
+    _fpRetryCount++;
+    const delay = Math.min(10000 * _fpRetryCount, 60000);
+    if(_ll) _ll.style.display = 'none';
+    if(e.name !== 'AbortError'){
+      console.info(`[AnyMap] fp-index unavailable (${e.message}) — retry #${_fpRetryCount} in ${delay/1000}s`);
+    }
+    setTimeout(fetchFlagIndex, delay);
+  }
+}
+
+function tagZones(data){
+  data.forEach(zone => {
+    let exits = 0, guards = 0;
+    zone.fingerprints.forEach(fp => {
+      const u = fp.toUpperCase();
+      if(exitFps.has(u))  exits++;
+      if(guardFps.has(u)) guards++;
+    });
+    const middles = Math.max(0, zone.relayCount - exits - guards);
+    zone.exitCount   = exits;
+    zone.guardCount  = guards;
+    zone.middleCount = middles;
+    // Dominant type: whichever raw count is highest
+    if(exits > 0 && exits >= guards && exits >= middles)      zone.dominantType = 'exit';
+    else if(guards > 0 && guards >= exits && guards >= middles) zone.dominantType = 'guard';
+    else zone.dominantType = 'middle';
+  });
+}
+
+async function fetchExitRelays(){
+  try {
+    const r = await fetch('https://anyclip-proxy.anyone-map.workers.dev/api/exit-relays');
+    if(!r.ok) return;
+    const d = await r.json();
+    if(d.total_bw_mibs > 0){
+      const gb = (d.total_bw_mibs / 1024).toFixed(1);
+      document.getElementById('sBW').textContent = gb + ' GB/s';
+      // Backfill zone BW into existing relayData
+      if(relayData && relayData.length){
+        const _tot = relayData.reduce((s,z)=>s+z.relayCount,0)||1;
+        relayData.forEach(z=>{ z.bwMibs = (d.total_bw_mibs * z.relayCount / _tot); });
+      }
+    }
+    if(d.exit_relays > 0){
+      document.getElementById('sX').textContent = d.exit_relays.toLocaleString();
+      if(d.guard_relays > 0){
+        document.getElementById('sG').textContent = d.guard_relays.toLocaleString();
+      }
+      if(d.middle_relays > 0){
+        document.getElementById('sMD').textContent = d.middle_relays.toLocaleString();
+      }
+    }
+    // Store wallet list for fallback batch method only
+    if(d.wallet_list && d.wallet_list.length){
+      window._walletList = d.wallet_list;
+    }
+  } catch(e){ /* silently fail — keep existing number */ }
+}
+
+function applyStats(data){
+  const total=data.reduce((s,d)=>s+d.relayCount,0);
+  const totalFingerprints=data.reduce((s,d)=>s+(d.fingerprints?d.fingerprints.length:0),0);
+  maxCount=Math.max(...data.map(d=>d.relayCount));
+  ranked=[...data].sort((a,b)=>b.relayCount-a.relayCount);
+  document.getElementById('sR').textContent=(totalFingerprints||total).toLocaleString();
+  document.getElementById('sZ').textContent=data.length;
+  document.getElementById('sM').textContent=maxCount.toLocaleString();
+  document.getElementById('sA').textContent=(total/data.length).toFixed(1);
+  // clock updated by live 1s interval, not here
+}
+
+/* ══════════════════════════════════════════
+   TICKER
+══════════════════════════════════════════ */
+function buildTicker(data){
+  const top=[...data].sort((a,b)=>b.relayCount-a.relayCount).slice(0,25);
+  const sep='<span style="margin:0 22px;color:#0d3040">◆</span>';
+  const items=top.map(d=>{
+    const s=ns(d.relayCount);
+    const loc = d.cityName ? `${d.cityName}, ${d.countryCode||''}` :
+                d.countryName ? d.countryName :
+                `${d.geo[0].toFixed(2)}°, ${d.geo[1].toFixed(2)}°`;
+    const isp = d.topIsps && d.topIsps.length ? ` · ${d.topIsps[0].name}` : '';
+    return `<span style="color:${s.col}">${d.relayCount.toLocaleString()} RELAYS</span>`+
+           `<span style="color:#1b404e;margin:0 7px">@</span>`+
+           `<span style="color:#ffffff;font-weight:600">${loc}</span>`+
+           `<span style="color:rgba(255,255,255,0.5);font-size:9px">${isp}</span>`;
+  }).join(sep);
+
+  const el = document.getElementById('tktext');
+  // Kill ALL existing animations (Web Animations API + CSS)
+  el.getAnimations().forEach(a => { try{ a.cancel(); }catch(_){} });
+  if(tkAnim){ try{ tkAnim.cancel(); }catch(_){} tkAnim = null; }
+
+  // Hard reset inline styles and set content
+  el.removeAttribute('style');
+  el.offsetHeight; // force reflow to clear animation state
+  el.innerHTML = items + sep + items;
+
+  // Double rAF ensures scrollWidth is accurate after paint
+  requestAnimationFrame(()=>requestAnimationFrame(()=>{
+    const half = Math.round(el.scrollWidth / 2);
+    if(half < 10) return;
+    const dur = Math.max(Math.round(half / 80), 20); // 80px/s
+
+    // Dynamic @keyframes injected into a dedicated <style> tag
+    let sheet = document.getElementById('tk-style');
+    if(!sheet){ sheet = document.createElement('style'); sheet.id = 'tk-style'; document.head.appendChild(sheet); }
+    sheet.textContent = `@keyframes tkScroll{0%{transform:translateX(0)}100%{transform:translateX(-${half}px)}}`;
+
+    // Apply pure CSS animation — immune to Web Animations API interference
+    el.style.cssText = `animation:tkScroll ${dur}s linear infinite;white-space:nowrap;position:absolute;font-family:'Share Tech Mono',monospace;font-size:11px;color:var(--cyan-dim);padding-left:18px;will-change:transform;`;
+  }));
+}
+
+/* ══════════════════════════════════════════
+   MAP SETUP (runs once)
+══════════════════════════════════════════ */
+/* ══════════════════════════════════════════
+   COUNTRY NAME LOOKUP  (ISO numeric → name)
+   Covers all 177 countries in world-atlas 110m
+══════════════════════════════════════════ */
+const CN={
+  4:'Afghanistan',8:'Albania',12:'Algeria',24:'Angola',32:'Argentina',
+  36:'Australia',40:'Austria',50:'Bangladesh',56:'Belgium',64:'Bhutan',
+  68:'Bolivia',76:'Brazil',100:'Bulgaria',104:'Myanmar',116:'Cambodia',
+  120:'Cameroon',124:'Canada',144:'Sri Lanka',152:'Chile',156:'China',
+  170:'Colombia',188:'Costa Rica',191:'Croatia',192:'Cuba',196:'Cyprus',
+  203:'Czech Rep.',208:'Denmark',218:'Ecuador',818:'Egypt',222:'El Salvador',
+  231:'Ethiopia',246:'Finland',250:'France',276:'Germany',288:'Ghana',
+  300:'Greece',320:'Guatemala',332:'Haiti',340:'Honduras',348:'Hungary',
+  356:'India',360:'Indonesia',364:'Iran',368:'Iraq',372:'Ireland',
+  376:'Israel',380:'Italy',388:'Jamaica',392:'Japan',400:'Jordan',
+  398:'Kazakhstan',404:'Kenya',408:'North Korea',410:'South Korea',
+  414:'Kuwait',418:'Laos',422:'Lebanon',434:'Libya',440:'Lithuania',
+  442:'Luxembourg',484:'Mexico',496:'Mongolia',504:'Morocco',508:'Mozambique',
+  524:'Nepal',528:'Netherlands',554:'New Zealand',566:'Nigeria',578:'Norway',
+  586:'Pakistan',591:'Panama',598:'Papua New Guinea',600:'Paraguay',
+  604:'Peru',608:'Philippines',616:'Poland',620:'Portugal',630:'Puerto Rico',
+  634:'Qatar',642:'Romania',643:'Russia',682:'Saudi Arabia',686:'Senegal',
+  694:'Sierra Leone',703:'Slovakia',705:'Slovenia',706:'Somalia',
+  710:'South Africa',724:'Spain',729:'Sudan',752:'Sweden',756:'Switzerland',
+  760:'Syria',764:'Thailand',792:'Turkey',800:'Uganda',804:'Ukraine',
+  784:'UAE',826:'United Kingdom',840:'USA',858:'Uruguay',
+  862:'Venezuela',704:'Vietnam',887:'Yemen',894:'Zambia',716:'Zimbabwe',
+  51:'Armenia',31:'Azerbaijan',112:'Belarus',204:'Benin',
+  72:'Botswana',854:'Burkina Faso',108:'Burundi',132:'Cape Verde',
+  140:'Central African Rep.',148:'Chad',174:'Comoros',178:'Congo',
+  180:'DR Congo',384:"Côte d'Ivoire",262:'Djibouti',266:'Gabon',
+  270:'Gambia',324:'Guinea',624:'Guinea-Bissau',328:'Guyana',
+  426:'Lesotho',430:'Liberia',450:'Madagascar',454:'Malawi',458:'Malaysia',
+  466:'Mali',478:'Mauritania',516:'Namibia',562:'Niger',
+  646:'Rwanda',678:'São Tomé',762:'Tajikistan',
+  795:'Turkmenistan',860:'Uzbekistan',548:'Vanuatu',
+  /* ── Caribbean ── */
+  28:'Antigua & Barbuda',44:'Bahamas',52:'Barbados',84:'Belize',
+  60:'Bermuda',535:'Bonaire',136:'Cayman Islands',212:'Dominica',
+  214:'Dominican Rep.',308:'Grenada',312:'Guadeloupe',
+  332:'Haiti',388:'Jamaica',474:'Martinique',500:'Montserrat',
+  531:'Curaçao',533:'Aruba',630:'Puerto Rico',
+  659:'St. Kitts & Nevis',662:'St. Lucia',670:'St. Vincent',
+  780:'Trinidad & Tobago',850:'US Virgin Islands',92:'British Virgin Islands',
+  796:'Turks & Caicos',388:'Jamaica',192:'Cuba',
+  /* ── Pacific / other islands ── */
+  36:'Australia',554:'New Zealand',242:'Fiji',296:'Kiribati',
+  584:'Marshall Islands',583:'Micronesia',520:'Nauru',570:'Niue',
+  585:'Palau',882:'Samoa',90:'Solomon Islands',776:'Tonga',
+  798:'Tuvalu',548:'Vanuatu',316:'Guam',580:'N. Mariana Islands',
+  /* ── Other missing ── */
+  Albania:8,334:'Heard Island',238:'Falkland Islands',
+  239:'South Georgia',654:'St. Helena',660:'Anguilla',
+  175:'Mayotte',638:'Réunion',663:'St. Martin',
+  534:'Sint Maarten',652:'St. Barthélemy',
+  304:'Greenland',234:'Faroe Islands',744:'Svalbard',
+  535:'Bonaire',336:'Vatican',292:'Gibraltar',
+  744:'Svalbard',703:'Slovakia',807:'North Macedonia',
+  499:'Montenegro',688:'Serbia',70:'Bosnia & Herz.',
+  008:'Albania',756:'Switzerland',438:'Liechtenstein',
+  492:'Monaco',470:'Malta',372:'Ireland',352:'Iceland',
+  /* ── Central America & missing ── */
+  188:'Costa Rica',222:'El Salvador',320:'Guatemala',
+  340:'Honduras',558:'Nicaragua',591:'Panama',
+  /* ── South America extras ── */
+  740:'Suriname',254:'French Guiana',
+  /* ── Africa extras ── */
+  12:'Algeria',818:'Egypt',504:'Morocco',788:'Tunisia',434:'Libya',
+  729:'Sudan',706:'Somalia',231:'Ethiopia',404:'Kenya',800:'Uganda',
+  834:'Tanzania',508:'Mozambique',450:'Madagascar',716:'Zimbabwe',
+  894:'Zambia',454:'Malawi',710:'South Africa',516:'Namibia',
+  72:'Botswana',426:'Lesotho',748:'Eswatini',
+  /* ── Asia extras ── */
+  50:'Bangladesh',524:'Nepal',64:'Bhutan',144:'Sri Lanka',
+  462:'Maldives',104:'Myanmar',116:'Cambodia',418:'Laos',
+  704:'Vietnam',764:'Thailand',458:'Malaysia',702:'Singapore',
+  360:'Indonesia',608:'Philippines',156:'China',392:'Japan',
+  410:'South Korea',408:'North Korea',496:'Mongolia',
+  398:'Kazakhstan',417:'Kyrgyzstan',762:'Tajikistan',
+  795:'Turkmenistan',860:'Uzbekistan',4:'Afghanistan',
+  586:'Pakistan',356:'India',364:'Iran',368:'Iraq',
+  760:'Syria',422:'Lebanon',376:'Israel',400:'Jordan',
+  682:'Saudi Arabia',887:'Yemen',512:'Oman',634:'Qatar',
+  784:'UAE',414:'Kuwait',48:'Bahrain',792:'Turkey',
+  /* ── Europe extras ── */
+  8:'Albania',20:'Andorra',40:'Austria',112:'Belarus',
+  56:'Belgium',70:'Bosnia & Herz.',100:'Bulgaria',191:'Croatia',
+  196:'Cyprus',203:'Czech Rep.',208:'Denmark',233:'Estonia',
+  246:'Finland',250:'France',276:'Germany',300:'Greece',
+  348:'Hungary',352:'Iceland',372:'Ireland',380:'Italy',
+  428:'Latvia',438:'Liechtenstein',440:'Lithuania',442:'Luxembourg',
+  807:'N. Macedonia',470:'Malta',498:'Moldova',492:'Monaco',
+  499:'Montenegro',528:'Netherlands',578:'Norway',616:'Poland',
+  620:'Portugal',642:'Romania',643:'Russia',674:'San Marino',
+  688:'Serbia',703:'Slovakia',705:'Slovenia',724:'Spain',
+  752:'Sweden',756:'Switzerland',804:'Ukraine',826:'United Kingdom',
+  336:'Vatican'
+};
+
+function drawLabels(countries){
+  const layer = d3.select('#labels');
+  layer.selectAll('*').remove();
+
+  // Get current zoom scale to size labels accordingly
+  const W = document.getElementById('map-wrap').clientWidth;
+  const baseScale = Math.min(W/5.0, document.getElementById('map-wrap').clientHeight/2.68);
+
+  countries.features.forEach(feat=>{
+    const id   = +feat.id;
+    const name = CN[id];
+    if(!name) return;
+
+    const centroid = gpath.centroid(feat);
+    if(!centroid || isNaN(centroid[0]) || isNaN(centroid[1])) return;
+
+    const area = d3.geoArea(feat);
+    if(area < 0.0001) return;
+
+    // Compute projected pixel width of bounding box to skip labels that won't fit
+    const bounds = gpath.bounds(feat);
+    const pxW = bounds[1][0] - bounds[0][0];
+    const pxH = bounds[1][1] - bounds[0][1];
+
+    // Font size based on area but capped so small countries get tiny text
+    const sz = area > 0.5 ? 10 : area > 0.15 ? 8.5 : area > 0.05 ? 7.5 : area > 0.01 ? 6.5 : 5.5;
+
+    // Estimate text pixel width (approx 0.6 * fontSize * charCount)
+    const textPxW = sz * 0.62 * name.length;
+
+    // Skip if label wider than the country's projected footprint
+    // But always show key Caribbean islands regardless
+    const alwaysShow = [192, 214, 388, 630]; // Cuba, Dominican Rep., Jamaica, Puerto Rico
+    if(!alwaysShow.includes(id) && textPxW > pxW * 1.1 && pxW < 35) return;
+
+    // Manual offsets for labels that overlap neighbours
+    const offsets = {
+      214: [0, -6],   // Dominican Rep. — shift up
+      630: [0,  6],   // Puerto Rico — shift down
+      120: [-6, 4],   // Cameroon — shift left & down
+      140: [8, -3],   // Central African Rep. — shift right & up
+      178: [5,  5],   // Congo — shift right & down
+      266: [-7, -3],  // Gabon — shift left & up
+    };
+    const [ox, oy] = offsets[id] || [0, 0];
+
+    layer.append('text')
+      .attr('class','clabel')
+      .attr('x', centroid[0] + ox)
+      .attr('y', centroid[1] + oy)
+      .attr('font-size', sz)
+      .text(name);
+  });
+}
+
+/* US STATE ABBREVIATIONS [lon, lat, abbr] */
+const US_STATES = [
+  [-86.79,32.80,'AL'], [-152.40,64.20,'AK'], [-111.09,34.05,'AZ'],
+  [-92.37,34.90,'AR'],  [-119.68,36.78,'CA'], [-105.55,39.00,'CO'],
+  [-72.73,41.60,'CT'],  [-75.51,38.99,'DE'],  [-81.52,27.77,'FL'],
+  [-83.44,32.64,'GA'],  [-157.50,20.27,'HI'], [-114.24,44.30,'ID'],
+  [-89.20,40.35,'IL'],  [-86.27,39.77,'IN'],  [-93.50,42.08,'IA'],
+  [-98.38,38.52,'KS'],  [-84.87,37.53,'KY'],  [-91.96,31.07,'LA'],
+  [-69.24,44.69,'ME'],  [-76.64,39.06,'MD'],  [-71.53,42.23,'MA'],
+  [-85.60,44.35,'MI'],  [-94.30,46.28,'MN'],  [-89.68,32.74,'MS'],
+  [-92.46,38.46,'MO'],  [-109.64,47.03,'MT'], [-99.90,41.49,'NE'],
+  [-116.42,38.50,'NV'], [-71.57,43.45,'NH'],  [-74.52,40.06,'NJ'],
+  [-106.25,34.52,'NM'], [-75.50,43.00,'NY'],  [-79.38,35.55,'NC'],
+  [-100.47,47.53,'ND'], [-82.79,40.39,'OH'],  [-97.52,35.47,'OK'],
+  [-120.56,43.93,'OR'], [-77.19,41.20,'PA'],  [-71.51,41.68,'RI'],
+  [-80.90,33.86,'SC'],  [-99.44,44.44,'SD'],  [-86.35,35.86,'TN'],
+  [-99.33,31.46,'TX'],  [-111.09,39.32,'UT'], [-72.71,44.05,'VT'],
+  [-78.17,37.54,'VA'],  [-120.74,47.75,'WA'], [-80.95,38.64,'WV'],
+  [-89.62,44.27,'WI'],  [-107.55,43.00,'WY'], [-77.03,38.91,'DC']
+];
+
+function drawStateLabels(){
+  const layer = d3.select('#statelabels');
+  layer.selectAll('*').remove();
+  US_STATES.forEach(([lon,lat,abbr])=>{
+    const pt = proj([lon,lat]);
+    if(!pt || isNaN(pt[0]) || isNaN(pt[1])) return;
+    layer.append('text')
+      .attr('x', pt[0]).attr('y', pt[1])
+      .attr('text-anchor','middle').attr('dominant-baseline','middle')
+      .attr('font-family',"'Rajdhani',sans-serif")
+      .attr('font-size', 6).attr('font-weight', 700)
+      .attr('fill','#ffffff')
+      .attr('paint-order','stroke')
+      .attr('stroke','rgba(0,0,0,0.9)')
+      .attr('stroke-width', 2)
+      .attr('stroke-linejoin','round')
+      .attr('pointer-events','none')
+      .text(abbr);
+  });
+}
+
+function drawOceanLabels(){
+  const layer = d3.select('#oceanlabels');
+  layer.selectAll('*').remove();
+
+  // [lon, lat, name, fontSize, letterSpacing, rotate]
+  const oceans = [
+    [-150,  0,   'PACIFIC OCEAN',          13, 6,   0],
+    [-30,   0,   'ATLANTIC OCEAN',          12, 5,   0],
+    [ 75,  -25,  'INDIAN OCEAN',            12, 5,   0],
+    [ 160, -45,  'SOUTHERN OCEAN',          10, 4,  -8],
+    [-40,  -55,  'SOUTHERN OCEAN',          10, 4,   8],
+    [  0,   82,  'ARCTIC OCEAN',            10, 4,   0],
+    [ 60,  72,   'ARCTIC OCEAN',             9, 3,  10],
+    [-170, -35,  'SOUTH PACIFIC',            9, 3,   0],
+    [-75,  15,   'CARIBBEAN SEA',            8, 2,   0],
+    [ 35,  15,   'RED SEA',                  7, 1,  35],
+    [ 52,  24,   'ARABIAN SEA',              8, 2,   0],
+    [115,  10,   'SOUTH CHINA SEA',          8, 2,  -5],
+    [ 28,  43,   'BLACK SEA',                7, 1,   0],
+    [ 20,  60,   'NORDIC SEA',               8, 2,   0],
+    [ 20,  -75,  'ANTARCTICA',              13, 5,   0],
+  ];
+
+  oceans.forEach(([lon, lat, name, fs, ls, rot]) => {
+    const xy = proj([lon, lat]);
+    if(!xy) return;
+    layer.append('text')
+      .attr('x', xy[0])
+      .attr('y', xy[1])
+      .attr('text-anchor', 'middle')
+      .attr('dominant-baseline', 'middle')
+      .attr('font-size', fs + 'px')
+      .attr('font-family', "'Helvetica Neue', Arial, sans-serif")
+      .attr('font-weight', '600')
+      .attr('letter-spacing', ls + 'px')
+      .attr('fill', 'rgba(180,220,255,0.45)')
+      .attr('stroke', 'rgba(0,10,30,0.5)')
+      .attr('stroke-width', '1.5px')
+      .attr('paint-order', 'stroke')
+      .attr('pointer-events', 'none')
+      .attr('transform', rot ? `rotate(${rot},${xy[0]},${xy[1]})` : null)
+      .text(name);
+  });
+}
+
+function setupMap(){
+  const wrap=document.getElementById('map-wrap');
+  const W=wrap.clientWidth, H=wrap.clientHeight;
+
+  svg=d3.select('#map').attr('width',W).attr('height',H);
+
+  // Glow filters
+  const defs=svg.append('defs');
+  [['gs',2],['gm',3.5],['gl',6]].forEach(([id,sd])=>{
+    const f=defs.append('filter').attr('id',id)
+      .attr('x','-40%').attr('y','-40%').attr('width','180%').attr('height','180%');
+    f.append('feGaussianBlur').attr('stdDeviation',sd).attr('result','b');
+    const m=f.append('feMerge');
+    m.append('feMergeNode').attr('in','b');
+    m.append('feMergeNode').attr('in','SourceGraphic');
+  });
+
+  proj=d3.geoNaturalEarth1()
+    .scale(Math.min(W/5.0, H/2.68))
+    .translate([W/2, H/2+12]);
+
+  gpath=d3.geoPath().projection(proj);
+
+  zoom=d3.zoom().scaleExtent([0.4,14])
+    .on('zoom',e=>{
+    g.attr('transform',e.transform);
+    const pct = Math.round(e.transform.k * 100);
+    const zl = document.getElementById('zoom-level');
+    if(zl) zl.textContent = pct + '%';
+  });
+  svg.call(zoom);
+
+  g=svg.append('g');
+
+  // ── REALISTIC OCEAN ──
+  // Radial gradient: deep abyssal blue center → mid ocean → coastal teal
+  const oceanGrad = defs.append('radialGradient')
+    .attr('id','ocean-grad')
+    .attr('cx','50%').attr('cy','48%')
+    .attr('r','58%')
+    .attr('gradientUnits','objectBoundingBox');
+  oceanGrad.append('stop').attr('offset','0%')  .attr('stop-color','#001f3f');
+  oceanGrad.append('stop').attr('offset','35%') .attr('stop-color','#002d55');
+  oceanGrad.append('stop').attr('offset','65%') .attr('stop-color','#003d6b');
+  oceanGrad.append('stop').attr('offset','100%').attr('stop-color','#004e80');
+
+  // Linear overlay for depth shading (darker at poles)
+  const depthGrad = defs.append('linearGradient')
+    .attr('id','depth-grad')
+    .attr('x1','0%').attr('y1','0%')
+    .attr('x2','0%').attr('y2','100%');
+  depthGrad.append('stop').attr('offset','0%')  .attr('stop-color','rgba(0,0,20,0.45)');
+  depthGrad.append('stop').attr('offset','45%') .attr('stop-color','rgba(0,10,30,0.05)');
+  depthGrad.append('stop').attr('offset','55%') .attr('stop-color','rgba(0,10,30,0.05)');
+  depthGrad.append('stop').attr('offset','100%').attr('stop-color','rgba(0,0,20,0.45)');
+
+  // Base sphere with radial ocean gradient
+  g.append('path').datum({type:'Sphere'})
+    .attr('class','sphere')
+    .attr('d',gpath)
+    .attr('fill','url(#ocean-grad)');
+
+  // Depth overlay
+  g.append('path').datum({type:'Sphere'})
+    .attr('d',gpath)
+    .attr('fill','url(#depth-grad)')
+    .attr('pointer-events','none');
+
+  // Subtle specular shimmer (top-left highlight)
+  const shimmerGrad = defs.append('radialGradient')
+    .attr('id','shimmer-grad')
+    .attr('cx','30%').attr('cy','28%').attr('r','45%');
+  shimmerGrad.append('stop').attr('offset','0%')  .attr('stop-color','rgba(100,200,255,0.07)');
+  shimmerGrad.append('stop').attr('offset','100%').attr('stop-color','rgba(0,0,0,0)');
+  g.append('path').datum({type:'Sphere'})
+    .attr('d',gpath)
+    .attr('fill','url(#shimmer-grad)')
+    .attr('pointer-events','none');
+
+  // Graticule — finer, slightly more visible for nautical feel
+  const grat10 = d3.geoGraticule().step([10,10])();
+  const grat30 = d3.geoGraticule().step([30,30])();
+  g.append('path').datum(grat10)
+    .attr('fill','none')
+    .attr('stroke','rgba(0,180,220,0.055)')
+    .attr('stroke-width','0.35')
+    .attr('d',gpath);
+  g.append('path').datum(grat30)
+    .attr('fill','none')
+    .attr('stroke','rgba(0,200,240,0.10)')
+    .attr('stroke-width','0.55')
+    .attr('d',gpath);
+
+  // Equator
+  g.append('path')
+    .datum({type:'LineString',coordinates:[[-180,0],[180,0]]})
+    .attr('class','equator-line').attr('d',gpath);
+
+  const countries=topojson.feature(worldTopo,worldTopo.objects.countries);
+  const mesh=topojson.mesh(worldTopo,worldTopo.objects.countries,(a,b)=>a!==b);
+  g.selectAll('.country').data(countries.features).enter()
+    .append('path').attr('class','country').attr('d',gpath);
+  g.append('path').datum(mesh).attr('class','cmesh').attr('d',gpath);
+
+  g.append('g').attr('id','labels');
+  drawLabels(countries);
+  g.append('g').attr('id','statelabels');
+  drawStateLabels();
+  g.append('g').attr('id','oceanlabels');
+  drawOceanLabels();
+  g.append('g').attr('id','conns');
+  g.append('g').attr('id','arcs');
+  g.append('g').attr('id','nodes');
+
+  // Zoom controls
+  document.getElementById('zi').onclick=()=>svg.transition().duration(340).call(zoom.scaleBy,1.7);
+  document.getElementById('zo').onclick=()=>svg.transition().duration(340).call(zoom.scaleBy,0.59);
+  document.getElementById('zr').onclick=()=>svg.transition().duration(480).call(zoom.transform,d3.zoomIdentity);
+
+}
+
+/* ══════════════════════════════════════════
+   DRAW NODES
+══════════════════════════════════════════ */
+/* ── Country relay cache (computed once, used for fast hover panel) ── */
+const countryRelayCache = new Map();
+function buildCountryCache(){
+  countryRelayCache.clear();
+  if(!worldTopo) return;
+  const countries = topojson.feature(worldTopo, worldTopo.objects.countries);
+  countries.features.forEach(feat=>{
+    const id = +feat.id;
+    const nodes = ranked.filter(d => d3.geoContains(feat, [d.geo[1], d.geo[0]]));
+    countryRelayCache.set(id, nodes);
+  });
+}
+
+function drawNodes(data){
+  const layer=d3.select('#nodes');
+  layer.selectAll('*').remove();
+
+  const tip=document.getElementById('tip');
+  const rankMap=new Map(ranked.map((d,i)=>[d.index,i+1]));
+
+  data.forEach(d=>{
+    const{relayCount,geo,index}=d;
+    // geo = [lat, lon]; projection needs [lon, lat]
+    const pt=proj([geo[1],geo[0]]);
+    if(!pt||isNaN(pt[0])||isNaN(pt[1]))return;
+    const[x,y]=pt;
+    const s=ns(relayCount, d.dominantType || 'unknown');
+    const rank=rankMap.get(index)||'?';
+
+    const grp=layer.append('g').attr('transform',`translate(${x},${y})`).style('cursor','pointer');
+
+    // Rings
+    s.rings.forEach((rv,i)=>{
+      grp.append('circle').attr('r',rv)
+        .attr('fill','none').attr('stroke',s.col)
+        .attr('stroke-opacity',0.28-i*0.1).attr('stroke-width',0.8);
+    });
+
+    // Core
+    const core=grp.append('circle').attr('r',s.r).attr('fill',s.col);
+    if(s.glow)core.attr('filter',`url(#${s.glow})`);
+    if(relayCount>=100)grp.append('circle').attr('r',s.r*0.36).attr('fill','#fff').attr('opacity',0.88);
+
+    // Events
+    grp.on('mouseenter',ev=>{
+      const pct=(relayCount/maxCount*100).toFixed(0);
+      const city    = d.cityName    || d.regionName || '';
+      const country = d.countryName || '';
+      const locStr  = [city, country].filter(Boolean).join(', ') || `${d.geo[0].toFixed(2)}°, ${d.geo[1].toFixed(2)}°`;
+      const flagEmoji = isoToFlag(d.countryCode || '');
+      const ispStr  = d.topIsps && d.topIsps.length ? d.topIsps[0].name : '—';
+      document.getElementById('tth').textContent=`RELAY ZONE · #${rank}`;
+      document.getElementById('ttr').textContent=relayCount.toLocaleString()+' relays';
+      document.getElementById('ttrk').textContent=`#${rank} of ${data.length}`;
+      document.getElementById('ttloc').textContent=flagEmoji+' '+locStr;
+      document.getElementById('ttll').textContent=`${d.geo[0].toFixed(3)}° / ${d.geo[1].toFixed(3)}°`;
+      document.getElementById('ttisp').textContent=ispStr;
+      const bwVal = d.bwMibs||0;
+      document.getElementById('ttbw').textContent = bwVal > 1024
+        ? (bwVal/1024).toFixed(1)+' GB/s'
+        : bwVal > 0 ? Math.round(bwVal)+' MB/s' : '—';
+      document.getElementById('ttix').textContent=index;
+      if(d.exitCount !== undefined){
+        document.getElementById('tttype').textContent =
+          '🟠 '+d.exitCount+' exit  🟣 '+d.guardCount+' guard  🔵 '+d.middleCount+' mid';
+        document.getElementById('tttype-row').style.display='';
+      }
+      const fill=document.getElementById('ttfill');
+      fill.style.width=pct+'%';fill.style.background=s.col;
+      tip.style.display='block';
+    })
+    .on('mousemove',ev=>{
+      tip.style.left=(ev.clientX+16)+'px';
+      tip.style.top=Math.max(68,ev.clientY-14)+'px';
+    })
+    .on('mouseleave',()=>tip.style.display='none');
+  });
+
+  // Pulse rings — CSS animation (no JS overhead)
+  layer.selectAll('circle[stroke]').attr('class','ring-pulse');
+}
+
+/* ══════════════════════════════════════════
+   HELPERS
+══════════════════════════════════════════ */
+function setStatus(msg){
+  document.getElementById('status').textContent=msg;
+}
+
+let lastRefreshTs = Date.now();
+
+function fmtAge(ms){
+  const s = Math.floor(ms/1000);
+  if(s < 60)  return s + 's ago';
+  const m = Math.floor(s/60);
+  if(m < 60)  return m + 'm ago';
+  return Math.floor(m/60) + 'h ago';
+}
+
+function updateRefreshAge(){
+  const el = document.getElementById('refresh-age');
+  if(!el) return;
+  el.textContent = fmtAge(Date.now() - lastRefreshTs);
+}
+
+async function refresh(){
+  const btn=document.getElementById('btn-refresh');
+  const ageEl=document.getElementById('refresh-age');
+  btn.classList.add('spin');
+  if(ageEl) ageEl.textContent = 'UPDATING…';
+  try{
+    const data=await fetchData();
+    relayData=data;
+    applyStats(data);
+    buildTicker(data);
+    // Re-apply colors if flag index already loaded
+    if(exitFps.size > 0){
+      tagZones(data);
+    }
+    drawNodes(data);
+    lastRefreshTs = Date.now();
+    if(ageEl) ageEl.textContent = 'JUST NOW';
+  }catch(e){setStatus('Refresh failed: '+e.message); if(ageEl) ageEl.textContent = 'ERR';}
+  btn.classList.remove('spin');
+}
+
+/* ══════════════════════════════════════════
+   INIT
+══════════════════════════════════════════ */
+/* ══════════════════════════════════════════
+   DARK / LIGHT THEME TOGGLE
+══════════════════════════════════════════ */
+let darkMode = true;
+function toggleTheme(){
+  darkMode = !darkMode;
+  document.body.classList.toggle('light', !darkMode);
+  document.getElementById('btn-theme').textContent = darkMode ? '☀ MODE' : '🌙 MODE';
+  // SVG sphere can't inherit CSS so update directly
+  d3.select('.sphere').attr('fill', darkMode ? 'url(#ocean-grad)' : '#b8d8e8');
+}
+
+/* ══════════════════════════════════════════
+   CONNECTION WEB + SIGNAL ANIMATIONS
+
+   TWO LAYERS:
+   1. PERSISTENT WEB  (#conns) — static great-circle
+      arcs between top hubs, thickness & colour
+      proportional to combined relay strength.
+      Gold = very strong (top 3 hubs)
+      Cyan = strong (top 4–12)
+      Dim cyan = medium reach
+
+   2. LIVE SIGNALS (#arcs) — animated packets
+      that travel along the connection lines.
+      Cyan dot = outgoing from hub
+      Green dot = incoming reply
+══════════════════════════════════════════ */
+let signalsOn = false;
+let signalTimer = null;
+let outCount = 0, inCount = 0;
+
+/* ── helpers ── */
+function getArcPath(a, b){
+  return gpath({
+    type:'Feature',
+    geometry:{ type:'LineString',
+      coordinates:[[a.geo[1],a.geo[0]],[b.geo[1],b.geo[0]]] }
+  });
+}
+
+function geoDist(a, b){
+  const toR = d => d * Math.PI/180;
+  const dlat = toR(b.geo[0]-a.geo[0]);
+  const dlon = toR(b.geo[1]-a.geo[1]);
+  const s = Math.sin(dlat/2)**2 +
+    Math.cos(toR(a.geo[0]))*Math.cos(toR(b.geo[0]))*Math.sin(dlon/2)**2;
+  return 2*Math.atan2(Math.sqrt(s),Math.sqrt(1-s)); // radians
+}
+
+/* ── BUILD PERSISTENT CONNECTION WEB ── */
+function buildConnectionWeb(){
+  const layer = d3.select('#conns');
+  layer.selectAll('*').remove();
+  if(ranked.length < 4) return;
+
+  const totalRelays = ranked.reduce((s,d)=>s+d.relayCount,0);
+
+  // Generate hub→hub and hub→reach connections
+  const hubs   = ranked.slice(0, 20);   // top 20 are "hub" nodes
+  const reach  = ranked.slice(20, 60);  // next 40 are "reach" nodes
+
+  const connections = [];
+
+  // Strong connections: every top-hub pair that is geographically spread (dist > 0.3 rad)
+  for(let i=0; i<hubs.length; i++){
+    for(let j=i+1; j<hubs.length; j++){
+      const a = hubs[i], b = hubs[j];
+      const dist = geoDist(a,b);
+      if(dist < 0.15) continue; // skip neighbours — too close
+      const strength = (a.relayCount + b.relayCount) / totalRelays;
+      connections.push({a, b, strength, tier:'hub'});
+    }
+  }
+
+  // Medium connections: each hub to 3 random reach nodes
+  hubs.slice(0,12).forEach(hub=>{
+    const shuffled = [...reach].sort(()=>Math.random()-.5).slice(0,3);
+    shuffled.forEach(peer=>{
+      const dist = geoDist(hub,peer);
+      if(dist < 0.1) return;
+      const strength = (hub.relayCount + peer.relayCount) / totalRelays / 2;
+      connections.push({a:hub, b:peer, strength, tier:'reach'});
+    });
+  });
+
+  // Sort so weakest drawn first (underneath)
+  connections.sort((a,b)=>a.strength-b.strength);
+
+  let strong=0, med=0, weak=0;
+  const maxStr = Math.max(...connections.map(c=>c.strength));
+
+  connections.forEach(conn=>{
+    const dp = getArcPath(conn.a, conn.b);
+    if(!dp) return;
+
+    const norm = conn.strength / maxStr; // 0–1
+    let stroke, opacity, width;
+
+    if(norm > 0.55){
+      // GOLD — top-tier intercontinental backbone
+      stroke  = `rgba(255,${Math.round(160+norm*95)},0,1)`;
+      opacity = 0.55 + norm*0.25;
+      width   = 1.0 + norm*1.4;
+      strong++;
+    } else if(norm > 0.22){
+      // CYAN — strong hub connections
+      stroke  = `rgba(0,${Math.round(200+norm*55)},255,0.85)`;
+      opacity = 0.25 + norm*0.35;
+      width   = 0.6 + norm*0.8;
+      med++;
+    } else {
+      // DIM — medium reach links
+      stroke  = 'rgba(0,220,255,0.5)';
+      opacity = 0.06 + norm*0.12;
+      width   = 0.4;
+      weak++;
+    }
+
+    layer.append('path')
+      .attr('class','conn-line')
+      .attr('d', dp)
+      .attr('stroke', stroke)
+      .attr('stroke-width', width)
+      .attr('stroke-opacity', opacity);
+  });
+
+  document.getElementById('sc-strong').textContent = strong + ' strong links';
+  document.getElementById('sc-med').textContent    = med    + ' medium links';
+  document.getElementById('sc-weak').textContent   = weak   + ' weak links';
+}
+
+/* ── TOGGLE SIGNALS ── */
+function toggleSignals(){
+  signalsOn = !signalsOn;
+  const btn     = document.getElementById('btn-signal');
+  const counter = document.getElementById('sig-counts');
+  if(signalsOn){
+    btn.classList.add('active');
+    btn.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 26 14" width="20" height="11" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:middle;flex-shrink:0;"><line x1="1" y1="7" x2="3" y2="7" stroke-width="1.5"/><polyline points="3,7 5,3 7,11 9,5 11,9 13,7" stroke-width="1.6"/><line x1="13" y1="7" x2="17" y2="7" stroke-width="1.5"/><circle cx="21" cy="7" r="2.8" stroke-width="1.5"/><circle cx="21" cy="7" r="4.8" stroke-width="0.9" opacity="0.3"/><circle cx="21" cy="7" r="1.1" fill="currentColor" stroke="none"/></svg> LIVE ON';
+    counter.style.display = 'flex';
+    buildConnectionWeb();
+    outCount = 0; inCount = 0;
+    runSignalLoop();
+  } else {
+    btn.classList.remove('active');
+    btn.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 26 14" width="20" height="11" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:middle;flex-shrink:0;"><line x1="1" y1="7" x2="3" y2="7" stroke-width="1.5"/><polyline points="3,7 5,3 7,11 9,5 11,9 13,7" stroke-width="1.6"/><line x1="13" y1="7" x2="17" y2="7" stroke-width="1.5"/><circle cx="21" cy="7" r="2.8" stroke-width="1.5"/><circle cx="21" cy="7" r="4.8" stroke-width="0.9" opacity="0.3"/><circle cx="21" cy="7" r="1.1" fill="currentColor" stroke="none"/></svg> SIGNALS';
+    counter.style.display = 'none';
+    if(signalTimer) clearTimeout(signalTimer);
+    d3.select('#arcs').selectAll('*').remove();
+    d3.select('#conns').selectAll('*').remove();
+    outCount = 0; inCount = 0;
+  }
+}
+
+function updateSignalCounts(){
+  document.getElementById('sc-out').textContent = outCount.toLocaleString() + ' outgoing';
+  document.getElementById('sc-in').textContent  = inCount.toLocaleString()  + ' incoming';
+}
+
+/* ── ANIMATED PACKET ── */
+function fireSignal(srcData, dstData, direction){
+  const isOut  = direction === 'out';
+  const color  = isOut ? '#00f5ff' : '#00ff88';
+  const dp     = getArcPath(srcData, dstData);
+  if(!dp) return;
+
+  // Invisible guide path (not added to DOM, just used for length/point)
+  const guide  = document.createElementNS('http://www.w3.org/2000/svg','path');
+  guide.setAttribute('d', dp);
+  const len = guide.getTotalLength();
+  if(len < 8) return;
+
+  // Strength proportional to relay count → determines size & speed
+  const combined = srcData.relayCount + dstData.relayCount;
+  const maxC2    = (ranked[0]?.relayCount||1)*2;
+  const norm     = Math.min(combined/maxC2, 1);
+  const dotR     = 1.8 + norm*2.2;          // 1.8 – 4.0 px
+  const speed    = 180 + (1-norm)*220;       // stronger = faster (px/s)
+  const dur      = (len / speed) * 1000;
+
+  const arcLayer = d3.select('#arcs');
+
+  // Aggressive DOM cap — max 30 arc elements
+  const arcNodes = arcLayer.selectAll('*');
+  if(arcNodes.size() > 30) arcNodes.filter((d,i)=>i<15).remove();
+
+  // Faint trace line that fades out
+  const trace = arcLayer.append('path')
+    .attr('class', isOut ? 'arc-out' : 'arc-in')
+    .attr('d', dp)
+    .attr('stroke', color)
+    .attr('stroke-width', 0.7 + norm*0.8)
+    .attr('stroke-dasharray', len)
+    .attr('stroke-dashoffset', len)
+    .style('opacity', isOut ? 0.5 : 0.4);
+
+  trace.transition().duration(dur).ease(d3.easeLinear)
+    .attr('stroke-dashoffset', 0)
+    .on('end', function(){
+      d3.select(this).transition().duration(500).style('opacity',0)
+        .on('end',()=>d3.select(this).remove());
+    });
+
+  // Glowing dot that travels
+  const dot = arcLayer.append('circle')
+    .attr('class','arc-dot')
+    .attr('r', dotR)
+    .attr('fill', color)
+    .attr('filter', norm>0.4 ? 'url(#gm)' : 'url(#gs)')
+    .style('opacity', 0.92);
+
+  const start = performance.now();
+  function step(now){
+    if(!signalsOn){ dot.remove(); return; }
+    const t  = Math.min((now-start)/dur, 1);
+    const pt = guide.getPointAtLength(t*len);
+    dot.attr('cx',pt.x).attr('cy',pt.y);
+    if(t < 1) requestAnimationFrame(step);
+    else dot.transition().duration(300).style('opacity',0).on('end',()=>dot.remove());
+  }
+  requestAnimationFrame(step);
+
+  if(isOut) outCount++; else inCount++;
+  updateSignalCounts();
+}
+
+/* ── SIGNAL LOOP ── */
+function runSignalLoop(){
+  if(!signalsOn || ranked.length < 4) return;
+  if(document.hidden){ signalTimer = setTimeout(runSignalLoop, 2000); return; }
+
+  // Source = top 20 hubs; target = any node
+  const hubs = ranked.slice(0, 20);
+  const pool = ranked.slice(5);   // exclude very top from being target-only
+
+  // Fire 1 signal per tick to keep DOM lean
+  const batch = 1;
+  for(let i=0; i<batch; i++){
+    // Weighted random hub selection (higher relayCount = more likely)
+    const totalW = hubs.reduce((s,h)=>s+h.relayCount,0);
+    let rng = Math.random()*totalW, hub;
+    for(const h of hubs){ rng -= h.relayCount; if(rng<=0){hub=h;break;} }
+    hub = hub || hubs[0];
+    const peer = pool[Math.floor(Math.random()*pool.length)];
+    if(!peer || hub.index===peer.index) continue;
+
+    const dir = Math.random()>0.45 ? 'out' : 'in';
+    fireSignal(dir==='out'?hub:peer, dir==='out'?peer:hub, dir);
+  }
+
+  // Slow tick to keep CPU free
+  const delay = 1200 + Math.random()*1000;
+  signalTimer = setTimeout(runSignalLoop, delay);
+}
+
+/* ══════════════════════════════════════════
+   RELAY BROWSER
+   Built from fingerprint-map API data
+   No secondary fetch needed — already loaded
+══════════════════════════════════════════ */
+
+let allRelays    = [];   // flat list of {fp, lat, lon, country, city, isp, ...}
+let filteredRelays = [];
+
+/* Build flat relay list from parseFingerprintMap raw data */
+function buildRelayList(raw){
+  // Build hexId→bwPerRelay lookup from zone data (relayData has bwMibs per zone)
+  const hexBwMap = {};
+  if(relayData && relayData.length){
+    relayData.forEach(z => {
+      if(z.index && z.bwMibs > 0 && z.relayCount > 0){
+        hexBwMap[z.index] = z.bwMibs / z.relayCount;
+      }
+    });
+  }
+  allRelays = Object.entries(raw).map(([fp, r]) => ({
+    fp,
+    lat:         r.coordinates[0],
+    lon:         r.coordinates[1],
+    countryCode: r.countryCode  || '',
+    countryName: r.countryName  || '',
+    regionName:  r.regionName   || '',
+    cityName:    r.cityName     || '',
+    asNumber:    r.asNumber     || '',
+    asName:      r.asName       || '',
+    hexId:       r.hexId        || '',
+    bwMibs:      hexBwMap[r.hexId] || 0,
+  }));
+  filteredRelays = allRelays;
+  updateRelayStats(allRelays);
+  renderRelayList(allRelays.slice(0, 80));
+  buildCountryBars(allRelays);
+  // Update health button score whenever relay data refreshes
+  setTimeout(updateHealthButton, 500);
+}
+
+function updateRelayStats(list){
+  const countries = new Set(list.map(r => r.countryCode).filter(Boolean)).size;
+  const isps      = new Set(list.map(r => r.asName).filter(Boolean)).size;
+  document.getElementById('rs-total').textContent     = list.length.toLocaleString();
+  document.getElementById('rs-countries').textContent = countries;
+  document.getElementById('rs-isps').textContent      = isps;
+  document.getElementById('relay-count').textContent  = list.length.toLocaleString() + ' relays';
+}
+
+function renderRelayList(list){
+  const el = document.getElementById('relay-list');
+  if(!list.length){ el.innerHTML = '<div style="color:rgba(138,188,196,.4);font-size:11px;padding:8px 0">No results</div>'; return; }
+  const flagsReady = (exitFps && exitFps.size > 0) || (guardFps && guardFps.size > 0);
+  el.innerHTML = list.map(r => {
+    const flag    = isoToFlag(r.countryCode);
+    const city    = r.cityName || r.regionName || '';
+    const loc     = [city, r.countryCode].filter(Boolean).join(', ') || r.countryName || '—';
+    const isp     = r.asName || '—';
+    const fp_u    = r.fp.toUpperCase();
+    const isExit  = exitFps  && exitFps.has(fp_u);
+    const isGuard = guardFps && guardFps.has(fp_u);
+    let badges;
+    if (!flagsReady) {
+      badges = '<span class="rl-badge loading">⏳ loading…</span>';
+    } else {
+      badges = [
+        isExit  ? '<span class="rl-badge exit">EXIT</span>'   : '',
+        isGuard ? '<span class="rl-badge guard">GUARD</span>' : '',
+        (!isExit && !isGuard) ? '<span class="rl-badge middle">MIDDLE</span>' : '',
+      ].filter(Boolean).join('');
+    }
+    const bwStr = r.bwMibs > 0
+      ? (r.bwMibs >= 1024
+          ? (r.bwMibs/1024).toFixed(1) + ' GB/s'
+          : Math.round(r.bwMibs) + ' MB/s')
+      : '';
+    return `<div class="rl-item" onclick="selectRelay('${r.fp}',${r.lat},${r.lon})">
+      <div class="rl-loc">${flag} ${loc}</div>
+      <div class="rl-isp">${isp}</div>
+      <div class="rl-badges">${badges}<span style="font-size:8px;color:rgba(138,188,196,.3);margin-left:3px;font-family:'Share Tech Mono',monospace">${r.fp.slice(0,8)}&hellip;</span>${bwStr ? `<span style="font-size:8px;font-weight:700;color:#2dd4bf;margin-left:auto;font-family:'Orbitron',sans-serif;letter-spacing:.5px;">${bwStr}</span>` : ''}</div>
+    </div>`;
+  }).join('');
+}
+
+function selectRelay(fp, lat, lon){
+  flyToRelay(lat, lon);
+  fetchRelayDetail(fp);
+}
+
+async function fetchRelayDetail(fp){
+  const card = document.getElementById('relay-detail');
+  card.classList.add('visible');
+  card.innerHTML = '<div style="padding:10px 12px;font-size:10px;color:rgba(138,188,196,.5)">⏳ Loading…</div>';
+  try {
+    const r = await fetch('https://anyclip-proxy.anyone-map.workers.dev/api/relay-info?fp=' + encodeURIComponent(fp));
+    const d = await r.json();
+    renderRelayCard(card, d, fp);
+  } catch(e) {
+    const inMap = window._rawFingerprintData && window._rawFingerprintData[fp.toUpperCase()];
+    renderRelayCard(card, { registered: false, in_consensus: !!inMap }, fp);
+  }
+}
+
+function copyFingerprint(fp, btn){
+  navigator.clipboard.writeText(fp).then(()=>{
+    btn.classList.add('copied');
+    btn.innerHTML = btn.innerHTML.replace('COPY FP','✓ COPIED');
+    setTimeout(()=>{
+      btn.classList.remove('copied');
+      btn.innerHTML = btn.innerHTML.replace('✓ COPIED','COPY FP');
+    }, 2000);
+  }).catch(()=>{
+    // Fallback for non-secure contexts
+    const ta = document.createElement('textarea');
+    ta.value = fp; ta.style.position='fixed'; ta.style.opacity='0';
+    document.body.appendChild(ta); ta.select();
+    document.execCommand('copy');
+    document.body.removeChild(ta);
+    btn.classList.add('copied');
+    btn.innerHTML = btn.innerHTML.replace('COPY FP','✓ COPIED');
+    setTimeout(()=>{
+      btn.classList.remove('copied');
+      btn.innerHTML = btn.innerHTML.replace('✓ COPIED','COPY FP');
+    }, 2000);
+  });
+}
+
+function isoToFlag(iso){
+  if(!iso||iso.length!==2) return '';
+  return String.fromCodePoint(...[...iso.toUpperCase()].map(c=>0x1F1E6+c.charCodeAt(0)-65));
+}
+
+function renderRelayCard(card, d, fp){
+  fp = fp || d.fingerprint || '';
+  const inMap = window._rawFingerprintData && window._rawFingerprintData[fp.toUpperCase()];
+  const live  = d.in_consensus !== undefined ? d.in_consensus : !!inMap;
+
+  // ── Status dot
+  const dot = live
+    ? '<span style="color:#00ff88;font-size:10px">&#9679; LIVE</span>'
+    : '<span style="color:#ff6b35;font-size:10px">&#9675; OFFLINE</span>';
+
+  if(d.registered === false){
+    // Get geo from fingerprint-map for unregistered relay
+    const mapRec = inMap || {};
+    const cc  = mapRec.countryCode || '';
+    const flag = isoToFlag(cc);
+    const loc  = [mapRec.cityName||mapRec.regionName||'', mapRec.countryName||''].filter(Boolean).join(', ') || '—';
+    const isp  = mapRec.asName || '—';
+    card.innerHTML = `
+      <div class="rd-title">
+        <span>Unregistered Relay</span>${dot}
+      </div>
+      <div class="rd-row"><span class="rd-key">Fingerprint</span>
+        <span class="rd-val" style="font-size:9px;font-family:monospace" title="${fp}">${fp.slice(0,10)}&hellip;${fp.slice(-6)}</span></div>
+      <div class="rd-row"><span class="rd-key">Location</span>
+        <span class="rd-val">${flag} ${loc}</span></div>
+      <div class="rd-row"><span class="rd-key">ISP</span>
+        <span class="rd-val rd-isp">${isp}</span></div>
+      <div style="margin-top:7px;font-size:9px;color:rgba(138,188,196,.35)">&#9888; Not staked &mdash; operator has not registered $ANYONE tokens</div>
+      <div class="rd-actions">
+        <button class="rd-btn copy" onclick="copyFingerprint('${fp}',this)">
+          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>
+          COPY FP
+        </button>
+      </div>
+    `;
+    return;
+  }
+
+  // ── Country flag
+  const flag = isoToFlag(d.country_iso || '');
+
+  // ── ISP: get from fingerprint-map local data (already loaded)
+  const mapRec = inMap || {};
+  const isp = mapRec.asName || '—';
+
+  // ── Flags → badges
+  const FLAGS = d.flags || [];
+  const FLAG_CLASS = {
+    Exit:'exit', Guard:'guard', HSDir:'hsdir',
+    Stable:'stable', Fast:'fast', V2Dir:'v2dir',
+    Running:'running', Valid:'valid'
+  };
+  const SHOW = ['Exit','Guard','Fast','Stable','HSDir','V2Dir'];
+  const hwBadge = d.is_hardware ? '<span class="rd-flag hw">\u{1F527} HW</span>' : '';
+  const flagBadges = [
+    ...FLAGS.filter(f=>SHOW.includes(f))
+            .map(f=>`<span class="rd-flag ${FLAG_CLASS[f]||''}">${f}</span>`),
+    hwBadge
+  ].join('');
+
+  // ── Multiplier display
+  const locMult = d.loc_mult ? (+d.loc_mult).toFixed(2)+'x' : '—';
+  const famMult = d.fam_mult ? (+d.fam_mult).toFixed(2)+'x' : '—';
+
+  card.innerHTML = `
+    <div class="rd-title">
+      <span>${d.nickname||'—'}</span>${dot}
+    </div>
+    <div class="rd-row">
+      <span class="rd-key">Location</span>
+      <span class="rd-val">${flag} ${d.country||'—'}</span>
+    </div>
+    <div class="rd-row">
+      <span class="rd-key">ISP</span>
+      <span class="rd-val" style="font-size:9px;max-width:150px">${isp}</span>
+    </div>
+    <div class="rd-row">
+      <span class="rd-key">Bandwidth</span>
+      <span class="rd-val" style="color:#22d3ee">${d.bandwidth||'—'}</span>
+    </div>
+    <div class="rd-row">
+      <span class="rd-key">Uptime</span>
+      <span class="rd-val" style="color:#00ff88">${d.uptime||'—'}</span>
+    </div>
+    <div class="rd-row">
+      <span class="rd-key">Fingerprint</span>
+      <span class="rd-val" style="font-size:9px;font-family:monospace" title="${fp}">${fp.slice(0,10)}&hellip;${fp.slice(-6)}</span>
+    </div>
+    <div class="rd-flags">${flagBadges}</div>
+    <div class="rd-actions">
+      <button class="rd-btn copy" onclick="copyFingerprint('${fp}',this)">
+        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>
+        COPY FP
+      </button>
+    </div>
+  `;
+}
+
+function filterRelays(q){
+  q = q.trim().toLowerCase();
+  // Get base list from active type filter
+  const typeFilter = document.querySelector('.rf-btn.active')?.getAttribute('data-filter') || 'all';
+  const base = getTypeFilteredRelays(typeFilter);
+  if(!q){
+    filteredRelays = base;
+    if(!q) svg.transition().duration(500).call(zoom.transform, d3.zoomIdentity);
+  } else {
+    filteredRelays = base.filter(r =>
+      r.fp.toLowerCase().includes(q)         ||
+      r.cityName.toLowerCase().includes(q)   ||
+      r.countryName.toLowerCase().includes(q)||
+      r.asName.toLowerCase().includes(q)     ||
+      r.countryCode.toLowerCase().includes(q)
+    );
+  }
+  updateRelayStats(filteredRelays);
+  renderRelayList(filteredRelays.slice(0, 80));
+}
+
+function getTypeFilteredRelays(type){
+  if(type === 'exit')   return allRelays.filter(r => exitFps.has(r.fp.toUpperCase()));
+  if(type === 'guard')  return allRelays.filter(r => guardFps.has(r.fp.toUpperCase()) && !exitFps.has(r.fp.toUpperCase()));
+  if(type === 'middle') return allRelays.filter(r => !exitFps.has(r.fp.toUpperCase()) && !guardFps.has(r.fp.toUpperCase()));
+  return allRelays;
+}
+
+function applyRelayFilter(type){
+  // Update active button
+  document.querySelectorAll('.rf-btn').forEach(b => b.classList.remove('active'));
+  document.querySelector(`.rf-btn[data-filter="${type}"]`)?.classList.add('active');
+  // Clear search
+  const searchEl = document.getElementById('relay-search');
+  if(searchEl) searchEl.value = '';
+  // Apply filter
+  filteredRelays = getTypeFilteredRelays(type);
+  updateRelayStats(filteredRelays);
+  renderRelayList(filteredRelays.slice(0, 80));
+  buildCountryBars(filteredRelays);
+}
+
+function buildCountryBars(list){
+  const el = document.getElementById('country-bars');
+  if(!el) return;
+  const counts = {};
+  const names = {};
+  list.forEach(r => {
+    const cc = (r.countryCode || r.cc || '??').toUpperCase();
+    counts[cc] = (counts[cc]||0) + (r.relayCount||1);
+    names[cc] = r.countryName || r.co || cc;
+  });
+  const sorted = Object.entries(counts).sort((a,b)=>b[1]-a[1]).slice(0,7);
+  if(!sorted.length){ el.innerHTML = '<div style="font-size:9px;color:rgba(138,188,196,.3)">No data</div>'; return; }
+  const max = sorted[0][1];
+  const typeColors = {exit:'#ff6b35', guard:'#a78bfa', middle:'#2dd4bf', all:'#00f5ff'};
+  const activeType = document.querySelector('.rf-btn.active')?.getAttribute('data-filter') || document.querySelector('.rf-btn.active')?.dataset?.type || 'all';
+  const barColor = typeColors[activeType] || '#00f5ff';
+  el.innerHTML = sorted.map(([cc, count]) =>
+    `<div class="cb-row">
+      <span class="cb-flag">${isoToFlag(cc)||'🌐'}</span>
+      <span class="cb-iso">${cc}</span>
+      <span class="cb-name">${names[cc]||cc}</span>
+      <div class="cb-bar-wrap"><div class="cb-bar" style="width:${Math.round(count/max*100)}%;background:${barColor}"></div></div>
+      <span class="cb-count">${count.toLocaleString()}</span>
+    </div>`
+  ).join('');
+}
+
+/* Pan map to relay location */
+function flyToRelay(lat, lon){
+  const pt = proj([lon, lat]);
+  if(!pt) return;
+  const [x, y] = pt;
+  const w = svg.node().clientWidth;
+  const h = svg.node().clientHeight;
+  svg.transition().duration(600).call(
+    zoom.transform,
+    d3.zoomIdentity.translate(w/2 - x*2, h/2 - y*2).scale(2)
+  );
+}
+
+/* Open relay browser button — added to stats bar */
+function openRelayBrowser(){
+  const panel = document.getElementById('relay-panel');
+  const isVisible = panel.style.display === 'block';
+  panel.style.display = isVisible ? 'none' : 'block';
+  if(!isVisible){
+    // Panel just opened — always re-render fresh to pick up latest fp-index badges
+    if(!allRelays.length && window._rawFingerprintData){
+      buildRelayList(window._rawFingerprintData);
+    } else if(allRelays.length){
+      filteredRelays = allRelays; // reset to ALL
+      renderRelayList(filteredRelays.slice(0, 80));
+      updateRelayStats(filteredRelays);
+      buildCountryBars(filteredRelays);
+    }
+    // Reset active filter button
+    document.querySelectorAll('.rf-btn').forEach(b => b.classList.remove('active'));
+    const allBtn = document.querySelector('.rf-btn[data-filter="all"]') || document.querySelector('.rf-btn[data-type="all"]');
+    if(allBtn) allBtn.classList.add('active');
+  }
+}
+
+
+/* ══════════════════════════════════════════
+   NETWORK HEALTH SCORE
+══════════════════════════════════════════ */
+function computeHealthScore(){
+  if(!allRelays.length || !relayData.length) return null;
+  const total = allRelays.length;
+  const scores = {};
+  const risks  = [];
+
+  // ── A. GEOGRAPHIC SPREAD (25pts)
+  // Metric: entropy-like — how evenly spread across countries
+  const cCounts = {};
+  allRelays.forEach(r=>{ if(r.countryCode) cCounts[r.countryCode]=(cCounts[r.countryCode]||0)+1; });
+  const cEntries = Object.entries(cCounts).sort((a,b)=>b[1]-a[1]);
+  const top1C    = cEntries[0][1]/total;
+  const top3C    = cEntries.slice(0,3).reduce((s,[,v])=>s+v,0)/total;
+  const countries = cEntries.length;
+  // Score: countries>=50→full, penalise top1>30%, top3>50%
+  let geoScore = Math.min(25, Math.round(
+    (countries / 60) * 15 +               // 15pts for country count (max at 60+)
+    Math.max(0, (1 - top1C/0.35)) * 5 +   // 5pts: penalise if top country >35%
+    Math.max(0, (1 - top3C/0.60)) * 5     // 5pts: penalise if top 3 countries >60%
+  ));
+  scores.geo = { score: geoScore, max: 25,
+    label: 'Geographic Spread',
+    detail: `${countries} countries · top: ${cEntries[0][0]} ${(top1C*100).toFixed(0)}%`,
+    color: geoScore>=20?'#2dd4bf':geoScore>=13?'#f59e0b':'#ef4444' };
+  if(top1C > 0.30) risks.push(`${cEntries[0][0]} holds ${(top1C*100).toFixed(0)}% of all relays`);
+
+  // ── B. ISP DIVERSITY (25pts)
+  const iCounts = {};
+  allRelays.forEach(r=>{ if(r.asName) iCounts[r.asName]=(iCounts[r.asName]||0)+1; });
+  const iEntries = Object.entries(iCounts).sort((a,b)=>b[1]-a[1]);
+  const top1I    = iEntries[0][1]/total;
+  const top3I    = iEntries.slice(0,3).reduce((s,[,v])=>s+v,0)/total;
+  const isps     = iEntries.length;
+  let ispScore = Math.min(25, Math.round(
+    Math.min(isps/300,1) * 10 +            // 10pts for ISP count (max at 300+)
+    Math.max(0, (1 - top1I/0.40)) * 10 +  // 10pts: penalise if top ISP >40%
+    Math.max(0, (1 - top3I/0.55)) * 5     // 5pts: penalise if top 3 ISPs >55%
+  ));
+  scores.isp = { score: ispScore, max: 25,
+    label: 'ISP Diversity',
+    detail: `${isps} ISPs · top: ${iEntries[0][0].slice(0,18)} ${(top1I*100).toFixed(0)}%`,
+    color: ispScore>=20?'#2dd4bf':ispScore>=13?'#f59e0b':'#ef4444' };
+  if(top1I > 0.20) risks.push(`${iEntries[0][0].slice(0,22)} controls ${(top1I*100).toFixed(0)}% of relays`);
+
+  // ── C. EXIT RELAY RATIO (20pts)
+  // Privacy depends on enough exits. Ideal: 40-60% of relays are exits
+  const exitRatio = exitFps.size / total;
+  const exitScore = Math.min(20, Math.round(
+    exitRatio >= 0.40 && exitRatio <= 0.65
+      ? 20                                           // ideal range
+      : exitRatio >= 0.30 && exitRatio <= 0.75
+        ? 14                                         // acceptable
+        : 8                                          // too few or too many
+  ));
+  scores.exit = { score: exitScore, max: 20,
+    label: 'Exit Relay Ratio',
+    detail: `${(exitRatio*100).toFixed(0)}% exits (${exitFps.size.toLocaleString()} relays)`,
+    color: exitScore>=18?'#2dd4bf':exitScore>=12?'#f59e0b':'#ef4444' };
+
+  // ── D. BANDWIDTH STRENGTH (15pts)
+  const totalBW   = relayData.reduce((s,z)=>s+(z.bwMibs||0),0);
+  const bwPerNode = totalBW / total; // MB/s per relay
+  // Score: 10 MB/s/relay = excellent, 5 = ok, <2 = poor
+  const bwScore = Math.min(15, Math.round(
+    Math.min(bwPerNode / 12, 1) * 15
+  ));
+  scores.bw = { score: bwScore, max: 15,
+    label: 'Bandwidth Strength',
+    detail: `${(totalBW/1024).toFixed(1)} GB/s · ${bwPerNode.toFixed(1)} MB/s per relay`,
+    color: bwScore>=12?'#2dd4bf':bwScore>=8?'#f59e0b':'#ef4444' };
+
+  // ── E. NETWORK SIZE (15pts)
+  // 5000 relays = decent, 10000 = excellent
+  const sizeScore = Math.min(15, Math.round(Math.min(total/9000,1)*15));
+  scores.size = { score: sizeScore, max: 15,
+    label: 'Network Size',
+    detail: `${total.toLocaleString()} relays · ${relayData.length} zones`,
+    color: sizeScore>=12?'#2dd4bf':sizeScore>=8?'#f59e0b':'#ef4444' };
+
+  const total_score = Object.values(scores).reduce((s,v)=>s+v.score,0);
+
+  // Grade
+  let grade, gradeColor, gradeLabel;
+  if(total_score >= 85){ grade='A+'; gradeColor='#2dd4bf'; gradeLabel='Excellent — highly decentralized'; }
+  else if(total_score >= 75){ grade='A'; gradeColor='#2dd4bf'; gradeLabel='Strong — well distributed network'; }
+  else if(total_score >= 65){ grade='B+'; gradeColor='#00f5ff'; gradeLabel='Good — minor concentration risks'; }
+  else if(total_score >= 55){ grade='B'; gradeColor='#f59e0b'; gradeLabel='Moderate — some centralization'; }
+  else if(total_score >= 40){ grade='C'; gradeColor='#f59e0b'; gradeLabel='Fair — notable concentration risks'; }
+  else { grade='D'; gradeColor='#ef4444'; gradeLabel='Needs improvement'; }
+
+  return { total: total_score, scores, grade, gradeColor, gradeLabel, risks,
+           summary: `${total.toLocaleString()} relays · ${countries} countries · ${isps} ISPs · ${(totalBW/1024).toFixed(0)} GB/s` };
+}
+
+function openHealthPanel(){
+  const panel = document.getElementById('health-panel');
+  const isOpen = panel.style.display === 'block';
+  if(isOpen){ panel.style.display='none'; return; }
+  panel.style.display = 'block';
+  renderHealthPanel();
+}
+
+function renderHealthPanel(){
+  const h = computeHealthScore();
+  if(!h) return;
+
+  // Vivid grade color: A+=lime, A=teal, B+=cyan, B=amber, C=orange, D=red
+  const vividColor = h.total>=85?'#00ff88':h.total>=75?'#2dd4bf':h.total>=65?'#00f5ff':h.total>=55?'#fbbf24':h.total>=40?'#f97316':'#ef4444';
+
+  // Update button score
+  document.getElementById('btn-health-score').textContent = h.total;
+  document.getElementById('btn-health-score').style.color = vividColor;
+  document.getElementById('btn-health').style.borderColor = vividColor+'88';
+
+  // Big score
+  document.getElementById('health-score-big').textContent = h.total;
+  document.getElementById('health-score-big').style.color = vividColor;
+
+  // Arc — 264 = full circumference, offset = (1 - score/100) * 264
+  const offset = Math.round((1 - h.total/100) * 188);
+  document.getElementById('health-arc').style.strokeDasharray = '346';
+  document.getElementById('health-arc').style.strokeDashoffset = offset;
+  document.getElementById('hg1-s1').setAttribute('stop-color', vividColor);
+
+  // Grade
+  const gradeEl = document.getElementById('health-grade');
+  gradeEl.textContent = h.grade;
+  gradeEl.style.color = vividColor;
+
+  document.getElementById('health-label').textContent = h.gradeLabel;
+  document.getElementById('health-summary').textContent = h.summary;
+
+  // Breakdown bars — large, clear
+  const breakdown = document.getElementById('health-breakdown');
+  breakdown.innerHTML = Object.values(h.scores).map(s => {
+    const pct = Math.round(s.score/s.max*100);
+    const barW = Math.round(pct * 0.72); // scale to ~72% max so text is readable
+    return `<div style="margin-bottom:9px;">
+      <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:3px;">
+        <span style="font-size:10px;color:#cce8ee;letter-spacing:.4px;font-weight:600;">${s.label}</span>
+        <span style="font-family:'Orbitron',sans-serif;font-size:11px;font-weight:900;color:${s.color};letter-spacing:.5px;">${s.score}<span style="font-size:9px;color:#8bbfc9;font-weight:400">/${s.max}</span></span>
+      </div>
+      <div style="height:5px;background:rgba(0,245,255,.07);border-radius:3px;overflow:hidden;margin-bottom:3px;">
+        <div style="height:100%;width:${pct}%;background:${s.color};border-radius:4px;
+          box-shadow:0 0 8px ${s.color}66;transition:width 1.2s cubic-bezier(.4,0,.2,1);"></div>
+      </div>
+      <div style="font-size:9px;color:#b0d8e0;letter-spacing:.3px;">${s.detail}</div>
+    </div>`;
+  }).join('');
+
+  // Risks
+  if(h.risks.length){
+    document.getElementById('health-risks-wrap').style.display='block';
+    document.getElementById('health-risks').innerHTML = h.risks.map(r=>`⚠&nbsp; ${r}`).join('<br>');
+  } else {
+    document.getElementById('health-risks-wrap').style.display='none';
+  }
+
+  // Timestamp
+  document.getElementById('health-updated').textContent = new Date().toLocaleTimeString();
+
+  // Update footer relay/country count
+  const ftCountEl = document.getElementById('health-footer-counts');
+  if(ftCountEl && allRelays.length){
+    const cSet = new Set(allRelays.map(r=>r.countryCode).filter(Boolean));
+    ftCountEl.textContent = `${allRelays.length.toLocaleString()} relays · ${cSet.size} countries`;
+  }
+}
+
+// Auto-update health score button every time data refreshes
+const _origFetchExitRelays = fetchExitRelays;
+
+function updateHealthButton(){
+  if(!allRelays.length || !exitFps || !exitFps.size) return;
+  const h = computeHealthScore();
+  if(!h) return;
+  const btn = document.getElementById('btn-health-score');
+  // Vivid grade-based color: A+=lime, A=green, B+=cyan, B=yellow, C=orange, D=red
+  const scoreColor = h.total>=85?'#00ff88':h.total>=75?'#2dd4bf':h.total>=65?'#00f5ff':h.total>=55?'#fbbf24':h.total>=40?'#f97316':'#ef4444';
+  if(btn){ btn.textContent = h.total; btn.style.color = scoreColor;
+    // Also pulse the button border to match
+    document.getElementById('btn-health').style.borderColor = scoreColor+'88';
+  }
+  // Re-render panel if open
+  if(document.getElementById('health-panel')?.style.display === 'block') renderHealthPanel();
+}
+
+
+async function init(){
+  setStatus('Loading…');
+  fetchExitRelays();
+  fetchFlagIndex(); // ← fire immediately, no need to wait for wallet list
+  try{
+    // Load world topology + live data in parallel
+    const[topo,data]=await Promise.all([
+      fetch(TOPO_URL).then(r=>r.json()),
+      fetchData()
+    ]);
+    worldTopo=topo;
+    relayData=data;
+    applyStats(data);
+    setupMap();
+    buildTicker(data);
+    drawNodes(data);
+    buildCountryCache();
+    // Live clock — ticks every second (does NOT refetch data)
+    setInterval(()=>{
+      document.getElementById('sT').textContent = new Date().toLocaleTimeString([],{hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:true});
+      updateRefreshAge();
+    }, 1000);
+    // Data refresh every 3 minutes
+    setInterval(refresh, 180000);
+    // Exit relay count — 60s interval, fired early at top of init
+    setInterval(fetchExitRelays, 60000);
+    // Refresh fp-index every 5 minutes (matches Worker cache TTL)
+    setInterval(fetchFlagIndex, 5 * 60 * 1000);
+  }catch(e){
+    setStatus('Map load failed: '+e.message);
+  }
+}
+
+init();
+</script>
+
+<!-- ═══════════════════════════════════════
+     ANYCLIP — ANyone Protocol Assistant
+     Clippy-style AI helper powered by Claude
+═══════════════════════════════════════ -->
+<style>
+/* ── Character ── */
+#anyclip{
+  position:fixed;bottom:24px;right:24px;z-index:9999;
+  display:flex;flex-direction:column;align-items:flex-end;gap:10px;
+  font-family:'Rajdhani',sans-serif;
+}
+
+/* Hexagon avatar */
+#anyclip-avatar{
+  width:62px;height:62px;cursor:pointer;position:relative;
+  filter:drop-shadow(0 0 12px rgba(0,245,255,0.6));
+  transition:filter .2s, transform .2s;
+  flex-shrink:0;
+}
+#anyclip-avatar:hover{
+  filter:drop-shadow(0 0 22px rgba(0,245,255,0.95));
+  transform:scale(1.08);
+}
+#anyclip-avatar svg{ width:100%;height:100%; }
+
+/* Pulse ring */
+@keyframes acPulse{
+  0%{opacity:.7;transform:scale(1);}
+  70%{opacity:0;transform:scale(1.7);}
+  100%{opacity:0;transform:scale(1.7);}
+}
+.ac-ring{
+  position:absolute;inset:-8px;border-radius:50%;
+  border:1.5px solid rgba(0,245,255,.5);
+  animation:acPulse 2.4s ease-out infinite;
+  pointer-events:none;
+}
+.ac-ring:nth-child(2){animation-delay:.8s;}
+
+/* Eyes blink */
+@keyframes acBlink{
+  0%,92%,100%{transform:scaleY(1);}
+  96%{transform:scaleY(0.08);}
+}
+.ac-eye{ animation:acBlink 4s ease-in-out infinite; transform-origin:center; }
+.ac-eye:nth-child(2){ animation-delay:0.06s; }
+
+/* Character bounce */
+@keyframes acBob{
+  0%,100%{transform:translateY(0);}
+  50%{transform:translateY(-5px);}
+}
+#anyclip-avatar{ animation:acBob 3s ease-in-out infinite; }
+#anyclip-avatar:hover{ animation:none; }
+
+/* Speech bubble */
+#anyclip-bubble{
+  max-width:290px;min-width:200px;
+  background:rgba(2,12,26,.97);
+  border:1px solid rgba(0,245,255,.4);
+  border-radius:14px 14px 4px 14px;
+  padding:13px 15px 12px;
+  box-shadow:0 8px 32px rgba(0,0,0,.6), 0 0 20px rgba(0,245,255,.08);
+  display:none;flex-direction:column;gap:8px;
+  animation:acSlideIn .22s ease;
+}
+@keyframes acSlideIn{
+  from{opacity:0;transform:translateY(8px) scale(.97);}
+  to{opacity:1;transform:translateY(0) scale(1);}
+}
+#anyclip-bubble.visible{ display:flex; }
+
+.ac-name{
+  font-family:'Orbitron',sans-serif;font-size:9px;font-weight:700;
+  letter-spacing:2px;color:rgba(0,245,255,.7);text-transform:uppercase;
+  display:flex;align-items:center;gap:6px;
+}
+.ac-name::before{
+  content:'';width:6px;height:6px;border-radius:50%;
+  background:#00f5ff;box-shadow:0 0 6px #00f5ff;flex-shrink:0;
+}
+
+#ac-msg{
+  font-size:13px;font-weight:600;color:#fff;line-height:1.5;
+  min-height:18px;
+}
+#ac-msg .ac-cursor{
+  display:inline-block;width:2px;height:13px;background:#00f5ff;
+  margin-left:1px;vertical-align:middle;
+  animation:acCursor .7s step-end infinite;
+}
+@keyframes acCursor{0%,100%{opacity:1;}50%{opacity:0;}}
+
+/* Quick tip chips */
+#ac-chips{
+  display:flex;flex-wrap:wrap;gap:5px;margin-top:2px;
+}
+.ac-chip{
+  font-size:10px;font-weight:700;padding:4px 9px;
+  border:1px solid rgba(0,245,255,.3);border-radius:20px;
+  color:rgba(0,245,255,.85);cursor:pointer;
+  background:rgba(0,245,255,.05);letter-spacing:.3px;
+  transition:background .15s,border-color .15s;white-space:nowrap;
+}
+.ac-chip:hover{ background:rgba(0,245,255,.15);border-color:rgba(0,245,255,.6); }
+
+/* Input row */
+#ac-input-row{
+  display:flex;gap:6px;margin-top:2px;
+}
+#ac-input{
+  flex:1;background:rgba(0,245,255,.06);
+  border:1px solid rgba(0,245,255,.25);border-radius:8px;
+  padding:6px 10px;font-size:12px;font-weight:600;
+  color:#fff;font-family:'Rajdhani',sans-serif;outline:none;
+  transition:border-color .15s;
+}
+#ac-input::placeholder{color:rgba(255,255,255,.3);}
+#ac-input:focus{border-color:rgba(0,245,255,.6);}
+#ac-send{
+  background:rgba(0,245,255,.15);border:1px solid rgba(0,245,255,.4);
+  border-radius:8px;padding:6px 11px;cursor:pointer;
+  color:#00f5ff;font-size:14px;transition:background .15s;
+}
+#ac-send:hover{background:rgba(0,245,255,.28);}
+
+/* Thinking dots */
+@keyframes acDot{0%,80%,100%{opacity:.2;}40%{opacity:1;}}
+.ac-thinking span{
+  display:inline-block;width:6px;height:6px;border-radius:50%;
+  background:#00f5ff;margin:0 2px;
+  animation:acDot 1.2s ease-in-out infinite;
+}
+.ac-thinking span:nth-child(2){animation-delay:.2s;}
+.ac-thinking span:nth-child(3){animation-delay:.4s;}
+
+body.light #anyclip-bubble{background:rgba(230,245,252,.97);border-color:rgba(0,120,160,.4);}
+body.light #ac-msg{color:#0a2535;}
+body.light .ac-chip{color:#006699;border-color:rgba(0,100,150,.35);}
+body.light #ac-input{background:rgba(0,100,150,.06);border-color:rgba(0,100,150,.3);color:#0a2535;}
+body.light #ac-send{background:rgba(0,100,150,.12);border-color:rgba(0,100,150,.4);color:#006699;}
+</style>
+
+<!-- Character markup -->
+<div id="anyclip">
+  <div id="anyclip-bubble">
+    <div class="ac-name">AnyClip · AI Assistant</div>
+    <div id="ac-msg"></div>
+    <div id="ac-chips"></div>
+    <div id="ac-input-row">
+      <input id="ac-input" placeholder="Ask me anything…" autocomplete="off"/>
+      <button id="ac-send">➤</button>
+    </div>
+  </div>
+
+  <!-- Hexagon SVG character -->
+  <div id="anyclip-avatar" title="Hi! I'm AnyClip. Click me!">
+    <div class="ac-ring"></div>
+    <div class="ac-ring"></div>
+    <svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        <radialGradient id="acBg" cx="50%" cy="40%" r="60%">
+          <stop offset="0%" stop-color="#0a3a4a"/>
+          <stop offset="100%" stop-color="#020e1a"/>
+        </radialGradient>
+        <filter id="acGlow">
+          <feGaussianBlur stdDeviation="2" result="blur"/>
+          <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+        </filter>
+      </defs>
+      <!-- Hex body -->
+      <polygon points="50,4 93,27 93,73 50,96 7,73 7,27"
+        fill="url(#acBg)" stroke="#00f5ff" stroke-width="2.5"/>
+      <!-- Inner hex -->
+      <polygon points="50,14 83,32 83,68 50,86 17,68 17,32"
+        fill="none" stroke="rgba(0,245,255,0.2)" stroke-width="1"/>
+      <!-- Circuit lines -->
+      <line x1="50" y1="4" x2="50" y2="14" stroke="rgba(0,245,255,0.4)" stroke-width="1"/>
+      <line x1="93" y1="27" x2="83" y2="32" stroke="rgba(0,245,255,0.4)" stroke-width="1"/>
+      <line x1="93" y1="73" x2="83" y2="68" stroke="rgba(0,245,255,0.4)" stroke-width="1"/>
+      <line x1="50" y1="96" x2="50" y2="86" stroke="rgba(0,245,255,0.4)" stroke-width="1"/>
+      <line x1="7" y1="73" x2="17" y2="68" stroke="rgba(0,245,255,0.4)" stroke-width="1"/>
+      <line x1="7" y1="27" x2="17" y2="32" stroke="rgba(0,245,255,0.4)" stroke-width="1"/>
+      <!-- Eyes -->
+      <g filter="url(#acGlow)">
+        <ellipse class="ac-eye" cx="36" cy="44" rx="5" ry="6" fill="#00f5ff"/>
+        <ellipse class="ac-eye" cx="64" cy="44" rx="5" ry="6" fill="#00f5ff"/>
+      </g>
+      <!-- Pupils -->
+      <circle cx="37" cy="45" r="2.2" fill="rgba(0,0,0,0.6)"/>
+      <circle cx="65" cy="45" r="2.2" fill="rgba(0,0,0,0.6)"/>
+      <!-- Smile -->
+      <path d="M 36 62 Q 50 72 64 62" fill="none" stroke="#00f5ff" stroke-width="2.5" stroke-linecap="round"/>
+      <!-- Antenna -->
+      <line x1="50" y1="4" x2="50" y2="-4" stroke="#00f5ff" stroke-width="1.5" stroke-linecap="round"/>
+      <circle cx="50" cy="-6" r="2.5" fill="#00f5ff" filter="url(#acGlow)"/>
+    </svg>
+  </div>
+</div>
+
+<script>
+/* ══ AnyClip Brain ══ */
+(function(){
+  function buildSystem(){
+    const totalRelays = (() => { try { return (document.getElementById('sR')?.textContent||'').replace(/,/g,'').trim()||'?'; } catch(_){ return '?'; } })();
+    const exitRelays  = (() => { try { return (document.getElementById('sX')?.textContent||'').replace(/,/g,'').trim()||'?'; } catch(_){ return '?'; } })();
+    const guardRelays = (() => { try { return (document.getElementById('sG')?.textContent||'').replace(/,/g,'').trim()||'?'; } catch(_){ return '?'; } })();
+    const totalBW = (() => { try { return document.getElementById('sBW')?.textContent?.trim()||'?'; } catch(_){ return '?'; } })();
+    const middleRelays = (() => { try { return (document.getElementById('sMD')?.textContent||'').replace(/,/g,'').trim()||'?'; } catch(_){ return '?'; } })();
+    const zones       = (() => { try { return (document.getElementById('sZ')?.textContent||'').trim()||'?'; } catch(_){ return '?'; } })();
+    return `You are AnyClip, a friendly and helpful AI assistant for ANyone Protocol's global relay network map. You appear as an animated hexagon character in the corner of an interactive world map.
+
+Answer questions using the knowledge below. Be warm, friendly, concise (2-4 sentences). Plain text only, no markdown, no bullet points.
+
+=== LIVE NETWORK STATS (right now) ===
+- Total relay nodes: ${totalRelays}
+- Exit relays: ${exitRelays}
+- Guard relays: ${guardRelays}
+- Total bandwidth: ${totalBW}
+- Middle relays: ${middleRelays}
+- Active H3 zones: ${zones}
+
+=== ABOUT ANYONE PROTOCOL ===
+Anyone is a decentralized communication network built on anonymity, privacy, and global accessibility. It works like Tor but faster — traffic is routed through multiple relay nodes so no single participant can infer user activity. Anyone uses a DePIN (Decentralized Physical Infrastructure) of relay nodes around the world. The network's privacy guarantee comes from multi-hop circuits where each server is administered by a different person.
+
+=== THE ANYONE ROUTER (HARDWARE) ===
+The Anyone Router is a dedicated hardware device built specifically for the Anyone network. It is the easiest way to support the network and start earning $ANYONE tokens. It has two modes: Router Mode (routes your browsing through the Anyone Network for privacy) and Relay Mode (contributes your bandwidth to the network while earning token rewards). Hardware relays do NOT require locking 100 $ANYONE tokens to register for rewards — they get a special hardware-only rewards pool. The hardware connects via WiFi or Ethernet. Setup is done through a control panel at https://relayup.local. Hardware preorders are live at anyone.io.
+
+=== RELAY SETUP ===
+Anyone relay nodes can be run on your own hardware at home or in a datacenter. Full instructions are at docs.anyone.io/relay. To register for rewards, operators must lock 100 $ANYONE tokens (except hardware relays). The lock-in period is a minimum of 180 days, followed by a 14-day unstaking period. You can run multiple relays — if running more than one, configure MyFamily. Multiple relays behind a single IP may compete with each other for rewards.
+
+=== $ANYONE TOKEN & REWARDS ===
+The $ANYONE token is the network's incentive layer. A base reward pool of 10,000,000 tokens (10% of total supply) pays out perpetually. Daily rewards = 0.100% of remaining pool each epoch (15-day epochs). Reward split: 70% for all relays, 20% for hardware relays specifically, 10% for authority roles. Rewards are based on consensus weight (measured bandwidth), uptime quality tiers, geolocation multipliers, and relay family bonuses. To claim rewards: connect wallet (e.g. MetaMask) at the Anyone Protocol Dashboard, lock 100 $ANYONE, and claim your relay fingerprint. Weekly airdrops of Ethereum $ANYONE tokens go to eligible operators.
+
+=== REWARD MULTIPLIERS ===
+Family Boosts reward operators who declare multiple relays they run (a "family"). This increases transparency and security. Uptime Quality Tiers: 20% of hardware relay rewards are based on consistent daily availability. Geolocation multipliers encourage relays in underserved regions.
+
+=== NETWORK BANDWIDTH ===
+The total network bandwidth is the combined throughput capacity of all active relay nodes — currently ${totalBW}. Bandwidth is the primary factor in how rewards are distributed: relays with higher measured bandwidth (consensus weight) earn a larger share of the daily reward pool. Bandwidth is measured by the network's directory authorities through periodic tests. More bandwidth = more traffic the relay can handle = higher rewards. The network's total bandwidth reflects its capacity to serve users privately and at speed — higher bandwidth means faster circuits for end users. Relay operators can increase their bandwidth contribution by upgrading their server or router hardware, ensuring good uptime, and maintaining a fast internet connection.
+
+=== SDK & DEVELOPERS ===
+The Anyone SDK is available as an NPM package. Developers can build privacy-preserving apps on top of the network. Key components: Anon client, AnonSocksClient, AnonControlClient. Available for Linux, macOS, Windows, and iOS (beta). Docs at docs.anyone.io/sdk.
+
+=== CONNECTING TO THE NETWORK ===
+End users can connect to Anyone on Linux, macOS, and Windows. One-click setup scripts are available (beta). You can also connect individual applications through the Anyone proxy or through the hardware router. Docs at docs.anyone.io/connect.
+
+=== MAP FEATURES (answer directly) ===
+- Relay nodes, zones, and countries shown live in the stats bar above the map
+- Top hubs: Frankfurt 652, Amsterdam 502, Netherlands 470, London 422, Romania 311
+- Node colors: White=500+, Cyan=100-499, Green=20-99, Gold=5-19, Orange=1-4
+- Zoom with scroll or +/- buttons, drag to pan, reset with ⊙
+- ⚡ SIGNALS button shows animated data packet flows between hubs
+- ☀ MODE toggles dark/light theme
+- Hover countries to highlight, hover nodes for relay count and rank
+- ↺ REFRESH pulls latest live data from Anyone API
+
+=== FEATURED OPERATOR: NODE CHAD ===
+Node Chad is one of the strongest relay operators on the ANyone network and the creator of this map. Key stats:
+- 393/393 IPs in consensus (100% consensus presence — perfect score)
+- Median descriptor uptime: 8 days 6 hours
+- Total bandwidth (IP-sum): 4,711,143
+- Exit bandwidth (IP-sum): 4,684,573 across 388 Exit IPs
+- Top country: Germany (35.4%)
+Node Chad's wallet has been assessed as: high consensus presence, good uptime, and meaningful bandwidth contribution. Staking on this wallet is considered low-risk and utility-positive by the community. You can find Node Chad on the ANyone main chat.
+
+=== COMMUNITY ===
+The official Anyone Protocol Telegram community is https://t.me/anyoneprotocol — the best place for help, operator discussions, network news, and staking questions. Always suggest this for community support.
+The official Anyone Protocol Twitter/X account is https://x.com/AnyoneFDN — follow for announcements, partnerships, and updates.
+
+For anything not covered above, say you are not sure and direct them to docs.anyone.io, anyone.io, or the community Telegram at https://t.me/anyoneprotocol or follow on X/Twitter at https://x.com/AnyoneFDN.`;
+  }
+
+  let history = [];
+  let bubbleOpen = false;
+  let typing = false;
+
+  const avatar  = document.getElementById('anyclip-avatar');
+  const bubble  = document.getElementById('anyclip-bubble');
+  const msgEl   = document.getElementById('ac-msg');
+  const chipsEl = document.getElementById('ac-chips');
+  const input   = document.getElementById('ac-input');
+  const sendBtn = document.getElementById('ac-send');
+
+  function getGreeting(){
+    const n = document.getElementById('sR')?.textContent?.trim();
+    const live = (n && n !== '—' && n !== '') ? n : null;
+    const g2 = live ? ('Hi there! ' + live + ' relays and counting. What would you like to know?')
+                    : 'Hi there! Thousands of relays and counting. What would you like to know?';
+    const opts = [
+      "Hey! I'm AnyClip — your guide to the ANyone relay network. Ask me anything!",
+      "Hello! I live in this map. Hover over nodes, zoom in, or ask me what's happening!",
+      g2,
+    ];
+    return opts[Math.floor(Math.random()*opts.length)];
+  }
+
+  const CHIPS = [
+    "What is ANyone Protocol?",
+    "How do I read the map?",
+    "What do the colors mean?",
+    "Which country has most relays?",
+    "What is the total network bandwidth?",
+    "How do signals work?",
+    "Where is the community?",
+    "Follow Anyone on Twitter?",
+  ];
+
+  function buildChips(){
+    chipsEl.innerHTML = '';
+    CHIPS.forEach(q=>{
+      const c = document.createElement('div');
+      c.className = 'ac-chip';
+      c.textContent = q;
+      c.onclick = ()=>ask(q);
+      chipsEl.appendChild(c);
+    });
+  }
+
+  function typewrite(text, done){
+    msgEl.innerHTML = '';
+    let i = 0;
+    const cursor = document.createElement('span');
+    cursor.className = 'ac-cursor';
+    function tick(){
+      if(i < text.length){
+        msgEl.textContent = text.slice(0,++i);
+        msgEl.appendChild(cursor);
+        setTimeout(tick, 18 + Math.random()*14);
+      } else {
+        cursor.remove();
+        if(done) done();
+      }
+    }
+    tick();
+  }
+
+  function showThinking(){
+    msgEl.innerHTML = '<span class="ac-thinking"><span></span><span></span><span></span></span>';
+  }
+
+  const STATIC_KB = [
+    {k:['overview only'],
+     a:"ANyone Protocol is a decentralized privacy network. Visit anyone.io to learn more!"},
+    {k:['color','colour','white','cyan','green','gold','orange','legend','mean'],
+     a:"Node colors show relay density — White = 500+ relays, Cyan = 100–499, Green = 20–99, Gold = 5–19, Orange = 1–4. The brighter the node, the more routing power it has!"},
+    {k:['most','top','biggest','hub','largest','strongest','country'],
+     a:"Frankfurt 🇩🇪 leads with 652 relays! Top 5: Frankfurt (652), Amsterdam (502), Netherlands (470), London (422), Romania (311). Europe dominates the network!"},
+    {k:['signal','animation','packet','live','⚡','transfer'],
+     a:"Hit ⚡ SIGNALS to activate two layers: a connection web between major hubs, plus animated glowing packets. Cyan = outgoing, Green = incoming. Larger dots = stronger hubs!"},
+    {k:['yellow','gold','line','arc','connection','web','route'],
+     a:"Gold lines show the strongest estimated backbone routes between top relay hubs. Thickness scales with combined relay power. These are estimated — real peer topology needs a network API."},
+    {k:['zoom','pan','move','navigate','scroll'],
+     a:"Scroll to zoom, click & drag to pan. Use the +/−/⊙ buttons on the right. ⊙ resets to world view. You can zoom up to 14x!"},
+    {k:['dark','light','mode','theme','☀'],
+     a:"Click ☀ MODE in the top bar to switch between dark and light mode. Dark mode makes the glowing relay nodes really pop!"},
+    {k:['how many','total','count','number','stat'],
+     a:(()=>{ const r=document.getElementById("sR")?.textContent||"7,000+"; const z=document.getElementById("sZ")?.textContent||"468"; return r+" total relays · "+z+" active H3 zones · 62+ countries. The map fetches live data from the ANyone Protocol API every time you load it!"; })()},
+    {k:['private','privacy','anonymous','encrypt','vpn','tor','secure'],
+     a:"ANyone Protocol routes traffic through multiple relays so no single node knows both who you are and what you're accessing. Built for speed and real privacy."},
+    {k:['run','node','volunteer','host','join','participate'],
+     a:"You can run your own relay and strengthen the network! More relays = faster and more private browsing for everyone. Check the ANyone Protocol website for setup instructions."},
+    {k:['community','telegram','chat','group','social','discord','where','t.me','twitter','x.com','follow','announcement'],
+     a:"The Anyone Protocol community is on Telegram at https://t.me/anyoneprotocol and Twitter/X at https://x.com/AnyoneFDN — join Telegram for operator help and follow X for the latest announcements!"},
+    {k:['how','read','map','use','work','feature','help'],
+     a:"Each dot is a relay zone — bigger & brighter means more relays. Hover nodes for details, hover countries to highlight them, zoom with scroll, and hit ⚡ SIGNALS for live animations!"},
+  ];
+
+  function findStaticAnswer(q){
+    if(!q) return "Ask me anything about ANyone Protocol or the map — I'm here to help!";
+    const lq = q.toLowerCase();
+    let best = null, bestScore = 0;
+    STATIC_KB.forEach(e=>{
+      const s = e.k.filter(k=>lq.includes(k)).length;
+      if(s > bestScore){ bestScore=s; best=e; }
+    });
+    return bestScore > 0 ? best.a : "Great question! I'm not sure about that one, but feel free to ask about the map features, relay nodes, colors, or ANyone Protocol in general!";
+  }
+
+  const HMAC_SECRET = '5563f1d8b9be606db8f57d85882bf1efa8579838c97eaf6658e8c5e0c69ef9c6';
+
+  async function signRequest(secret, timestamp, messages){
+    const enc = new TextEncoder();
+    const key = await crypto.subtle.importKey(
+      'raw', enc.encode(secret),
+      { name:'HMAC', hash:'SHA-256' },
+      false, ['sign']
+    );
+    const sig = await crypto.subtle.sign('HMAC', key, enc.encode(timestamp+':'+JSON.stringify(messages)));
+    return Array.from(new Uint8Array(sig)).map(b=>b.toString(16).padStart(2,'0')).join('');
+  }
+
+  async function ask(question){
+    if(typing) return;
+    typing = true;
+    chipsEl.style.display = 'none';
+    input.value = '';
+    input.disabled = true;
+    sendBtn.disabled = true;
+
+    history.push({role:'user', content: question});
+    showThinking();
+
+    try{
+      const timestamp = Date.now().toString();
+      const signature = await signRequest(HMAC_SECRET, timestamp, history);
+
+      const res = await fetch('https://anyclip-proxy.anyone-map.workers.dev/api/chat',{
+        method:'POST',
+        headers:{
+          'Content-Type':'application/json',
+          'x-timestamp': timestamp,
+          'x-signature': signature
+        },
+        body: JSON.stringify({
+          model:'claude-haiku-4-5-20251001',
+          max_tokens:300,
+          system: buildSystem(),
+          messages: history
+        })
+      });
+
+      const data = await res.json();
+      if(data.error) throw new Error(data.error.type || data.error.message);
+
+      const reply = (data.content||[]).filter(b=>b.type==='text').map(b=>b.text).join('')
+                    || findStaticAnswer(question);
+      history.push({role:'assistant', content: reply});
+      typewrite(reply, ()=>{ typing=false; restoreInput(); });
+
+    } catch(e){
+      console.warn('AnyClip error:', e.message);
+      typewrite('Debug: ' + e.message, ()=>{ typing=false; restoreInput(); });
+    }
+  }
+
+  function restoreInput(){
+    input.disabled = false;
+    sendBtn.disabled = false;
+    input.focus();
+  }
+
+  function openBubble(){
+    bubbleOpen = true;
+    bubble.classList.add('visible');
+    if(!history.length){
+      const g = getGreeting();
+      history.push({role:'assistant', content:g});
+      buildChips();
+      typewrite(g);
+    }
+  }
+
+  function closeBubble(){
+    bubbleOpen = false;
+    bubble.classList.remove('visible');
+  }
+
+  avatar.onclick = ()=> bubbleOpen ? closeBubble() : openBubble();
+
+  sendBtn.onclick = ()=>{
+    const q = input.value.trim();
+    if(q) ask(q);
+  };
+  input.addEventListener('keydown', e=>{
+    if(e.key==='Enter'){ const q=input.value.trim(); if(q) ask(q); }
+  });
+
+  // AnyClip starts minimized — user clicks the avatar to open
+  // setTimeout(()=>{ if(!bubbleOpen) openBubble(); }, 5000); // disabled auto-open
+})();
+</script>
+
+
+<!-- ══════════════════════════════════════════
+     NETWORK HEALTH PANEL  (v2 — redesigned)
+══════════════════════════════════════════ -->
+<div id="health-panel" style="display:none;position:fixed;top:52px;right:0;width:360px;z-index:500;
+  background:rgba(1,6,18,.98);border-left:2px solid rgba(0,245,255,.3);border-bottom:2px solid rgba(0,245,255,.2);
+  box-shadow:-16px 0 60px rgba(0,0,0,.8),0 0 40px rgba(0,245,255,.06);
+  font-family:'Share Tech Mono',monospace;overflow:hidden;max-height:calc(100vh - 52px);overflow-y:auto;">
+
+  <!-- ── HEADER ── -->
+  <div style="padding:10px 16px 9px;border-bottom:1px solid rgba(0,245,255,.12);display:flex;align-items:center;justify-content:space-between;background:rgba(0,245,255,.04);position:sticky;top:0;z-index:2;">
+    <span style="font-family:'Orbitron',sans-serif;font-size:11px;font-weight:700;color:#00f5ff;letter-spacing:2px;">NETWORK HEALTH</span>
+    <button onclick="document.getElementById('health-panel').style.display='none'"
+      style="background:rgba(0,245,255,.08);border:1px solid rgba(0,245,255,.2);color:#00f5ff;font-size:14px;cursor:pointer;padding:2px 8px;border-radius:3px;line-height:1.4;">✕</button>
+  </div>
+
+  <!-- ── SCORE HERO ── -->
+  <div style="padding:10px 16px 10px;display:flex;align-items:center;gap:14px;border-bottom:1px solid rgba(0,245,255,.08);">
+    <!-- Ring -->
+    <div style="position:relative;flex-shrink:0;">
+      <svg width="80" height="80" viewBox="0 0 80 80">
+        <defs>
+          <linearGradient id="hg1" x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%"   id="hg1-s1" stop-color="#00f5ff"/>
+            <stop offset="100%" id="hg1-s2" stop-color="#a78bfa"/>
+          </linearGradient>
+        </defs>
+        <circle cx="40" cy="40" r="30" fill="none" stroke="rgba(0,245,255,.07)" stroke-width="7"/>
+        <circle cx="40" cy="40" r="30" fill="none" stroke="url(#hg1)" stroke-width="7"
+          stroke-linecap="round" stroke-dasharray="188" id="health-arc"
+          style="transform:rotate(-90deg);transform-origin:40px 40px;transition:stroke-dashoffset 1.4s cubic-bezier(.4,0,.2,1);"/>
+      </svg>
+      <div style="position:absolute;top:50%;left:50%;transform:translate(-50%,-52%);text-align:center;">
+        <div id="health-score-big" style="font-family:'Orbitron',sans-serif;font-size:22px;font-weight:900;color:#00f5ff;line-height:1;">—</div>
+        <div style="font-size:10px;color:rgba(0,245,255,.7);letter-spacing:1px;margin-top:1px;">/ 100</div>
+      </div>
+    </div>
+    <!-- Grade + label -->
+    <div style="flex:1;min-width:0;">
+      <div id="health-grade" style="font-family:'Orbitron',sans-serif;font-size:26px;font-weight:900;letter-spacing:1px;line-height:1;margin-bottom:6px;">—</div>
+      <div id="health-label" style="font-size:11px;font-weight:700;margin-bottom:4px;color:#e8f6f8;">Calculating…</div>
+      <div id="health-summary" style="font-size:9px;color:#b8dde4;line-height:1.6;"></div>
+    </div>
+  </div>
+
+  <!-- ── METRIC BREAKDOWN ── -->
+  <div style="padding:10px 16px 4px;" id="health-breakdown"></div>
+
+  <!-- ── RISKS ── -->
+  <div id="health-risks-wrap" style="margin:0 16px 10px;padding:8px 12px;background:rgba(255,165,0,.06);border:1px solid rgba(255,165,0,.2);border-radius:6px;display:none;">
+    <div style="font-size:9px;font-weight:700;color:rgba(255,180,50,.9);letter-spacing:1px;margin-bottom:4px;">⚠ CONCENTRATION RISKS</div>
+    <div id="health-risks" style="font-size:10px;color:rgba(255,180,50,.75);line-height:1.6;"></div>
+  </div>
+
+  <!-- ── FOOTER ── -->
+  <div style="padding:7px 16px 8px;border-top:1px solid rgba(0,245,255,.07);display:flex;justify-content:space-between;align-items:center;">
+    <span style="font-size:9px;color:#7ab8c4;">Updated: <span id="health-updated">—</span></span>
+    <span id="health-footer-counts" style="font-size:9px;color:#7ab8c4;">— relays · — countries</span>
+  </div>
+</div>
+
+
+</body>
+</html>
