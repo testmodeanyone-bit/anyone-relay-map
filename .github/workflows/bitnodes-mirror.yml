@@ -1,0 +1,112 @@
+name: Mirror bitnodes.io snapshot
+ 
+# Fetches https://bitnodes.io/api/v1/snapshots/latest/ on a 30-minute cron and
+# commits the result to data/bitnodes-snapshot.json. The AnyoneMap Cloudflare
+# Worker reads from raw.githubusercontent.com (this repo) instead of
+# bitnodes.io directly because bitnodes.io is fronted by Cloudflare and its
+# WAF returns HTTP 530 to all Workers-to-Workers fetch traffic. GitHub Actions
+# runners are not behind that block.
+#
+# Schedule note: GitHub queues cron triggers and they can run 5-30 minutes
+# late under load. The worker's read-side tolerance handles this fine — its
+# own KV refresh runs every 30 min and serves stale data via SWR if the
+# upstream is briefly behind.
+ 
+on:
+  schedule:
+    - cron: '*/30 * * * *'
+  workflow_dispatch:  # also allow manual triggers for testing
+ 
+# Avoid clobbering ourselves if a previous run is still going (GitHub Actions
+# can have wide queue jitter at peak times). Only one run at a time.
+concurrency:
+  group: bitnodes-mirror
+  cancel-in-progress: false
+ 
+permissions:
+  contents: write  # we need to push the commit
+ 
+jobs:
+  mirror:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+ 
+      - name: Fetch bitnodes.io snapshot
+        id: fetch
+        run: |
+          set -e
+          echo "Fetching from bitnodes.io..."
+          # Polite User-Agent so the operators can identify and contact us if
+          # there's a problem. Bitnodes rate-limits unauthenticated requests
+          # to 10/day per IP — GitHub runners share IPs, so 429 is possible.
+          # We capture status separately and decide whether to commit below.
+          STATUS=$(curl -sS -o /tmp/snapshot.json -w '%{http_code}' \
+            -A 'AnyoneMap-Mirror/1.0 (+https://github.com/testmodeanyone-bit/anyone-relay-map)' \
+            -H 'Accept: application/json' \
+            --max-time 60 \
+            'https://bitnodes.io/api/v1/snapshots/latest/')
+          echo "HTTP status: $STATUS"
+          echo "status=$STATUS" >> "$GITHUB_OUTPUT"
+ 
+          if [ "$STATUS" != "200" ]; then
+            echo "::warning::Upstream returned HTTP $STATUS — skipping commit, keeping last-good snapshot"
+            # Exit 0 so the workflow doesn't fail and email on transient
+            # upstream errors. The last-good snapshot remains in the repo and
+            # the worker continues serving it. If this keeps happening, the
+            # missing commits will be visible in the repo's commit history.
+            exit 0
+          fi
+ 
+      - name: Validate response shape
+        if: steps.fetch.outputs.status == '200'
+        run: |
+          set -e
+          # Must be valid JSON
+          jq empty /tmp/snapshot.json
+          # Must have the fields we depend on
+          # .timestamp: Unix seconds when bitnodes generated the snapshot
+          # .nodes: object keyed by "ip:port"
+          # .total_nodes: integer count
+          jq -e '.timestamp | type == "number"' /tmp/snapshot.json > /dev/null
+          jq -e '.nodes | type == "object"' /tmp/snapshot.json > /dev/null
+          jq -e '.total_nodes | type == "number"' /tmp/snapshot.json > /dev/null
+          NODE_COUNT=$(jq '.nodes | length' /tmp/snapshot.json)
+          TOTAL=$(jq '.total_nodes' /tmp/snapshot.json)
+          TS=$(jq '.timestamp' /tmp/snapshot.json)
+          echo "Snapshot: $NODE_COUNT nodes in payload, total_nodes=$TOTAL, ts=$TS"
+          # Sanity: a real snapshot has thousands of nodes. A response with
+          # ~0 nodes is probably a partial/corrupted response we don't want
+          # to publish. Threshold of 1000 is well below any plausible real
+          # network size and well above any error scenario.
+          if [ "$NODE_COUNT" -lt 1000 ]; then
+            echo "::error::Snapshot has only $NODE_COUNT nodes — looks broken, refusing to commit"
+            exit 1
+          fi
+ 
+      - name: Move snapshot into place
+        if: steps.fetch.outputs.status == '200'
+        run: |
+          mkdir -p data
+          mv /tmp/snapshot.json data/bitnodes-snapshot.json
+ 
+      - name: Commit if changed
+        if: steps.fetch.outputs.status == '200'
+        run: |
+          set -e
+          git config user.name 'bitnodes-mirror-bot'
+          git config user.email 'bitnodes-mirror-bot@users.noreply.github.com'
+          git add data/bitnodes-snapshot.json
+          # No-op commit on actually-no-change. In practice the .timestamp
+          # field changes every fetch so every run will produce a diff.
+          if git diff --staged --quiet; then
+            echo "No changes — skipping commit"
+            exit 0
+          fi
+          TS=$(jq '.timestamp' data/bitnodes-snapshot.json)
+          NODES=$(jq '.total_nodes' data/bitnodes-snapshot.json)
+          git commit -m "Mirror snapshot ts=$TS (total_nodes=$NODES)"
+          git push
+ 
