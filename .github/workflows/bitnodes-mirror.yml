@@ -1,30 +1,29 @@
 name: Mirror bitnodes.io snapshot
  
-# Fetches https://bitnodes.io/api/v1/snapshots/latest/ on a 30-minute cron and
-# commits the result to data/bitnodes-snapshot.json. The AnyoneMap Cloudflare
-# Worker reads from raw.githubusercontent.com (this repo) instead of
-# bitnodes.io directly because bitnodes.io is fronted by Cloudflare and its
-# WAF returns HTTP 530 to all Workers-to-Workers fetch traffic. GitHub Actions
-# runners are not behind that block.
+# Fetches Bitcoin node data and commits to data/bitnodes-snapshot.json.
 #
-# Schedule note: GitHub queues cron triggers and they can run 5-30 minutes
-# late under load. The worker's read-side tolerance handles this fine — its
-# own KV refresh runs every 30 min and serves stale data via SWR if the
-# upstream is briefly behind.
+# PRIMARY: bitnodes.io/api/v1/snapshots/latest/ (~22,000 nodes with geo)
+# FALLBACK: DNS seeders + ip-api.com batch geolocation (~50-70 nodes with geo)
+#
+# The fallback exists because bitnodes.io is Cloudflare-fronted and has been
+# intermittently unreachable (DNS failures, 530 errors from Workers). The DNS
+# seeder approach produces fewer nodes but they're real, live, geolocated
+# Bitcoin nodes — much better than the hardcoded static fallback in the worker.
+#
+# The AnyoneMap Cloudflare Worker reads from raw.githubusercontent.com (this
+# repo) instead of bitnodes.io directly.
  
 on:
   schedule:
     - cron: '*/30 * * * *'
-  workflow_dispatch:  # also allow manual triggers for testing
+  workflow_dispatch:
  
-# Avoid clobbering ourselves if a previous run is still going (GitHub Actions
-# can have wide queue jitter at peak times). Only one run at a time.
 concurrency:
   group: bitnodes-mirror
   cancel-in-progress: false
  
 permissions:
-  contents: write  # we need to push the commit
+  contents: write
  
 jobs:
   mirror:
@@ -34,78 +33,206 @@ jobs:
       - name: Checkout repo
         uses: actions/checkout@v4
  
-      - name: Fetch bitnodes.io snapshot
-        id: fetch
+      # ─── PRIMARY: bitnodes.io ────────────────────────────────────────
+      - name: Try bitnodes.io (primary)
+        id: bitnodes
         run: |
           set -e
-          echo "Fetching from bitnodes.io..."
-          # Polite User-Agent so the operators can identify and contact us if
-          # there's a problem. Bitnodes rate-limits unauthenticated requests
-          # to 10/day per IP — GitHub runners share IPs, so 429 is possible.
-          # We capture status separately and decide whether to commit below.
-          STATUS=$(curl -sS -o /tmp/snapshot.json -w '%{http_code}' \
+          echo "Attempting bitnodes.io..."
+          STATUS=$(curl -sS -o /tmp/bitnodes-raw.json -w '%{http_code}' \
             -A 'AnyoneMap-Mirror/1.0 (+https://github.com/testmodeanyone-bit/anyone-relay-map)' \
             -H 'Accept: application/json' \
+            --connect-timeout 15 \
             --max-time 60 \
-            'https://bitnodes.io/api/v1/snapshots/latest/')
-          echo "HTTP status: $STATUS"
-          echo "status=$STATUS" >> "$GITHUB_OUTPUT"
+            'https://bitnodes.io/api/v1/snapshots/latest/' 2>/dev/null || true)
  
-          if [ "$STATUS" != "200" ]; then
-            echo "::warning::Upstream returned HTTP $STATUS — skipping commit, keeping last-good snapshot"
-            # Exit 0 so the workflow doesn't fail and email on transient
-            # upstream errors. The last-good snapshot remains in the repo and
-            # the worker continues serving it. If this keeps happening, the
-            # missing commits will be visible in the repo's commit history.
+          # curl exit code != 0 means connection/DNS failure — STATUS will be empty
+          if [ -z "$STATUS" ] || [ "$STATUS" = "000" ]; then
+            echo "::warning::bitnodes.io unreachable (DNS/connection failure)"
+            echo "ok=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
  
-      - name: Validate response shape
-        if: steps.fetch.outputs.status == '200'
+          echo "HTTP status: $STATUS"
+ 
+          if [ "$STATUS" != "200" ]; then
+            echo "::warning::bitnodes.io returned HTTP $STATUS"
+            echo "ok=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+ 
+          # Validate response shape
+          if ! jq -e '.timestamp and .nodes and .total_nodes' /tmp/bitnodes-raw.json > /dev/null 2>&1; then
+            echo "::warning::bitnodes.io returned invalid JSON shape"
+            echo "ok=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+ 
+          NODE_COUNT=$(jq '.nodes | length' /tmp/bitnodes-raw.json)
+          if [ "$NODE_COUNT" -lt 1000 ]; then
+            echo "::warning::bitnodes.io returned only $NODE_COUNT nodes — looks broken"
+            echo "ok=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+ 
+          TOTAL=$(jq '.total_nodes' /tmp/bitnodes-raw.json)
+          TS=$(jq '.timestamp' /tmp/bitnodes-raw.json)
+          echo "bitnodes.io OK: $NODE_COUNT nodes, total_nodes=$TOTAL, ts=$TS"
+          echo "ok=true" >> "$GITHUB_OUTPUT"
+          echo "source=bitnodes" >> "$GITHUB_OUTPUT"
+          cp /tmp/bitnodes-raw.json /tmp/snapshot.json
+ 
+      # ─── FALLBACK: DNS seeders + ip-api.com batch geo ────────────────
+      - name: Fallback to DNS seeders + geolocation
+        id: fallback
+        if: steps.bitnodes.outputs.ok != 'true'
         run: |
           set -e
-          # Must be valid JSON
-          jq empty /tmp/snapshot.json
-          # Must have the fields we depend on
-          # .timestamp: Unix seconds when bitnodes generated the snapshot
-          # .nodes: object keyed by "ip:port"
-          # .total_nodes: integer count
-          jq -e '.timestamp | type == "number"' /tmp/snapshot.json > /dev/null
-          jq -e '.nodes | type == "object"' /tmp/snapshot.json > /dev/null
-          jq -e '.total_nodes | type == "number"' /tmp/snapshot.json > /dev/null
-          NODE_COUNT=$(jq '.nodes | length' /tmp/snapshot.json)
-          TOTAL=$(jq '.total_nodes' /tmp/snapshot.json)
-          TS=$(jq '.timestamp' /tmp/snapshot.json)
-          echo "Snapshot: $NODE_COUNT nodes in payload, total_nodes=$TOTAL, ts=$TS"
-          # Sanity: a real snapshot has thousands of nodes. A response with
-          # ~0 nodes is probably a partial/corrupted response we don't want
-          # to publish. Threshold of 1000 is well below any plausible real
-          # network size and well above any error scenario.
-          if [ "$NODE_COUNT" -lt 1000 ]; then
-            echo "::error::Snapshot has only $NODE_COUNT nodes — looks broken, refusing to commit"
+          echo "bitnodes.io unavailable — falling back to DNS seeders"
+ 
+          # Query multiple DNS seeders for reachable Bitcoin node IPs.
+          # Each seeder returns ~25 random reachable nodes per query.
+          # We query each twice (DNS responses are randomized) for more diversity.
+          SEEDERS=(
+            "seed.bitcoin.sipa.be"
+            "dnsseed.bluematt.me"
+            "seed.bitcoinstats.com"
+            "seed.bitcoin.jonasschnelli.ch"
+            "seed.btc.petertodd.net"
+            "seed.bitcoin.sprovoost.nl"
+          )
+ 
+          > /tmp/all-ips.txt
+          for seeder in "${SEEDERS[@]}"; do
+            echo "Querying $seeder..."
+            # Two queries per seeder for diversity (responses are randomized)
+            dig +short +time=5 +tries=1 A "$seeder" >> /tmp/all-ips.txt 2>/dev/null || true
+            dig +short +time=5 +tries=1 A "$seeder" >> /tmp/all-ips.txt 2>/dev/null || true
+          done
+ 
+          # Deduplicate, filter out blanks/errors, limit to valid IPv4
+          grep -oE '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' /tmp/all-ips.txt | sort -u > /tmp/unique-ips.txt
+          IP_COUNT=$(wc -l < /tmp/unique-ips.txt)
+          echo "Got $IP_COUNT unique IPs from DNS seeders"
+ 
+          if [ "$IP_COUNT" -lt 10 ]; then
+            echo "::error::DNS seeders returned only $IP_COUNT IPs — not enough for a useful snapshot"
             exit 1
           fi
  
+          # Cap at 100 IPs for the batch geo request (ip-api.com free limit)
+          head -100 /tmp/unique-ips.txt > /tmp/batch-ips.txt
+          BATCH_COUNT=$(wc -l < /tmp/batch-ips.txt)
+          echo "Batch geo-lookup for $BATCH_COUNT IPs via ip-api.com..."
+ 
+          # Build the batch JSON request body
+          # ip-api.com batch endpoint accepts an array of objects with query + fields
+          jq -R -s '
+            split("\n") | map(select(length > 0)) |
+            map({
+              query: .,
+              fields: "status,query,country,countryCode,city,lat,lon,org,as,isp"
+            })
+          ' /tmp/batch-ips.txt > /tmp/batch-request.json
+ 
+          # ip-api.com batch: POST http://ip-api.com/batch (free, max 100 per request, 15/min)
+          GEO_STATUS=$(curl -sS -o /tmp/geo-response.json -w '%{http_code}' \
+            -X POST \
+            -H 'Content-Type: application/json' \
+            --max-time 30 \
+            -d @/tmp/batch-request.json \
+            'http://ip-api.com/batch')
+ 
+          echo "ip-api.com status: $GEO_STATUS"
+ 
+          if [ "$GEO_STATUS" != "200" ]; then
+            echo "::error::ip-api.com returned HTTP $GEO_STATUS"
+            exit 1
+          fi
+ 
+          # Validate geo response is a JSON array
+          if ! jq -e 'type == "array"' /tmp/geo-response.json > /dev/null 2>&1; then
+            echo "::error::ip-api.com returned invalid JSON"
+            exit 1
+          fi
+ 
+          SUCCESS_COUNT=$(jq '[.[] | select(.status == "success")] | length' /tmp/geo-response.json)
+          echo "Successfully geolocated $SUCCESS_COUNT IPs"
+ 
+          if [ "$SUCCESS_COUNT" -lt 10 ]; then
+            echo "::error::Only $SUCCESS_COUNT IPs geolocated — not enough"
+            exit 1
+          fi
+ 
+          # Transform into bitnodes-compatible format.
+          # bitnodes format: nodes["ip:port"] = [protocol, ua, connected_since, services, height, host, port, cc, lat, lon, tz, asn, org, city]
+          # We fill in what we have and use 0/empty for fields we don't know.
+          # The worker's validation filter checks: n[7] (cc), n[8] (lat), n[9] (lon) — all present.
+          NOW=$(date +%s)
+          jq --argjson now "$NOW" --argjson total "$SUCCESS_COUNT" '
+            [.[] | select(.status == "success")] |
+            {
+              timestamp: $now,
+              total_nodes: $total,
+              latest_height: 0,
+              source: "dns-seeders",
+              nodes: (
+                reduce .[] as $n ({}; 
+                  . + {
+                    ($n.query + ":8333"): [
+                      70016,
+                      "/Satoshi:unknown/",
+                      $now,
+                      1033,
+                      0,
+                      $n.query,
+                      8333,
+                      $n.countryCode,
+                      $n.lat,
+                      $n.lon,
+                      0,
+                      0,
+                      ($n.org // $n.isp // ""),
+                      ($n.city // "")
+                    ]
+                  }
+                )
+              )
+            }
+          ' /tmp/geo-response.json > /tmp/snapshot.json
+ 
+          FINAL_NODES=$(jq '.nodes | length' /tmp/snapshot.json)
+          echo "Built snapshot with $FINAL_NODES geolocated nodes from DNS seeders"
+          echo "ok=true" >> "$GITHUB_OUTPUT"
+          echo "source=dns-seeders" >> "$GITHUB_OUTPUT"
+ 
+      # ─── COMMIT ───────────────────────────────────────────────────────
       - name: Move snapshot into place
-        if: steps.fetch.outputs.status == '200'
+        if: steps.bitnodes.outputs.ok == 'true' || steps.fallback.outputs.ok == 'true'
         run: |
           mkdir -p data
-          mv /tmp/snapshot.json data/bitnodes-snapshot.json
+          cp /tmp/snapshot.json data/bitnodes-snapshot.json
  
       - name: Commit if changed
-        if: steps.fetch.outputs.status == '200'
+        if: steps.bitnodes.outputs.ok == 'true' || steps.fallback.outputs.ok == 'true'
         run: |
           set -e
+          SOURCE="${{ steps.bitnodes.outputs.source || steps.fallback.outputs.source }}"
           git config user.name 'bitnodes-mirror-bot'
           git config user.email 'bitnodes-mirror-bot@users.noreply.github.com'
           git add data/bitnodes-snapshot.json
-          # No-op commit on actually-no-change. In practice the .timestamp
-          # field changes every fetch so every run will produce a diff.
           if git diff --staged --quiet; then
             echo "No changes — skipping commit"
             exit 0
           fi
           TS=$(jq '.timestamp' data/bitnodes-snapshot.json)
-          NODES=$(jq '.total_nodes' data/bitnodes-snapshot.json)
-          git commit -m "Mirror snapshot ts=$TS (total_nodes=$NODES)"
+          NODES=$(jq '.nodes | length' data/bitnodes-snapshot.json)
+          TOTAL=$(jq '.total_nodes' data/bitnodes-snapshot.json)
+          git commit -m "Mirror snapshot ts=$TS nodes=$NODES total=$TOTAL source=$SOURCE"
           git push
+ 
+      # ─── NEITHER SOURCE WORKED ────────────────────────────────────────
+      - name: Report if both sources failed
+        if: steps.bitnodes.outputs.ok != 'true' && steps.fallback.outputs.ok != 'true'
+        run: |
+          echo "::warning::Both bitnodes.io and DNS seeder fallback failed. Last-good snapshot preserved."
