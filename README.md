@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="./anyonemap-banner-1280x640.png" alt="AnyoneMap — a globe with relay arcs, the AnyoneMap wordmark, and the tagline 'Decentralized onion routing on Anyone Protocol' on a dark navy background" width="100%">
+  <img src="./anyonemap-banner-1280x640.jpg" alt="AnyoneMap — a globe with relay arcs, the AnyoneMap wordmark, and the tagline 'Decentralized onion routing on Anyone Protocol' on a dark navy background" width="100%">
 </p>
 
 # anyone-relay-map
