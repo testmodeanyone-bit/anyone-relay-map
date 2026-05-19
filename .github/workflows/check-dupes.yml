@@ -46,7 +46,7 @@ jobs:
         with:
           node-version: '20'
       - name: build worker from shell + schema + index.html
-        run: node scripts/build-worker.js worker-shell.js kv-schema.js index.html /tmp/built-worker.js
+        run: node scripts/build-worker.js worker-shell.js kv-schema.js index.html /tmp/built-worker.js --no-bump
       - name: verify HTML content roundtrips (functional equivalence)
         run: |
           node scripts/extract-html.js anyonemap-worker.js /tmp/extract-current.html
