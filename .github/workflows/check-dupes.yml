@@ -34,6 +34,8 @@ jobs:
         run: node scripts/check-dupes.js anyonemap-worker.js
       - name: check-dupes on anyclip-proxy worker
         run: node scripts/check-dupes.js anyclip-proxy-worker.js
+      - name: check-schema-sync (anyclip-proxy inline kv-schema vs canonical)
+        run: node scripts/check-schema-sync.js
 
   build:
     name: verify anyonemap-worker.js matches built output
@@ -43,15 +45,15 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
-      - name: build worker from shell + index.html
-        run: node scripts/build-worker.js worker-shell.js index.html /tmp/built-worker.js
+      - name: build worker from shell + schema + index.html
+        run: node scripts/build-worker.js worker-shell.js kv-schema.js index.html /tmp/built-worker.js
       - name: verify HTML content roundtrips (functional equivalence)
         run: |
           node scripts/extract-html.js anyonemap-worker.js /tmp/extract-current.html
           node scripts/extract-html.js /tmp/built-worker.js /tmp/extract-built.html
           if ! cmp /tmp/extract-current.html /tmp/extract-built.html; then
             echo "::error::HTML content in committed anyonemap-worker.js does not match what would be built from worker-shell.js + index.html."
-            echo "Run: node scripts/build-worker.js worker-shell.js index.html anyonemap-worker.js"
+            echo "Run: node scripts/build-worker.js worker-shell.js kv-schema.js index.html anyonemap-worker.js"
             echo "Then commit the result."
             exit 1
           fi
