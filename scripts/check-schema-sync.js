@@ -25,7 +25,7 @@
 const fs = require('fs');
 const path = require('path');
 
-const SCHEMA_FILE = path.join(__dirname, 'kv-schema.js');
+const SCHEMA_FILE = path.join(__dirname, '..', 'kv-schema.js');  /* kv-schema.js lives at repo root, not in scripts/ */
 const TARGET = path.join(__dirname, '..', 'anyclip-proxy-worker.js');
 
 const BEGIN_MARKER = '// === BEGIN KV_SCHEMA_INLINE (canonical: scripts/kv-schema.js — verified by scripts/check-schema-sync.js) ===';
