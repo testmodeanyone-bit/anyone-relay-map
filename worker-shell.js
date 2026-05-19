@@ -1,3 +1,29 @@
+/* ============================================================================
+ * worker-shell.js — anyonemap worker logic (without the SPA)
+ * ============================================================================
+ *
+ * This file is the SOURCE for the anyonemap Cloudflare Worker. It contains
+ * all the request handlers, routes, KV reads, and response framing — but
+ * NOT the embedded HTML page. The HTML lives in index.html and gets
+ * injected at build time, replacing a unique placeholder marker that the
+ * build script knows about (search the build script for the exact marker).
+ *
+ * To deploy a change:
+ *   1. Edit this file OR index.html
+ *   2. Run: node scripts/build-worker.js worker-shell.js index.html anyonemap-worker.js
+ *   3. Paste the built anyonemap-worker.js into the Cloudflare dashboard
+ *
+ * Pairs with:
+ *   - index.html               (the SPA, edited as a normal HTML file)
+ *   - scripts/build-worker.js  (combines this + index.html → anyonemap-worker.js)
+ *   - scripts/extract-html.js  (reverse: pulls index.html out of a built worker)
+ *
+ * Deployed at: https://anyonemap.anyonerelaysmap.workers.dev
+ * Bindings:    SNAPSHOT_KV (shared with anyclip-proxy), ANALYTICS,
+ *              RL_ANALYTICS, RL_BITNODES (rate-limit counters)
+ * ============================================================================
+ */
+
 /* v385: single source of truth for the worker version. Used by /sw.js to
  * derive the Service Worker cache name (anyonemap-${WORKER_VERSION}). The
  * v374 SW handler hardcoded 'anyonemap-v375' as a string literal and that
