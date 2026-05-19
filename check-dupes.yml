@@ -1,0 +1,58 @@
+# .github/workflows/check-dupes.yml
+#
+# Lints worker source files for duplicate object-literal keys, AND verifies
+# that the worker can be rebuilt from worker-shell.js + index.html.
+#
+# Motivation:
+#   - v391 shipped a Response with two 'Cache-Control' headers; JS silent
+#     last-wins left a wrong cache policy in production. Lint catches that.
+#   - The anyonemap-worker is now built from a shell + html. If the build
+#     gets out of sync (someone edits the deployable file directly without
+#     also editing the source files), drift goes undetected. The build step
+#     produces a canonical worker; CI verifies the canonical worker is what
+#     was committed.
+
+name: lint-and-build
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+    branches: ['**']
+  workflow_dispatch: {}
+
+jobs:
+  lint:
+    name: scan worker sources for duplicate keys
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: check-dupes on anyonemap worker
+        run: node scripts/check-dupes.js anyonemap-worker.js
+      - name: check-dupes on anyclip-proxy worker
+        run: node scripts/check-dupes.js anyclip-proxy-worker.js
+
+  build:
+    name: verify anyonemap-worker.js matches built output
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: build worker from shell + index.html
+        run: node scripts/build-worker.js worker-shell.js index.html /tmp/built-worker.js
+      - name: verify HTML content roundtrips (functional equivalence)
+        run: |
+          node scripts/extract-html.js anyonemap-worker.js /tmp/extract-current.html
+          node scripts/extract-html.js /tmp/built-worker.js /tmp/extract-built.html
+          if ! cmp /tmp/extract-current.html /tmp/extract-built.html; then
+            echo "::error::HTML content in committed anyonemap-worker.js does not match what would be built from worker-shell.js + index.html."
+            echo "Run: node scripts/build-worker.js worker-shell.js index.html anyonemap-worker.js"
+            echo "Then commit the result."
+            exit 1
+          fi
+          echo "✅ anyonemap-worker.js content matches build output"
