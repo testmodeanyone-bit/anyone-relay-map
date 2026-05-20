@@ -3754,6 +3754,127 @@ async function verifyMsgMac(msg, env) {
    * already does and costs nothing. */
   return timingSafeEqual(expected, msg.mac);
 }
+
+// ============================================================================
+// QUARANTINE FILTER (v54) — see data/centroid-blocklist.json and
+// quarantine-patch-design.md. Filters relay records whose geolocation matches
+// known country-centroid fallback signatures from the upstream geo provider.
+// Not called yet — wiring happens in a follow-up commit.
+// ============================================================================
+
+const CENTROID_BLOCKLIST_HIGH = [
+  { lat: 37.7684, lng: -97.5634, label: 'US centroid (Lebanon, KS)' },
+  { lat: 46.9803, lng:   9.5512, label: 'Liechtenstein centroid' },
+  { lat: 42.5240, lng:   1.6166, label: 'Andorra centroid' },
+  { lat: 44.0385, lng:  12.2915, label: 'San Marino centroid' },
+];
+
+const CENTROID_BLOCKLIST_MEDIUM = [
+  { lat: 49.7700, lng:  6.0547, label: 'Luxembourg centroid' },
+  { lat: 51.1320, lng:  9.3939, label: 'Germany centroid' },
+  { lat: 51.3246, lng: -0.1293, label: 'UK centroid' },
+  { lat: 46.0738, lng: 25.0206, label: 'Romania centroid' },
+];
+
+const COORD_MATCH_EPSILON = 0.001;
+const CLUSTER_THRESHOLD = 50;
+
+function _qCoordsMatch(coords, entry) {
+  if (!coords || !Array.isArray(coords) || coords.length < 2) return false;
+  if (typeof coords[0] !== 'number' || typeof coords[1] !== 'number') return false;
+  return Math.abs(coords[0] - entry.lat) < COORD_MATCH_EPSILON &&
+         Math.abs(coords[1] - entry.lng) < COORD_MATCH_EPSILON;
+}
+
+function _qHitsBlocklist(coords, list) {
+  for (const entry of list) {
+    if (_qCoordsMatch(coords, entry)) return entry;
+  }
+  return null;
+}
+
+function _qBuildClusterIndex(relays) {
+  const idx = new Map();
+  for (const fp in relays) {
+    const r = relays[fp];
+    if (!r || !r.coordinates || !Array.isArray(r.coordinates) || r.coordinates.length < 2) continue;
+    if (typeof r.coordinates[0] !== 'number' || typeof r.coordinates[1] !== 'number') continue;
+    const k = r.coordinates[0].toFixed(4) + ',' + r.coordinates[1].toFixed(4);
+    idx.set(k, (idx.get(k) || 0) + 1);
+  }
+  return idx;
+}
+
+function _qHasNoSupplemental(r) {
+  return !r.cityName && !r.regionName && !r.asNumber;
+}
+
+function applyQuarantineFilter(relays) {
+  // Fail-open defensive guards: if input is bad, return original data unchanged
+  // and log via stats.error rather than throwing. A failing filter that returns
+  // 500 to users is worse than a filter that no-ops.
+  if (!relays || typeof relays !== 'object' || Array.isArray(relays)) {
+    return { filtered: relays || {}, stats: { error: 'invalid_input', totalRelays: 0 } };
+  }
+
+  try {
+    const clusterIdx = _qBuildClusterIndex(relays);
+    const filtered = {};
+    const stats = {
+      totalRelays: 0,
+      trusted: 0,
+      quarantined_centroid_high: 0,
+      quarantined_centroid_medium: 0,
+      flagged_cluster_no_supplemental: 0,
+    };
+    const QUARANTINED_FIELDS = {
+      hexId: null, coordinates: null, countryCode: null, countryName: null,
+      cityName: null, regionName: null, asNumber: null, asName: null,
+    };
+
+    for (const fp in relays) {
+      stats.totalRelays++;
+      const r = relays[fp];
+      if (!r || typeof r !== 'object') {
+        filtered[fp] = r;
+        continue;
+      }
+      let geoQuality = 'trusted';
+
+      const highHit = _qHitsBlocklist(r.coordinates, CENTROID_BLOCKLIST_HIGH);
+      if (highHit) {
+        geoQuality = 'quarantined_centroid_high';
+      } else if (r.coordinates && Array.isArray(r.coordinates) && r.coordinates.length >= 2) {
+        const k = r.coordinates[0].toFixed(4) + ',' + r.coordinates[1].toFixed(4);
+        const clusterSize = clusterIdx.get(k) || 0;
+        if (clusterSize >= CLUSTER_THRESHOLD && _qHasNoSupplemental(r)) {
+          const medHit = _qHitsBlocklist(r.coordinates, CENTROID_BLOCKLIST_MEDIUM);
+          if (medHit) {
+            geoQuality = 'quarantined_centroid_medium';
+          } else {
+            geoQuality = 'flagged_cluster_no_supplemental';
+          }
+        }
+      }
+
+      if (geoQuality === 'quarantined_centroid_high' || geoQuality === 'quarantined_centroid_medium') {
+        filtered[fp] = Object.assign({}, r, QUARANTINED_FIELDS, { geoQuality });
+        stats[geoQuality]++;
+      } else if (geoQuality === 'flagged_cluster_no_supplemental') {
+        filtered[fp] = Object.assign({}, r, { geoQuality });
+        stats.flagged_cluster_no_supplemental++;
+      } else {
+        filtered[fp] = Object.assign({}, r, { geoQuality });
+        stats.trusted++;
+      }
+    }
+
+    return { filtered, stats };
+  } catch (e) {
+    return { filtered: relays, stats: { error: 'filter_threw: ' + (e && e.message ? e.message : 'unknown'), totalRelays: 0 } };
+  }
+}
+
 async function sha256Hex(input) {
   const bytes = typeof input === "string" ? new TextEncoder().encode(input) : input;
   const digest = await crypto.subtle.digest("SHA-256", bytes);
