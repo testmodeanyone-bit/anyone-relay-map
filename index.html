@@ -8100,7 +8100,7 @@ async function fetchData(){
           window._rawFingerprintData = _rawData;   // save for relay browser
           buildRelayList(_rawData);                // populate relay browser
           try { sessionStorage.setItem('anymap_zones', JSON.stringify(parsed.map(z => ({index:z.index,relayCount:z.relayCount,geo:z.geo,bwMibs:z.bwMibs||0,countryCode:z.countryCode||'',countryName:z.countryName||'',topIsps:(z.topIsps||[]).slice(0,1)})))); } catch(_){}
-          setStatus(`Live · ${parsed.length} zones · ${new Date().toLocaleTimeString()} · ${_registryIntegrity === 'signed' ? '\u2705 verified' : '\u26a0\ufe0f unverified'}`);
+          setStatus(`Live · ${parsed.length} zones · ${new Date().toLocaleTimeString()} · ${_registryIntegrity === 'signed' ? '\u2705 verified' : '\u26a0\ufe0f unverified'}${window._quarantinedCount ? ' · '+window._quarantinedCount+' hidden (geo unknown)' : ''}`);
           return parsed;
         }
       }
@@ -8128,9 +8128,10 @@ let _cachedExitRelaysData = null;
 /* ── Parse fingerprint-map into grouped hex zones ── */
 function parseFingerprintMap(raw){
   const hexMap = new Map();
+  let _quarantinedCount = 0;
   Object.entries(raw).forEach(([fingerprint, relay])=>{
     const hex = relay.hexId;
-    if(!hex) return;
+    if(!hex){ if(relay && relay.geoQuality && relay.geoQuality.indexOf('quarantined_') === 0) _quarantinedCount++; return; }
     if(!hexMap.has(hex)){
       hexMap.set(hex, {
         index: hex,
@@ -8152,6 +8153,7 @@ function parseFingerprintMap(raw){
     const isp = relay.asName || 'Unknown';
     zone.isps[isp] = (zone.isps[isp]||0)+1;
   });
+  window._quarantinedCount = _quarantinedCount;
   hexMap.forEach(zone=>{
     zone.topIsps = Object.entries(zone.isps)
       .sort((a,b)=>b[1]-a[1])
