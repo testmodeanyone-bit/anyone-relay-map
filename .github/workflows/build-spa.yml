@@ -1,8 +1,8 @@
 name: build-spa
 
 # Auto-rebuilds anyonemap-worker.js from index.html whenever the SPA source
-# (or its build script / wrapper shell) changes. Commits the rebuilt worker
-# back to main so Cloudflare can pick it up.
+# (or its build inputs) change. Commits the rebuilt worker back to main so
+# Cloudflare can pick it up.
 #
 # Loop prevention:
 #   - The 'paths' filter excludes anyonemap-worker.js itself, so the
@@ -11,10 +11,11 @@ name: build-spa
 #
 # Permissions: needs contents:write so the GITHUB_TOKEN can push back.
 #
-# Note: build-worker.js reads index.html + worker-shell.js + kv-schema.js
-# and writes anyonemap-worker.js + the auto-bumped worker-shell.js.
-# It does NOT depend on scripts/extract-html.js, which is a separate
-# developer-side tool for extracting HTML out of an existing built worker.
+# Build script signature (from its --help):
+#   node build-worker.js <shell.js> <kv-schema.js> <index.html> <out.js>
+#                        [--no-bump|--dry-run-bump]
+# We omit the flag → default behavior (auto-bump WORKER_VERSION) which is
+# what we want for every CI build.
 
 on:
   push:
@@ -45,7 +46,7 @@ jobs:
           node-version: '20'
 
       - name: Run build-worker.js
-        run: node scripts/build-worker.js
+        run: node scripts/build-worker.js worker-shell.js kv-schema.js index.html anyonemap-worker.js
 
       - name: Check for rebuilt files
         id: check
@@ -68,6 +69,6 @@ jobs:
           git commit -m "build(ci): rebuild anyonemap-worker.js from index.html [skip ci]
 
           Auto-rebuilt by .github/workflows/build-spa.yml after a push that
-          changed the SPA source or build script. WORKER_VERSION auto-bumped
+          changed the SPA source or build inputs. WORKER_VERSION auto-bumped
           by scripts/build-worker.js."
           git push origin main
