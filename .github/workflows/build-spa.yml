@@ -1,7 +1,7 @@
 name: build-spa
 
 # Auto-rebuilds anyonemap-worker.js from index.html whenever the SPA source
-# (or its build scripts / wrapper shell) changes. Commits the rebuilt worker
+# (or its build script / wrapper shell) changes. Commits the rebuilt worker
 # back to main so Cloudflare can pick it up.
 #
 # Loop prevention:
@@ -10,6 +10,11 @@ name: build-spa
 #   - The auto-commit message includes [skip ci] as belt-and-suspenders.
 #
 # Permissions: needs contents:write so the GITHUB_TOKEN can push back.
+#
+# Note: build-worker.js reads index.html + worker-shell.js + kv-schema.js
+# and writes anyonemap-worker.js + the auto-bumped worker-shell.js.
+# It does NOT depend on scripts/extract-html.js, which is a separate
+# developer-side tool for extracting HTML out of an existing built worker.
 
 on:
   push:
@@ -18,7 +23,7 @@ on:
     paths:
       - 'index.html'
       - 'worker-shell.js'
-      - 'scripts/extract-html.js'
+      - 'kv-schema.js'
       - 'scripts/build-worker.js'
 
 permissions:
@@ -31,7 +36,6 @@ jobs:
       - name: Checkout main
         uses: actions/checkout@v4
         with:
-          # Need the GITHUB_TOKEN-authenticated remote so we can push back
           token: ${{ secrets.GITHUB_TOKEN }}
           fetch-depth: 1
 
@@ -39,9 +43,6 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '20'
-
-      - name: Run extract-html.js
-        run: node scripts/extract-html.js
 
       - name: Run build-worker.js
         run: node scripts/build-worker.js
@@ -67,6 +68,6 @@ jobs:
           git commit -m "build(ci): rebuild anyonemap-worker.js from index.html [skip ci]
 
           Auto-rebuilt by .github/workflows/build-spa.yml after a push that
-          changed the SPA source or build scripts. WORKER_VERSION auto-bumped
+          changed the SPA source or build script. WORKER_VERSION auto-bumped
           by scripts/build-worker.js."
           git push origin main
