@@ -8115,7 +8115,7 @@ async function fetchData(){
     if(cached) {
       const zones = JSON.parse(cached);
       if(zones.length > 200) {
-        setStatus(`Cached · ${zones.length} zones · ${new Date().toLocaleTimeString()}`);
+        { const _qc = (typeof window!=="undefined" && window._quarantinedCount) || parseInt(sessionStorage.getItem('_qCount')||'0',10); setStatus(`Cached · ${zones.length} zones · ${new Date().toLocaleTimeString()}${_qc ? ' · '+_qc+' hidden (geo unknown)' : ''}`); }
         return zones;
       }
     }
@@ -8154,6 +8154,7 @@ function parseFingerprintMap(raw){
     zone.isps[isp] = (zone.isps[isp]||0)+1;
   });
   window._quarantinedCount = _quarantinedCount;
+  try { sessionStorage.setItem('_qCount', String(_quarantinedCount)); } catch(_){}
   hexMap.forEach(zone=>{
     zone.topIsps = Object.entries(zone.isps)
       .sort((a,b)=>b[1]-a[1])
