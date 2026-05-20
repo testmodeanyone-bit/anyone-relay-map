@@ -9898,7 +9898,9 @@ Issued: ${(/* @__PURE__ */ new Date()).toISOString()}
         if (!upstream.ok) {
           return cors(JSON.stringify({ error: "Upstream registry unavailable", status: upstream.status }), 502);
         }
-        const data = await upstream.json();
+        const data_raw = await upstream.json();
+        // QUARANTINE FILTER (v54) — see data/centroid-blocklist.json
+        const { filtered: data } = applyQuarantineFilter(data_raw);
         const relayCount = Object.keys(data).length;
         
         // Compute HMAC over the canonical relay data
