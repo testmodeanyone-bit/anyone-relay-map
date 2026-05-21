@@ -1,0 +1,148 @@
+name: consensus-mirror
+
+# ============================================================================
+# Mirrors the Anyone Protocol network consensus into a small JSON file that the
+# Cloudflare Workers (anyclip-proxy, anyone-geo-enrichment) can read over plain
+# HTTPS from raw.githubusercontent.com.
+#
+# WHY: the directory authorities serve consensus only over the ORPort tunnel
+# (9201) and return HTTP 403 on the plain DirPort (9230) — verified live across
+# all 7 authorities. Workers can't speak the ORPort protocol; a GitHub runner
+# running the real `anon` client CAN. So the runner bootstraps anon, lets it
+# download a fresh consensus into its DataDirectory, parses it to JSON, and
+# commits. Mirrors the proven anyonemap-worker v393 bitnodes-mirror pattern.
+# ============================================================================
+
+on:
+  schedule:
+    # Every 30 minutes. The consensus is valid for a few hours, so this is
+    # comfortably fresh. Keep in rough sync with how often the workers expect
+    # new data; 30 min matches the producer's existing cron cadence.
+    - cron: "*/30 * * * *"
+  workflow_dispatch: {}   # allow manual runs from the Actions tab
+
+# Only one mirror run at a time; cancel a stale in-progress run if a new one
+# starts (a hung bootstrap shouldn't block the next tick).
+concurrency:
+  group: consensus-mirror
+  cancel-in-progress: true
+
+permissions:
+  contents: write   # needed to commit the snapshot back to the repo
+
+jobs:
+  mirror:
+    runs-on: ubuntu-22.04   # MUST match the apt repo codename below (jammy = 22.04).
+                            # ubuntu-latest is now noble (24.04); the Anyone repo
+                            # publishes anon-live-jammy, so apt found no package
+                            # (exit 100) on a noble runner. Pin to jammy to match.
+    timeout-minutes: 10   # bootstrap + parse should take ~1-3 min; cap runaways
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install anon (Anyone client)
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          set -euo pipefail
+          # Official Anyone apt repo (from docs.anyone.io install guide).
+          # The repo codename (jammy) MUST match the runner OS — see runs-on note.
+          sudo install -m 0755 -d /etc/apt/keyrings
+          curl -fsSL https://deb.en.anyone.tech/anon.asc | sudo tee /etc/apt/keyrings/anon.asc >/dev/null
+          echo "deb [signed-by=/etc/apt/keyrings/anon.asc] https://deb.en.anyone.tech anon-live-jammy main" \
+            | sudo tee /etc/apt/sources.list.d/anon.list >/dev/null
+          # Update only our repo to avoid unrelated mirror flakiness failing the run.
+          sudo apt-get update -o Dir::Etc::sourcelist="sources.list.d/anon.list" \
+                              -o Dir::Etc::sourceparts="-" -o APT::Get::List-Cleanup="0" || sudo apt-get update
+          # Diagnostic: show what apt thinks is available for 'anon' before installing,
+          # so a future codename/repo change produces a readable log instead of a bare exit 100.
+          echo "--- apt-cache policy anon ---"
+          apt-cache policy anon || true
+          # The anon package's pre-install script blocks on an interactive terms &
+          # conditions prompt; in a non-interactive CI runner that fails dpkg with
+          # "You must accept the terms and conditions" (exit 1). Pre-seed the debconf
+          # answer so the install proceeds unattended. The exact key/type is from the
+          # official Anyone docs (relay/maintenance/updates Ansible example):
+          #   debconf: name=anon question=anon/terms value="true" vtype=select
+          sudo apt-get install -y debconf-utils
+          echo "anon anon/terms select true" | sudo debconf-set-selections
+          sudo -E DEBIAN_FRONTEND=noninteractive apt-get install -y anon
+          echo "--- installed anon version ---"
+          anon --version || true
+
+      - name: Bootstrap anon and fetch consensus
+        run: |
+          set -euo pipefail
+          # Minimal client config: just enough to bootstrap and download the
+          # consensus. No relay, no SOCKS traffic. AgreeToTerms is required.
+          sudo mkdir -p /var/lib/anon
+          cat > /tmp/anonrc <<'EOF'
+          AgreeToTerms 1
+          DataDirectory /var/lib/anon
+          Log notice stdout
+          # Client only — do not act as a relay.
+          ORPort 0
+          SocksPort 0
+          # We only need directory info; fetch it eagerly.
+          FetchDirInfoEarly 1
+          FetchDirInfoExtraEarly 1
+          UseMicrodescriptors 0
+          EOF
+
+          # Run anon in the background; it will bootstrap over the ORPort tunnel
+          # and write cached-consensus into the DataDirectory.
+          sudo anon -f /tmp/anonrc &
+          ANON_PID=$!
+
+          # Wait (up to ~5 min) for a usable consensus file to appear and be
+          # non-trivial in size. anon writes 'cached-consensus' (full) when
+          # UseMicrodescriptors 0; it may also write 'cached-microdesc-consensus'.
+          CONSENSUS=""
+          for i in $(seq 1 60); do
+            for f in /var/lib/anon/cached-consensus /var/lib/anon/cached-microdesc-consensus; do
+              if sudo test -f "$f" && [ "$(sudo stat -c%s "$f" 2>/dev/null || echo 0)" -gt 100000 ]; then
+                CONSENSUS="$f"; break 2
+              fi
+            done
+            sleep 5
+          done
+
+          sudo kill "$ANON_PID" 2>/dev/null || true
+
+          if [ -z "$CONSENSUS" ]; then
+            echo "::error::anon did not produce a usable consensus within timeout"
+            echo "--- DataDirectory contents ---"
+            sudo ls -la /var/lib/anon || true
+            exit 1
+          fi
+
+          echo "Using consensus file: $CONSENSUS"
+          sudo cp "$CONSENSUS" /tmp/consensus.raw
+          sudo chmod 0644 /tmp/consensus.raw
+
+      - name: Build snapshot JSON
+        run: |
+          set -euo pipefail
+          node scripts/build-consensus-snapshot.mjs /tmp/consensus.raw data/consensus-snapshot.json
+
+      - name: Commit if changed
+        run: |
+          set -euo pipefail
+          git config user.name  "consensus-mirror-bot"
+          git config user.email "consensus-mirror-bot@users.noreply.github.com"
+          if git diff --quiet -- data/consensus-snapshot.json; then
+            echo "No change in consensus snapshot; nothing to commit."
+            exit 0
+          fi
+          git add data/consensus-snapshot.json
+          # Pull a short summary into the commit message for the audit log.
+          RELAYS=$(node -e 'process.stdout.write(String(require("./data/consensus-snapshot.json").relayCount))')
+          VU=$(node -e 'process.stdout.write(String(require("./data/consensus-snapshot.json").validUntil||"?"))')
+          git commit -m "consensus snapshot: ${RELAYS} relays (validUntil ${VU})"
+          git push
