@@ -4471,6 +4471,14 @@ async function storeSnapshot(env) {
           const _changed = !_existingPublished ||
             _exitRelaysContentSig(_existingPublished) !== _exitRelaysContentSig(_published);
           if (_changed) {
+            /* M4 NOTE: the 7-day TTL is intentional and intentionally UNLIKE the
+             * consumer's bitnodes-snapshot:latest, which has NO TTL. The contrast
+             * is by design, not an oversight to "harmonize": this producer writes
+             * reliably (cron + every /api/exit-relays request post-M2), so if the
+             * key ever goes 7 days without a write the producer is genuinely broken
+             * and the snapshot SHOULD self-expire rather than be served as if live.
+             * bitnodes' upstream fails routinely (rate-limited), so its snapshot is
+             * deliberately kept forever. See the matching note in worker-shell.js. */
             await env.SNAPSHOT_KV.put("exit-relays:latest", JSON.stringify(_published), { expirationTtl: 7 * 24 * 3600 });
           }
         }
@@ -4594,6 +4602,11 @@ async function storeSnapshot(env) {
       if (!_publishedValidation.ok) {
         console.error("[v53 kv-schema] [storeSnapshot/fresh] REFUSED invalid write:", JSON.stringify({ errors: _publishedValidation.errors, fields_seen: _publishedValidation.fields_seen }));
       } else {
+        /* M4 NOTE: 7-day TTL is intentional; see the rationale at the cached-path
+         * put site above and the matching note in worker-shell.js. It deliberately
+         * differs from bitnodes-snapshot:latest (no TTL) because this producer is
+         * reliable and a 7-day gap means broken, whereas bitnodes' upstream fails
+         * routinely and is kept forever on purpose. Do not harmonize the two. */
         await env.SNAPSHOT_KV.put("exit-relays:latest", JSON.stringify(_published), { expirationTtl: 7 * 24 * 3600 });
       }
     } catch (err) {
