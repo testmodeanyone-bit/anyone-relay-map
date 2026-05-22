@@ -34,6 +34,8 @@ jobs:
         run: node scripts/check-dupes.js anyonemap-worker.js
       - name: check-dupes on anyclip-proxy worker
         run: node scripts/check-dupes.js anyclip-proxy-worker.js
+      - name: check-dupes on enrichment worker
+        run: node scripts/check-dupes.js enrichment-worker_final.js
       - name: check-schema-sync (anyclip-proxy inline kv-schema vs canonical)
         run: node scripts/check-schema-sync.js
       - name: check-geo-schema-sync (geo:<fp> inline schema vs canonical)
