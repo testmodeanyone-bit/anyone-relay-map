@@ -36,6 +36,8 @@ jobs:
         run: node scripts/check-dupes.js anyclip-proxy-worker.js
       - name: check-schema-sync (anyclip-proxy inline kv-schema vs canonical)
         run: node scripts/check-schema-sync.js
+      - name: check-geo-schema-sync (geo:<fp> inline schema vs canonical)
+        run: node scripts/check-geo-schema-sync.js
 
   build:
     name: verify anyonemap-worker.js matches built output
