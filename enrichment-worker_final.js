@@ -14606,13 +14606,21 @@ var enrichment_worker_default = {
       const auth = isAuthorized(req, env);
       if (auth === null) return new Response("debug disabled: set RUN_TOKEN secret to enable", { status: 503 });
       if (!auth) return new Response("unauthorized", { status: 401 });
+      /* bindingStatus: "<typeof> <present-or-missing>". `present` is the truthy
+       * test result; `presentText` describes the present case (defaults to the
+       * plain marker). Extracted from four inline ternaries so the status
+       * strings live in one place — also removes the repeated literal that the
+       * check-dupes guard flagged as a duplicate. Output is byte-identical to
+       * the previous inline form. */
+      const bindingStatus = (val, present, presentText) =>
+        typeof val + (present ? (presentText || " (present)") : " (MISSING)");
       return Response.json({
         ok: true,
         bindings: {
-          GEO_DB: typeof env.GEO_DB + (env.GEO_DB ? " (present)" : " (MISSING)"),
-          GEO_ENRICH: typeof env.GEO_ENRICH + (env.GEO_ENRICH ? " (present)" : " (MISSING)"),
-          SELF_PROXY: typeof env.SELF_PROXY + (env.SELF_PROXY ? " = " + env.SELF_PROXY : " (MISSING)"),
-          PROXY: typeof env.PROXY + (env.PROXY && env.PROXY.fetch ? " (service binding present)" : " (MISSING)")
+          GEO_DB: bindingStatus(env.GEO_DB, env.GEO_DB),
+          GEO_ENRICH: bindingStatus(env.GEO_ENRICH, env.GEO_ENRICH),
+          SELF_PROXY: bindingStatus(env.SELF_PROXY, env.SELF_PROXY, " = " + env.SELF_PROXY),
+          PROXY: bindingStatus(env.PROXY, env.PROXY && env.PROXY.fetch, " (service binding present)")
         },
         allEnvKeys: Object.keys(env || {})
       });
