@@ -4290,6 +4290,23 @@ async function checkRelayHealth() {
 function todayKey() {
   return GROWTH_PREFIX + (/* @__PURE__ */ new Date()).toISOString().slice(0, 10);
 }
+/* v56 (M1): stable content signature of an exit-relays:latest payload, EXCLUDING
+ * the volatile `cachedAt` timestamp. Used to skip redundant KV writes: the
+ * cached-snapshot path of storeSnapshot ran on every /api/growth request and
+ * rewrote exit-relays:latest with byte-identical data (only cachedAt differing),
+ * burning KV write quota and risking the ~1 write/sec/key throttle under load.
+ * Comparing this signature against the value already in KV lets us write only
+ * when the meaningful data actually changed (or when KV is missing/stale). The
+ * field list mirrors the _published object built at both write sites; keep them
+ * in sync. Order is fixed so the string is deterministic. */
+function _exitRelaysContentSig(o) {
+  if (!o || typeof o !== "object") return "";
+  return JSON.stringify([
+    o.exit_relays, o.guard_relays, o.middle_relays, o.total_relays,
+    o.hardware_relays, o.bw_gbps, o.wallets,
+    o.zones, o.countries, o.isps, o.source, o.fp_built_at
+  ]);
+}
 async function storeSnapshot(env) {
   /* v48 FIX: rewrite of storeSnapshot.
    *
@@ -4362,7 +4379,26 @@ async function storeSnapshot(env) {
         if (!_publishedValidation.ok) {
           console.error("[v53 kv-schema] [storeSnapshot/cached] REFUSED invalid write:", JSON.stringify({ errors: _publishedValidation.errors, fields_seen: _publishedValidation.fields_seen }));
         } else {
-          await env.SNAPSHOT_KV.put("exit-relays:latest", JSON.stringify(_published), { expirationTtl: 7 * 24 * 3600 });
+          /* v56 (M1): skip the write if the meaningful content is unchanged from
+           * what's already in SNAPSHOT_KV. This path runs on every /api/growth
+           * request (via ctx.waitUntil), and the daily cached snapshot rarely
+           * changes between requests, so without this guard we rewrote identical
+           * bytes constantly — wasted KV write quota and throttle risk. We still
+           * write when KV is missing/empty (recovers the v51 "keep KV populated"
+           * intent) or when the data genuinely changed. cachedAt is intentionally
+           * excluded from the comparison so a new timestamp alone never triggers
+           * a write. */
+          let _existingPublished = null;
+          try {
+            _existingPublished = await env.SNAPSHOT_KV.get("exit-relays:latest", { type: "json" });
+          } catch (_) {
+            _existingPublished = null;
+          }
+          const _changed = !_existingPublished ||
+            _exitRelaysContentSig(_existingPublished) !== _exitRelaysContentSig(_published);
+          if (_changed) {
+            await env.SNAPSHOT_KV.put("exit-relays:latest", JSON.stringify(_published), { expirationTtl: 7 * 24 * 3600 });
+          }
         }
       } catch (err) {
         console.error("[Growth] SNAPSHOT_KV publish error (cached path):", err.message);
