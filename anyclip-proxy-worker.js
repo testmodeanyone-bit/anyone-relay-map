@@ -3317,7 +3317,13 @@ function _d1RowToUserRecord(row) {
     /* v38 (audit fix #18b): use kdf from D1 column if present. NULL fallback
      * to "v4" covers rows written before v38 schema migration — for this
      * operator's deployment every existing D1 row has v4-derived hash_v2,
-     * so the fallback is correct. */
+     * so the fallback is correct.
+     * v58 (M3): default kept at "v4" deliberately. Per the documented data
+     * invariant above, a D1 row with NULL kdf is a 100k (v4) hash — so we hand
+     * verify an explicit "v4", which costs one derive. We do NOT leave kdf
+     * absent here (which would route through _kdfCandidates' try-both path and
+     * add a needless v3 attempt to every D1 login). The try-both safety net is
+     * reserved for Pinata-registry records that genuinely lack the field. */
     kdf: (typeof row.kdf === "string" && row.kdf) ? row.kdf : "v4",
     created: typeof row.created === "number" ? row.created : undefined,
     updated: typeof row.updated === "number" ? row.updated : undefined,
@@ -3694,6 +3700,16 @@ function cleanPasswordHash(h) {
 }
 var KDF_SERVER_ITERATIONS = 1e3;
 var KDF_PBKDF2_ITERATIONS = 1e5;
+/* v58 (M3): v5 KDF raises PBKDF2-SHA256 to 300,000 iterations (3x the v4
+ * 100k) to close the gap toward OWASP 2024 guidance, while staying inside the
+ * Worker CPU budget (600k was the OWASP target but ~6x cost risked the per-
+ * request CPU limit on the multi-derive login paths; 300k is the deliberate
+ * compromise). v4 (100k) is RETAINED unchanged so existing v4 hashes still
+ * verify — login/recover verify with the record's stored kdf, then lazily
+ * rehash to v5. See _resolveKdf() for the single source of truth on what a
+ * stored kdf value (including a missing one) means. */
+var KDF_PBKDF2_ITERATIONS_V5 = 3e5;
+var KDF_CURRENT = "v5";
 var SALT_BYTES = 16;
 /* S2: Message integrity MAC. Every message stored in Pinata now includes an
    * HMAC-SHA256 computed over the canonical message fields. If Pinata is compromised
@@ -3997,9 +4013,67 @@ async function _kdfV4(clientHashHex, salt, env) {
   );
   return Array.from(new Uint8Array(bits)).map((b) => b.toString(16).padStart(2, "0")).join("");
 }
+/* v58 (M3): identical construction to _kdfV4 but at KDF_PBKDF2_ITERATIONS_V5
+ * (300k). Kept as a separate function rather than parameterizing _kdfV4 so the
+ * two iteration counts can never be accidentally conflated, and so a stored
+ * "v4" record always derives at exactly 100k on verify. */
+async function _kdfV5(clientHashHex, salt, env) {
+  const enc = new TextEncoder();
+  const baseKey = await crypto.subtle.importKey(
+    "raw", enc.encode(clientHashHex), "PBKDF2", false, ["deriveBits"]
+  );
+  const saltBytes = enc.encode(salt + ":" + (env.HMAC_SECRET || ""));
+  const bits = await crypto.subtle.deriveBits(
+    { name: "PBKDF2", salt: saltBytes, iterations: KDF_PBKDF2_ITERATIONS_V5, hash: "SHA-256" },
+    baseKey, 256
+  );
+  return Array.from(new Uint8Array(bits)).map((b) => b.toString(16).padStart(2, "0")).join("");
+}
 async function serverSideHarden(clientHashHex, salt, env, kdf) {
+  /* v58 (M3): explicit 3-way dispatch. Default (kdf omitted) is the CURRENT
+   * strongest KDF so every FRESH derive — register, and every lazy-upgrade
+   * rehash — produces a v5 hash. VERIFY call sites must pass the record's
+   * resolved kdf (see _resolveKdf) so an existing v4/v3 hash is recomputed at
+   * the SAME cost it was stored at; otherwise the comparison fails and the
+   * user is locked out. */
   if (kdf === "v3") return _kdfV3(clientHashHex, salt, env);
-  return _kdfV4(clientHashHex, salt, env);
+  if (kdf === "v4") return _kdfV4(clientHashHex, salt, env);
+  return _kdfV5(clientHashHex, salt, env);
+}
+/* v58 (M3): SINGLE SOURCE OF TRUTH for verifying a stored hardened hash.
+ *
+ * The hard problem: a record with a MISSING kdf field is ambiguous. Pre-M3 the
+ * codebase disagreed — the D1 read path synthesized "v4" while login dispatch
+ * treated missing as "v3". For this deployment we cannot be certain which
+ * legacy population (if any) still has no kdf field, so guessing a single
+ * default risks locking out whichever cohort we mislabel.
+ *
+ * Resolution that can't lock anyone out: derive the ORDERED list of kdf
+ * versions to try. An EXPLICIT stored value yields exactly one candidate
+ * (honored as-is — no ambiguity, no extra work). A MISSING value yields
+ * ["v3","v4"] — both legacy possibilities, tried in cheap-first order (v3 is a
+ * 1k-SHA256 loop, sub-ms; v4 is 100k PBKDF2). Note v5 is NEVER in the missing
+ * list: a v5 record always carries an explicit "v5" label because v5 only
+ * exists post-M3 and every v5 write sets the field. */
+function _kdfCandidates(rec) {
+  const k = rec && typeof rec.kdf === "string" ? rec.kdf : null;
+  if (k === "v5") return ["v5"];
+  if (k === "v4") return ["v4"];
+  if (k === "v3") return ["v3"];
+  return ["v3", "v4"]; /* missing/unknown: try both legacy KDFs before failing */
+}
+/* Verify `clientHashHex` against `storedHash` using the record's kdf (or, for a
+ * missing-kdf record, each legacy KDF in turn). Returns the kdf string that
+ * matched, or null if none did. Always runs every candidate to completion
+ * before returning on a miss so the per-record CPU profile doesn't leak which
+ * (if any) KDF a given account uses. timingSafeEqual guards the comparison. */
+async function _verifyHardened(clientHashHex, storedHash, salt, env, rec) {
+  let matched = null;
+  for (const kdf of _kdfCandidates(rec)) {
+    const candidate = await serverSideHarden(clientHashHex, salt, env, kdf);
+    if (timingSafeEqual(storedHash, candidate)) matched = matched || kdf;
+  }
+  return matched;
 }
 function generateSalt() {
   const bytes = new Uint8Array(SALT_BYTES);
@@ -9127,7 +9201,7 @@ I confirm I control this wallet.`;
           hashV2: hardenedHash,
           salt,
           v: authVersion,
-          kdf: "v4",
+          kdf: KDF_CURRENT,
           tier: cleanedTier,
           wallet: cleanedWallet,
           created: Date.now(),
@@ -9174,7 +9248,7 @@ I confirm I control this wallet.`;
           ctx.waitUntil((async () => {
             const upsertRes = await _writeAuthFieldsToD1(
               env, _v33_lowerNick, cleanedNick, _v33_walletLower,
-              hardenedHash, salt, authVersion, "v4",
+              hardenedHash, salt, authVersion, KDF_CURRENT,
               recoveryHashV2
             );
             if (!upsertRes.ok) {
@@ -9269,28 +9343,30 @@ I confirm I control this wallet.`;
         const dummySalt = "00000000000000000000000000000000";
         const dummyHash = "0".repeat(64);
         const targetSalt = user && user.salt || dummySalt;
-        /* v20: dispatch by stored kdf. Records written before v20 have no `kdf` field
-         * and used the 1k SHA-256 loop (now called "v3"). New records use PBKDF2
-         * 100k ("v4"). User-not-found path runs the heavier v4 KDF to keep the
-         * timing profile aligned with the current default. */
-        const userKdf = user && user.kdf === "v3" ? "v3" : (user && !user.kdf ? "v3" : "v4");
-        const candidate = await serverSideHarden(cleanedHash, targetSalt, env, userKdf);
         if (!user) {
-          /* Run v4 once to consume comparable CPU on enumeration probes. */
+          /* v58 (M3): consume comparable CPU on enumeration probes. Run the
+           * SAME candidate set a real missing-kdf record would (v3 + v4) plus
+           * the current v5 cost, so a non-existent nick isn't distinguishable
+           * by timing from any real record class. */
+          await serverSideHarden(cleanedHash, dummySalt, env, "v3");
           await serverSideHarden(cleanedHash, dummySalt, env, "v4");
-          timingSafeEqual(candidate, dummyHash);
+          const dummyCand = await serverSideHarden(cleanedHash, dummySalt, env, "v5");
+          timingSafeEqual(dummyCand, dummyHash);
           return cors(JSON.stringify({ ok: false, error: "Invalid credentials" }), 401);
         }
-        /* Mitnick #10: multi-version auth. Try the candidate (raw password or hash)
-         * against the stored hashV2. If the client sent a raw password and the user
-         * is still v2, fall back to SHA-256(password+'anyone-salt-2026') as the
-         * intermediate hash. Successful matches against any legacy KDF are
-         * lazily upgraded to v4 PBKDF2. */
+        /* Mitnick #10: multi-version auth. Verify the candidate (raw password or
+         * hash) against the stored hashV2 using the record's stored kdf (or, for
+         * a legacy missing-kdf record, each legacy KDF in turn — see
+         * _verifyHardened). If the client sent a raw password and the user is
+         * still v2, fall back to SHA-256(password+'anyone-salt-2026') as the
+         * intermediate hash. v58 (M3): any successful match against a pre-v5 KDF
+         * is lazily rehashed to v5 PBKDF2 (300k). */
         if (user.v >= 2 && user.hashV2) {
-          if (timingSafeEqual(user.hashV2, candidate)) {
-            /* Direct match. Upgrade if any of: stored auth-version is pre-v3,
-             * stored kdf is pre-v4, or kdf field absent (implicit v3). */
-            const needsKdfUpgrade = userKdf !== "v4";
+          const matchedKdf = await _verifyHardened(cleanedHash, user.hashV2, targetSalt, env, user);
+          if (matchedKdf) {
+            /* Direct match. Upgrade if the matched KDF is not already the current
+             * (v5), or if a raw-password login is still at auth-version < 3. */
+            const needsKdfUpgrade = matchedKdf !== KDF_CURRENT;
             const needsVUpgrade = useRawPassword && user.v < 3;
             /* v38 (audit fix #18a): track values to mirror to D1. Default to
              * the user's current values; the upgrade branch overwrites them
@@ -9300,22 +9376,22 @@ I confirm I control this wallet.`;
             let mirrorHashV2 = user.hashV2;
             let mirrorSalt = user.salt;
             let mirrorV = user.v;
-            let mirrorKdf = (typeof user.kdf === "string" && user.kdf) ? user.kdf : "v4";
+            let mirrorKdf = (typeof user.kdf === "string" && user.kdf) ? user.kdf : matchedKdf;
             if (needsKdfUpgrade || needsVUpgrade) {
               const upgSalt = generateSalt();
-              const upgHash = await serverSideHarden(cleanedHash, upgSalt, env, "v4");
+              const upgHash = await serverSideHarden(cleanedHash, upgSalt, env); /* default = v5 */
               /* v37: if we came in via D1-hit path, users is null. Re-fetch the
                * full registry before mutating so saveUserRegistry writes the
                * complete map, not a one-user map. */
               if (!users) users = await getUserRegistry();
               users[cleanedNick.toLowerCase()] = {
-                ...user, hashV2: upgHash, salt: upgSalt, v: 3, kdf: "v4"
+                ...user, hashV2: upgHash, salt: upgSalt, v: Math.max(user.v, 3), kdf: KDF_CURRENT
               };
               ctx.waitUntil(saveUserRegistry(users).catch(() => {}));
               mirrorHashV2 = upgHash;
               mirrorSalt = upgSalt;
-              mirrorV = 3;
-              mirrorKdf = "v4";
+              mirrorV = Math.max(user.v, 3);
+              mirrorKdf = KDF_CURRENT;
             }
             /* v38 (audit fix #18a): unconditional D1 mirror. Replaces the
              * v34-era mirror-only-on-upgrade pattern. Fire-and-forget. */
@@ -9325,15 +9401,15 @@ I confirm I control this wallet.`;
           /* If raw password didn't match directly, try v2 intermediate hash. */
           if (useRawPassword && user.v === 2) {
             const v2Hash = await sha256Hex(cleanedHash + "anyone-salt-2026");
-            const v2Candidate = await serverSideHarden(v2Hash, targetSalt, env, userKdf);
-            if (timingSafeEqual(user.hashV2, v2Candidate)) {
-              /* v2 match — upgrade to v3 auth + v4 KDF in one step. */
+            const v2Matched = await _verifyHardened(v2Hash, user.hashV2, targetSalt, env, user);
+            if (v2Matched) {
+              /* v2 match — upgrade to v3 auth + v5 KDF in one step. */
               const upgSalt = generateSalt();
-              const upgHash = await serverSideHarden(cleanedHash, upgSalt, env, "v4");
+              const upgHash = await serverSideHarden(cleanedHash, upgSalt, env); /* default = v5 */
               /* v37: re-fetch registry if we came via D1-hit path. */
               if (!users) users = await getUserRegistry();
               users[cleanedNick.toLowerCase()] = {
-                ...user, hashV2: upgHash, salt: upgSalt, v: 3, kdf: "v4"
+                ...user, hashV2: upgHash, salt: upgSalt, v: 3, kdf: KDF_CURRENT
               };
               ctx.waitUntil(saveUserRegistry(users).catch(() => {}));
               /* v38 (audit fix #18a): unconditional D1 mirror. Site 2 is the
@@ -9341,7 +9417,7 @@ I confirm I control this wallet.`;
                * so the v38 unconditional-mirror change is structurally identical
                * to the v34 mirror that already lived here. Kept this site's
                * call shape consistent with site 1's restructure for grep-ability. */
-              ctx.waitUntil(_writeAuthFieldsToD1(env, cleanedNick.toLowerCase(), user.nick, user.wallet, upgHash, upgSalt, 3, "v4", user.recoveryHashV2).catch(() => {}));
+              ctx.waitUntil(_writeAuthFieldsToD1(env, cleanedNick.toLowerCase(), user.nick, user.wallet, upgHash, upgSalt, 3, KDF_CURRENT, user.recoveryHashV2).catch(() => {}));
               return cors(JSON.stringify({ ok: true, nick: user.nick, tier: user.tier, wallet: user.wallet, upgraded: true }), 200);
             }
           }
@@ -9349,7 +9425,7 @@ I confirm I control this wallet.`;
         }
         if (user.hash && timingSafeEqual(user.hash, cleanedHash)) {
           const newSalt = generateSalt();
-          const newHardened = await serverSideHarden(cleanedHash, newSalt, env, "v4");
+          const newHardened = await serverSideHarden(cleanedHash, newSalt, env); /* default = v5 */
           /* v37: re-fetch registry if we came via D1-hit path. */
           if (!users) users = await getUserRegistry();
           users[cleanedNick.toLowerCase()] = {
@@ -9357,12 +9433,12 @@ I confirm I control this wallet.`;
             hashV2: newHardened,
             salt: newSalt,
             v: 2,
-            kdf: "v4"
+            kdf: KDF_CURRENT
           };
           delete users[cleanedNick.toLowerCase()].hash;
           ctx.waitUntil(saveUserRegistry(users).catch(() => {}));
           /* v34: mirror to D1 (see other login sites). */
-          ctx.waitUntil(_writeAuthFieldsToD1(env, cleanedNick.toLowerCase(), user.nick, user.wallet, newHardened, newSalt, 2, "v4", user.recoveryHashV2).catch(() => {}));
+          ctx.waitUntil(_writeAuthFieldsToD1(env, cleanedNick.toLowerCase(), user.nick, user.wallet, newHardened, newSalt, 2, KDF_CURRENT, user.recoveryHashV2).catch(() => {}));
           return cors(JSON.stringify({ ok: true, nick: user.nick, tier: user.tier, wallet: user.wallet, upgraded: true }), 200);
         }
         return cors(JSON.stringify({ ok: false, error: "Invalid credentials" }), 401);
@@ -9551,9 +9627,10 @@ I confirm I control this wallet.`;
             if (row && row.nick_lower) {
               const u = users[row.nick_lower];
               if (u && u.recoveryHashV2 && u.salt) {
-                const recKdf = u.kdf === "v3" ? "v3" : (!u.kdf ? "v3" : "v4");
-                const candidate = await serverSideHarden(codeBaseHash, u.salt, env, recKdf);
-                if (timingSafeEqual(u.recoveryHashV2, candidate)) {
+                /* v58 (M3): verify the recovery-code hash with the record's
+                 * stored kdf (or both legacy KDFs for a missing-kdf record). */
+                const recMatched = await _verifyHardened(codeBaseHash, u.recoveryHashV2, u.salt, env, u);
+                if (recMatched) {
                   found = u;
                 }
                 /* If the PBKDF2 verify failed despite an indexed match, that's
@@ -9563,12 +9640,13 @@ I confirm I control this wallet.`;
                  * deny — defense in depth. */
               }
             } else {
-              /* Index miss. Run a dummy PBKDF2 to keep the timing profile of
+              /* Index miss. Run dummy KDFs to keep the timing profile of
                * "valid v41 user, wrong code" indistinguishable from "no v41
-               * user has this code". Same belt-and-suspenders pattern login
-               * uses for user-not-found. The dummy uses a fixed salt so the
-               * cost is one PBKDF2 invocation regardless of registry size. */
+               * user has this code". v58 (M3): mirror the candidate set a
+               * missing-kdf record would run (v3 + v4). Fixed salt so the cost
+               * is constant regardless of registry size. */
               const dummySalt = "00000000000000000000000000000000";
+              await serverSideHarden(codeBaseHash, dummySalt, env, "v3");
               await serverSideHarden(codeBaseHash, dummySalt, env, "v4");
             }
           } catch (e) {
@@ -9589,10 +9667,9 @@ I confirm I control this wallet.`;
           for (const u of Object.values(users)) {
             if (!u.recoveryHashV2 || !u.salt) continue;
             if (_v41_d1Tried && u.recoveryLookupHash) continue;
-            /* v20: recovery records may be v3 (no kdf field) or v4 — dispatch per record. */
-            const recKdf = u.kdf === "v3" ? "v3" : (!u.kdf ? "v3" : "v4");
-            const candidate = await serverSideHarden(codeBaseHash, u.salt, env, recKdf);
-            if (timingSafeEqual(u.recoveryHashV2, candidate)) {
+            /* v58 (M3): per-record verify; missing-kdf records try v3 then v4. */
+            const recMatched = await _verifyHardened(codeBaseHash, u.recoveryHashV2, u.salt, env, u);
+            if (recMatched) {
               found = u;
               break;
             }
@@ -9602,13 +9679,13 @@ I confirm I control this wallet.`;
           return cors(JSON.stringify({ ok: false, error: "Invalid recovery code" }), 404);
         }
         const newSalt = generateSalt();
-        const newHardened = await serverSideHarden(cleanedHash, newSalt, env, "v4");
+        const newHardened = await serverSideHarden(cleanedHash, newSalt, env); /* default = v5 */
         users[found.nick.toLowerCase()] = {
           ...found,
           hashV2: newHardened,
           salt: newSalt,
           v: _recAuthV,
-          kdf: "v4",
+          kdf: KDF_CURRENT,
           recoveryHashV2: null,
           // recovery code is single-use
           /* v41 (audit fix #9): burn the lookup hash alongside recoveryHashV2.
@@ -9629,7 +9706,7 @@ I confirm I control this wallet.`;
          * Same rationale as the register site (see comment there) — keeping
          * recovery_lookup_hash management out of _writeAuthFieldsToD1 so
          * login's lazy-mirror can't accidentally clobber it. */
-        const _v34_d1Res = await _writeAuthFieldsToD1(env, found.nick.toLowerCase(), found.nick, found.wallet, newHardened, newSalt, _recAuthV, "v4", null);
+        const _v34_d1Res = await _writeAuthFieldsToD1(env, found.nick.toLowerCase(), found.nick, found.wallet, newHardened, newSalt, _recAuthV, KDF_CURRENT, null);
         if (!_v34_d1Res.ok) {
           console.error('[v34-recover] D1 UPSERT failed:', _v34_d1Res.error, 'for', found.nick.toLowerCase());
         }
@@ -10135,13 +10212,13 @@ Issued: ${(/* @__PURE__ */ new Date()).toISOString()}
           return cors(JSON.stringify({ ok: false, error: "No account linked to this wallet" }), 404);
         }
         const newSalt = generateSalt();
-        const newHardened = await serverSideHarden(cleanedHash, newSalt, env, "v4");
+        const newHardened = await serverSideHarden(cleanedHash, newSalt, env); /* default = v5 */
         users[found.nick.toLowerCase()] = {
           ...found,
           hashV2: newHardened,
           salt: newSalt,
           v: _rwAuthV,
-          kdf: "v4"
+          kdf: KDF_CURRENT
         };
         delete users[found.nick.toLowerCase()].hash;
         await saveUserRegistry(users);
