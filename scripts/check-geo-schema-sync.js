@@ -31,18 +31,26 @@ const path = require('path');
 const vm = require('vm');
 
 function parseConfig(argv) {
-  const cfg = {
-    canonical: process.env.CANONICAL_GEO || 'geo-schema.js',
-    workers: (process.env.WORKERS
-      ? process.env.WORKERS.split(',').map((s) => s.trim()).filter(Boolean)
-      : ['enrichment-worker_final.js', 'anyclip-proxy-worker.js']),
-  };
+  /* `workersExplicit` records whether the caller named the worker list (via env
+   * or --workers) vs. it being the built-in default. A worker that's MISSING
+   * from disk is a hard error only when EXPLICITLY requested — if it's just a
+   * default-list candidate, a missing file means "this worker doesn't exist in
+   * this repo (yet)", which can't have drifted, so it's a SKIP not a failure.
+   * The default list intentionally names workers that may eventually inline
+   * geo-schema; not all of them are committed to every repo. */
+  let workersExplicit = false;
+  let workers = ['anyclip-proxy-worker.js', 'anyonemap-worker.js', 'enrichment-worker_final.js'];
+  if (process.env.WORKERS) {
+    workers = process.env.WORKERS.split(',').map((s) => s.trim()).filter(Boolean);
+    workersExplicit = true;
+  }
+  const cfg = { canonical: process.env.CANONICAL_GEO || 'geo-schema.js', workers, workersExplicit };
   for (let i = 2; i < argv.length; i++) {
     if (argv[i] === '--canonical') cfg.canonical = argv[++i];
     else if (argv[i] === '--workers') {
       const list = [];
       while (i + 1 < argv.length && !argv[i + 1].startsWith('--')) list.push(argv[++i]);
-      if (list.length) cfg.workers = list;
+      if (list.length) { cfg.workers = list; cfg.workersExplicit = true; }
     }
   }
   return cfg;
@@ -123,7 +131,19 @@ function main() {
 
   let anyDrift = false, anyError = false, anyChecked = false;
   for (const wp of cfg.workers) {
-    if (!fs.existsSync(wp)) { console.error('[check-geo-schema-sync] ERROR: worker not found: ' + wp); anyError = true; continue; }
+    if (!fs.existsSync(wp)) {
+      if (cfg.workersExplicit) {
+        /* Caller named this worker specifically — its absence is a real error. */
+        console.error('[check-geo-schema-sync] ERROR: requested worker not found: ' + wp);
+        anyError = true;
+      } else {
+        /* Default-list candidate that isn't committed to this repo — can't have
+         * drifted, so skip rather than fail. (e.g. the enrichment worker before
+         * it's committed here.) */
+        console.log('[check-geo-schema-sync] SKIP  ' + wp + ' — not present in repo');
+      }
+      continue;
+    }
     let worker;
     try { worker = extractInlinedSchema(wp); }
     catch (e) { console.error('[check-geo-schema-sync] ERROR in ' + wp + ': ' + e.message); anyError = true; continue; }
