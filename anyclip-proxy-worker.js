@@ -3898,9 +3898,20 @@ function applyQuarantineFilter(relays) {
       quarantined_centroid_medium: 0,
       flagged_cluster_no_supplemental: 0,
     };
+    /* v55-fix: asNumber/asName are NOT nulled here. Quarantine distrusts a
+     * relay's *coordinates* (IP geolocation landed on a country centroid), but
+     * ASN/ISP is a network attribute derived from the IP's BGP registration, not
+     * from geolocation — it stays valid even when the location is untrustworthy.
+     * Nulling them was incidental over-stripping (swept in with the genuinely
+     * geo-derived fields), which left every quarantined/enriched relay with a
+     * blank ISP: the front-end's `relay.asName || 'Unknown'` rendered "Unknown"
+     * and the producer's distinct-isps count (isps.add at the index build)
+     * silently excluded them. Note: _qHasNoSupplemental() reads the ORIGINAL
+     * r.asNumber earlier in this same pass (before this Object.assign), so
+     * preserving these fields does not affect quarantine tier classification. */
     const QUARANTINED_FIELDS = {
       hexId: null, coordinates: null, countryCode: null, countryName: null,
-      cityName: null, regionName: null, asNumber: null, asName: null,
+      cityName: null, regionName: null,
     };
 
     for (const fp in relays) {
