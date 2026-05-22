@@ -14798,6 +14798,92 @@ async function runSlice(env, sliceSize) {
   }));
   return { quarantinedTotal: quarantined.length, processed: todo.length, consensusRelays: Object.keys(ipMap).length, ok, noIp, noGeo, skippedFresh, skippedBackoff };
 }
+
+/* ── auditMismatches: READ-ONLY declared-vs-IP country audit ────────────────
+ * Walks every relay in the registry and, for each one that has BOTH a declared
+ * country (countryCode) AND a consensus IP that MaxMind can resolve to a
+ * country, compares the two. A "mismatch" is a different ISO country code.
+ *
+ * Writes NOTHING — this is a diagnostic. It does not re-quarantine, does not
+ * touch GEO_ENRICH, does not change any relay. (Re-quarantine is a separate,
+ * producer-side change; this endpoint exists to measure the problem first.)
+ *
+ * Note on tiers: the producer NULLS countryCode on quarantined relays, so those
+ * have no declared country to compare and are counted under `noDeclared`. The
+ * meaningful mismatches surface on `trusted` / `flagged` relays — exactly the
+ * un-IP-checked population. Each mismatch row carries the relay's tier so the
+ * caller can see where the disagreements cluster.
+ *
+ * Returns counts plus a capped list of mismatch rows. fp is the relay's own
+ * public fingerprint (already public in the registry); no IPs are returned. */
+async function auditMismatches(env, opts) {
+  opts = opts || {};
+  const cap = Math.min(parseInt(opts.limit || 500, 10) || 500, 5000);
+  const reader = await getReader(env);
+  const regResp = await proxyFetch(env, `/api/relay-registry`);
+  if (!regResp.ok) return { error: `registry ${regResp.status}` };
+  const reg = await regResp.json();
+  const relays = reg.relays || {};
+  let ipMap;
+  try {
+    ipMap = await fetchIpMap(env);
+  } catch (e) {
+    return { error: `consensus fetch failed: ${e.message}` };
+  }
+
+  /* Light country-only lookup: we want the country even when lookupGeo would
+   * reject the precise coords (large accuracy radius), because country-level
+   * resolution is reliable far more often than city-level. Returns ISO cc or
+   * null. */
+  const ipCountry = (ip) => {
+    if (!ip || typeof ip !== "string") return null;
+    let rec;
+    try { rec = reader.get(ip.trim()); } catch (_) { return null; }
+    return rec && rec.country && rec.country.iso_code ? rec.country.iso_code : null;
+  };
+
+  const stats = {
+    total: 0, compared: 0, mismatches: 0,
+    noDeclared: 0,        // relay has no declared countryCode (e.g. quarantined)
+    noIp: 0,              // no consensus IP for this fp
+    ipUnresolved: 0,      // had IP but MaxMind gave no country
+    byTier: {}            // mismatch counts grouped by current geoQuality tier
+  };
+  const rows = [];
+
+  for (const fpRaw in relays) {
+    if (!/^[A-Fa-f0-9]{6,}$/.test(fpRaw)) continue;
+    stats.total++;
+    const r = relays[fpRaw] || {};
+    const tier = String(r.geoQuality || "unknown");
+    const declared = r.countryCode || null;
+    if (!declared) { stats.noDeclared++; continue; }
+    const fp = fpRaw.toUpperCase();
+    const ip = ipMap[fp];
+    if (!ip) { stats.noIp++; continue; }
+    const ipCc = ipCountry(ip);
+    if (!ipCc) { stats.ipUnresolved++; continue; }
+    stats.compared++;
+    if (ipCc.toUpperCase() !== String(declared).toUpperCase()) {
+      stats.mismatches++;
+      stats.byTier[tier] = (stats.byTier[tier] | 0) + 1;
+      if (rows.length < cap) {
+        rows.push({ fp, declared: String(declared).toUpperCase(), ipCountry: ipCc.toUpperCase(), tier });
+      }
+    }
+  }
+
+  return {
+    mode: "audit-readonly",
+    builtAt: Date.now(),
+    stats,
+    mismatchCount: stats.mismatches,
+    returned: rows.length,
+    capped: stats.mismatches > rows.length,
+    mismatches: rows
+  };
+}
+
 var enrichment_worker_default = {
   async scheduled(event, env, ctx) {
     ctx.waitUntil(runSlice(env, 25).catch((e) => console.warn("[enrich.scheduled]", e)));
@@ -14880,6 +14966,21 @@ var enrichment_worker_default = {
       }
       const n = Math.min(parseInt(url.searchParams.get("n") || "50", 10), 200);
       const result = await runSlice(env, n);
+      return Response.json(result);
+    }
+    if (url.pathname === "/audit") {
+      /* READ-ONLY declared-vs-IP country audit. Same token gate as /run (it
+       * reads the registry + consensus + MaxMind, so gate it to avoid free
+       * recon / outbound amplification), but it writes nothing. */
+      const auth = isAuthorized(req, env);
+      if (auth === null) {
+        return new Response("/audit disabled: set RUN_TOKEN secret to enable.", { status: 503 });
+      }
+      if (!auth) {
+        return new Response("unauthorized: /audit requires a valid token (?token= or Authorization: Bearer)", { status: 401 });
+      }
+      const limit = url.searchParams.get("limit") || "500";
+      const result = await auditMismatches(env, { limit });
       return Response.json(result);
     }
     return new Response("enrichment worker: GET /run?n=50 (auth required) or /status", { status: 200 });
