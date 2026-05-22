@@ -5128,40 +5128,31 @@ var worker_source_default = {
         }
         const _bwMibs = d0.totals?.total_bw_mibs_total || 0;
         const _walletsTotal = d0.totals?.wallets_total;
-        /* v52: opportunistic SNAPSHOT_KV publish. The cron-driven storeSnapshot
-         * has multiple early-return guards (cached daily key, missing fp-index
-         * cache, partial flag) that can all skip the publish — observed live as
-         * count_source: "ip-sum-fallback" running without any SNAPSHOT_KV write.
-         * Publishing from the request handler bypasses those guards: every
-         * /api/exit-relays response (cached or fresh) writes the latest data
-         * to the shared KV namespace that anyonemap-worker reads. ctx.waitUntil
-         * runs the put without blocking the response. 7-day TTL matches v50's
-         * intended freshness window. */
-        if (env.SNAPSHOT_KV && ctx && typeof ctx.waitUntil === "function") {
-          const _published = {
-            cachedAt: Math.floor(Date.now() / 1000),
-            exit_relays: exitCount,
-            guard_relays: guardCount,
-            middle_relays: middleCount,
-            bw_gbps: Math.round((_bwMibs * 8.388608 / 1000) * 10) / 10,
-            wallets: _walletsTotal,
-            source: countSource
-          };
-          /* v53: producer-strict KV schema validation. This is the v52 path that */
-          /* keeps the consumer fed in production — refusing invalid writes here */
-          /* prevents a broken /bitcoin page even if a future code change to the */
-          /* payload shape introduces a typo or wrong-typed value. */
-          const _publishedValidation = _kvSchema.validate(_published, _kvSchema.EXIT_RELAYS_LATEST, { mode: "strict", context: "write" });
-          if (_publishedValidation.warnings.length > 0 || _publishedValidation.fields_unknown.length > 0) {
-            console.warn("[v53 kv-schema] [exit-relays/request] write warnings:", JSON.stringify({ warnings: _publishedValidation.warnings, unknown: _publishedValidation.fields_unknown }));
-          }
-          if (!_publishedValidation.ok) {
-            console.error("[v53 kv-schema] [exit-relays/request] REFUSED invalid write:", JSON.stringify({ errors: _publishedValidation.errors, fields_seen: _publishedValidation.fields_seen }));
-          } else {
-            ctx.waitUntil(env.SNAPSHOT_KV.put("exit-relays:latest", JSON.stringify(_published), { expirationTtl: 7 * 24 * 3600 }).catch((err) => {
-              console.error("[exit-relays] SNAPSHOT_KV publish error:", err.message);
-            }));
-          }
+        /* v57 (M2): single-author exit-relays:latest.
+         *
+         * Previously this handler built its own THIN 7-field exit-relays:latest
+         * payload (cachedAt, exit_relays, guard_relays, middle_relays, bw_gbps,
+         * wallets, source) and wrote it directly to SNAPSHOT_KV — competing with
+         * storeSnapshot's FULL 13-field write (which also carries total_relays,
+         * hardware_relays, zones, countries, isps, fp_built_at). The KV value's
+         * schema therefore depended on which endpoint wrote last: a /api/exit-relays
+         * hit left a thin row, so the consumer (/bitcoin) read `undefined` for the
+         * six missing fields until the next storeSnapshot (cron or /api/growth) ran.
+         *
+         * Fix: delegate to storeSnapshot — the SINGLE author of exit-relays:latest.
+         * One schema, drift gone at the root. This also inherits the v56 (M1)
+         * change-detection (skip the write when content is unchanged) for free.
+         *
+         * Conservative by design: if the fp-index cache is cold, storeSnapshot
+         * skips the write rather than emitting a partial payload; the 7-day TTL on
+         * the last good row keeps the consumer fed in the meantime. The original
+         * v52 motivation (keep KV populated even on the ip-sum-fallback path) is
+         * preserved because storeSnapshot publishes on both its cached and freshly
+         * built paths (v51). */
+        if (ctx && typeof ctx.waitUntil === "function") {
+          ctx.waitUntil(storeSnapshot(env).catch((err) => {
+            console.error("[exit-relays] storeSnapshot publish error:", err && err.message);
+          }));
         }
         return new Response(JSON.stringify({
           exit_relays: exitCount,
