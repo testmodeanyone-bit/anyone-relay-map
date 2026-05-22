@@ -933,6 +933,15 @@ const html = "<!--\n  ==========================================================
       /* KV value has no TTL \u2014 we want the last-known-good snapshot to persist */
       /* indefinitely if the upstream fetch later fails. The next successful */
       /* cron run will overwrite it. */
+      /* M4 NOTE: this is INTENTIONALLY different from the sibling */
+      /* exit-relays:latest key (anyclip-proxy/storeSnapshot, 7-day TTL) and the */
+      /* two should NOT be harmonized. TTL tracks writer reliability: bitnodes.io */
+      /* is heavily rate-limited (~10 req/day/IP) so cron failures are expected — */
+      /* a stale-but-real snapshot beats none, and the /bitcoin .stale flag warns */
+      /* when it's old; self-expiry here would drop users to the static fallback */
+      /* during exactly the outages the no-TTL is meant to ride out. exit-relays, */
+      /* by contrast, has a reliable producer (cron + every request post-M2), so a */
+      /* 7-day gap there genuinely means broken and SHOULD self-expire. Leave as-is. */
       await _snapKv.put('bitnodes-snapshot:latest', JSON.stringify(snapshot));
       console.log('bitnodes-snapshot cron: stored snapshot with ' + reduced.length + ' nodes across ' + Object.keys(buckets).length + ' countries (total network: ' + snapshot.total + ')');
     } catch (e) {
