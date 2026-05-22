@@ -58,7 +58,7 @@
  * on next page navigation, which deletes the old cache (the activate
  * handler filters keys !== CACHE) and re-precaches STATIC against the
  * current worker. Bump per release. */
-const WORKER_VERSION = 'v422';
+const WORKER_VERSION = 'v423';
 
 /* v410: shared cross-worker KV schema. Inlined at build time from kv-schema.js
  * (single source of truth). Exposes _kvSchema.validate(obj, schema, opts) and
@@ -138,9 +138,18 @@ const EXIT_RELAYS_LATEST = {
     hardware_relays: { type: 'number', required: false, default: null, sanity: (v) => v >= 0 && v < 1000000 },
     bw_gbps:         { type: 'number', required: true,  default: null, sanity: (v) => v >= 0 && v < 100000 },
     wallets:         { type: 'number', required: false, default: null, sanity: (v) => v >= 0 && v < 10000000 },
-    zones:           { type: 'object', required: false, default: null },
-    countries:       { type: 'object', required: false, default: null },
-    isps:            { type: 'object', required: false, default: null },
+    /* v54-fix: zones/countries/isps are COUNTS of distinct values (Set.size in
+     * buildAndStoreIndex), not maps. They were originally declared 'object'
+     * (aspirational per-key breakdowns the producer never actually computed),
+     * which made every strict write REFUSE on "expected object, got number" and
+     * silently stopped exit-relays:latest from refreshing on the cached path.
+     * Declared 'number' to match what the producer has always written. If a
+     * future change wants per-key maps, bump to 'object' AND update the producer
+     * to emit them in the same commit. Bounds are generous: distinct geo zones
+     * (H3 cells), ISO country codes (~250 max), and AS names. */
+    zones:           { type: 'number', required: false, default: null, sanity: (v) => v >= 0 && v < 1000000 },
+    countries:       { type: 'number', required: false, default: null, sanity: (v) => v >= 0 && v < 1000 },
+    isps:            { type: 'number', required: false, default: null, sanity: (v) => v >= 0 && v < 1000000 },
     source:          { type: 'string', required: false, default: 'unknown' },
     fp_built_at:     { type: 'number', required: false, default: null }
   }
