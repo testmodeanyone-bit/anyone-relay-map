@@ -10740,14 +10740,14 @@ function initMapLibre(zones){
       // cluster bubbles, sized + tinted by count (TorMap-style aggregation)
       map.addLayer({ id:'clusters', type:'circle', source:'relays', filter:['has','point_count'],
         paint:{ 'circle-color':['interpolate',['linear'],['get','point_count'],
-            1,'rgba(45,212,191,0.55)', 50,'rgba(94,234,212,0.55)', 150,'rgba(251,191,36,0.6)', 400,'rgba(251,146,60,0.65)', 1000,'rgba(220,38,38,0.7)'],
+            1,'rgba(45,212,191,0.6)', 80,'rgba(94,234,212,0.62)', 250,'rgba(153,246,228,0.5)', 600,'rgba(167,139,250,0.62)', 1500,'rgba(167,139,250,0.78)'],
           'circle-radius':['interpolate',['linear'],['get','point_count'], 1,9, 50,15, 150,20, 500,28, 1000,36],
-          'circle-stroke-width':1.4,'circle-stroke-color':'#cdeee7' }});
+          'circle-stroke-width':1.3,'circle-stroke-color':'rgba(153,246,228,0.85)' }});
       /* v372: cluster count labels — glyphs now self-hosted at /basemap/glyphs/
        * (Open Sans Regular, injected into style.json by the worker). */
       map.addLayer({ id:'cluster-count', type:'symbol', source:'relays', filter:['has','point_count'],
         layout:{ 'text-field':['get','point_count_abbreviated'], 'text-font':['Open Sans Regular'], 'text-size':12 },
-        paint:{ 'text-color':'#e4e4e9', 'text-halo-color':'rgba(2,11,18,0.7)', 'text-halo-width':1 }});
+        paint:{ 'text-color':'#eafdf9', 'text-halo-color':'rgba(2,11,18,0.85)', 'text-halo-width':1.2 }});
       map.addLayer({ id:'relay-points', type:'circle', source:'relays', filter:['!',['has','point_count']],
         paint:{ 'circle-color':['case',['==',['get','hw'],1],'#fbbf24',['match',['get','tier'],'exit','#DC2626','guard','#a78bfa','middle','#2dd4bf','#888']],
           'circle-radius':['interpolate',['linear'],['zoom'],2,2,8,4,14,6],
