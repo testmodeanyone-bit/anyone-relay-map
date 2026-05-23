@@ -8151,6 +8151,7 @@ function parseFingerprintMap(raw){
         geo: [relay.coordinates[0], relay.coordinates[1]],
         relayCount: 0,
         fingerprints: [],
+        relayCoords: [],   /* v362: per-relay [lat,lng] parallel to fingerprints — enables zoom-aware decluster subdivision (render-only). Harmless if unused. */
         countryCode: relay.countryCode || '',
         countryName: relay.countryName || '',
         regionName:  relay.regionName  || '',
@@ -8163,6 +8164,7 @@ function parseFingerprintMap(raw){
     const zone = hexMap.get(hex);
     zone.relayCount++;
     zone.fingerprints.push(fingerprint);
+    if(relay.coordinates && relay.coordinates.length>=2) zone.relayCoords.push([relay.coordinates[0], relay.coordinates[1]]);  /* v362: parallel to fingerprints */
     const isp = relay.asName || 'Unknown';
     zone.isps[isp] = (zone.isps[isp]||0)+1;
   });
@@ -10689,6 +10691,9 @@ function drawNodesCanvas(data){
   if(_knownZoneIndices !== null) {
     const _newZones = [];
     for(let i = 0; i < data.length; i++) {
+      /* v362: skip synthetic decluster sub-zones (index contains '#') — their */
+      /* ids change every zoom level, so they must not count as "new zones". */
+      if(typeof data[i].index === 'string' && data[i].index.indexOf('#') !== -1) continue;
       if(!_knownZoneIndices.has(data[i].index)) _newZones.push(data[i]);
     }
     if(_newZones.length > 0) {
@@ -10716,7 +10721,9 @@ function drawNodesCanvas(data){
       _canvasStartAnimator();
     }
   }
-  _knownZoneIndices = new Set(data.map(d => d.index));
+  /* v362: record only BASE zone ids (exclude synthetic '#' sub-zones) so the */
+  /* known-set is stable regardless of zoom-driven subdivision. */
+  _knownZoneIndices = new Set(data.map(d => d.index).filter(ix => typeof ix !== 'string' || ix.indexOf('#') === -1));
 
   /* v335 Phase 3: prune expired bursts (older than 1.4s, the longest layer). */
   if(_canvasBursts.size > 0) {
@@ -10964,11 +10971,68 @@ function drawNodesCanvas(data){
   }
 }
 
+/* ============================================================================
+ * v362: Zoom-aware RENDER-ONLY zone subdivision (Option A).
+ * Splits dense hex zones into finer sub-zones FOR DISPLAY when zoomed in, so
+ * crowded areas resolve into individual relays (Osiris-style) instead of fat
+ * blobs. Data identity stays hexId everywhere; this only transforms the array
+ * the renderers consume. Ships OFF — enable with ?decluster=1. When off or
+ * zoomed out, returns input UNCHANGED (zero behaviour change).
+ * Reuses tagZones() to regenerate tier fields on sub-zones (no re-implementation).
+ * ========================================================================== */
+const _DECLUSTER_ENABLED = (function(){ try { return new URLSearchParams(location.search).get('decluster') === '1'; } catch(_){ return false; } })();
+const _DECLUSTER_START_K = 2.2;
+function _subdivideZonesForZoom(zones, k){
+  if(!_DECLUSTER_ENABLED || !(k > _DECLUSTER_START_K) || !Array.isArray(zones)) return zones;
+  /* v362: if no zone carries per-relay coords (e.g. data predates the parse */
+  /* change, or coords absent), there is nothing to subdivide — return the */
+  /* SAME array reference so behaviour + hot-path cost are identical to today. */
+  let _any = false;
+  for(let i=0;i<zones.length;i++){ if(zones[i] && Array.isArray(zones[i].relayCoords) && zones[i].relayCoords.length){ _any=true; break; } }
+  if(!_any) return zones;
+  const mergePx = Math.max(4, 46 / Math.pow(k, 0.95));
+  const out = [];
+  let didSplit = false;
+  for(const z of zones){
+    if(!z || !Array.isArray(z.relayCoords) || z.relayCoords.length !== z.fingerprints.length || z.relayCount <= 1){
+      out.push(z); continue;
+    }
+    const buckets = new Map();
+    const cell = Math.max(1, mergePx);
+    for(let i=0;i<z.relayCoords.length;i++){
+      const c = z.relayCoords[i]; if(!c) continue;
+      const sp = proj([c[1], c[0]]); if(!sp) continue;
+      const key = Math.floor(sp[0]/cell)+'|'+Math.floor(sp[1]/cell);
+      let b = buckets.get(key);
+      if(!b){ b={fps:[],coords:[],sumLat:0,sumLng:0}; buckets.set(key,b); }
+      b.fps.push(z.fingerprints[i]); b.coords.push(c); b.sumLat+=c[0]; b.sumLng+=c[1];
+    }
+    if(buckets.size <= 1){ out.push(z); continue; }
+    didSplit = true;
+    let n=0;
+    for(const b of buckets.values()){
+      out.push({
+        index: z.index+'#'+(n++), _parentIndex: z.index,
+        geo: [b.sumLat/b.coords.length, b.sumLng/b.coords.length],
+        relayCount: b.fps.length, fingerprints: b.fps, relayCoords: b.coords,
+        countryCode: z.countryCode, countryName: z.countryName,
+        regionName: z.regionName, cityName: z.cityName,
+        isps: {}, topIsps: [], bwMibs: z.bwMibs ? z.bwMibs*(b.fps.length/z.relayCount) : 0
+      });
+    }
+  }
+  if(didSplit && typeof tagZones === 'function'){ try { tagZones(out); } catch(_){} }
+  return out;
+}
+
 function drawNodes(data){
   /* v339 Phase 7: same timing hook as drawNodesCanvas. For canvas-mode */
   /* users this function short-circuits early so the work is recorded in */
   /* drawNodesCanvas; for SVG-mode users it records the full SVG build. */
   var _perfT0 = (typeof window !== 'undefined' && window.__acPerf && typeof performance !== 'undefined') ? performance.now() : 0;
+  /* v362: zoom-aware subdivision (no-op unless ?decluster=1 AND zoomed in). */
+  /* Applied before the redraw-skip hash so re-splitting on zoom triggers a redraw. */
+  data = _subdivideZonesForZoom(data, (typeof _lastK !== 'undefined' && _lastK > 0) ? _lastK : 1);
   const hash = data.length + '|' + data.slice(0,5).map(d=>d.relayCount+''+d.dominantType).join(',');
   if(hash === _lastDrawHash) return;
   _lastDrawHash = hash;
@@ -10991,9 +11055,10 @@ function drawNodes(data){
 
   const newZoneIndices = new Set();
   if(_knownZoneIndices !== null){
-    data.forEach(d => { if(!_knownZoneIndices.has(d.index)) newZoneIndices.add(d.index); });
+    /* v362: ignore synthetic decluster sub-zones ('#') — their ids churn per zoom. */
+    data.forEach(d => { if(typeof d.index==='string' && d.index.indexOf('#')!==-1) return; if(!_knownZoneIndices.has(d.index)) newZoneIndices.add(d.index); });
   }
-  _knownZoneIndices = new Set(data.map(d => d.index));
+  _knownZoneIndices = new Set(data.map(d => d.index).filter(ix => typeof ix !== 'string' || ix.indexOf('#') === -1));
 
   if(newZoneIndices.size > 0){
     const newZones = data.filter(d => newZoneIndices.has(d.index));
