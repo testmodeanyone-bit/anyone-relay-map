@@ -58,7 +58,7 @@
  * on next page navigation, which deletes the old cache (the activate
  * handler filters keys !== CACHE) and re-precaches STATIC against the
  * current worker. Bump per release. */
-const WORKER_VERSION = 'v429';
+const WORKER_VERSION = 'v430';
 
 /* v410: shared cross-worker KV schema. Inlined at build time from kv-schema.js
  * (single source of truth). Exposes _kvSchema.validate(obj, schema, opts) and
@@ -350,7 +350,7 @@ async function _bmGetTile(env, z, x, y) {
 }
 
 // main basemap router — returns a Response, or null if not a /basemap/ path
-const _BM_CACHE_VER = 'v4';  // bump to invalidate all edge-cached basemap responses
+const _BM_CACHE_VER = 'v5';  // bump to invalidate all edge-cached basemap responses
 async function _bmHandle(request, env, ctx) {
   const url = new URL(request.url);
   const path = url.pathname;
