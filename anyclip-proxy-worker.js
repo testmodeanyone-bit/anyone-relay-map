@@ -3833,6 +3833,18 @@ async function verifyMsgMac(msg, env) {
 // atomically with the code that consumes it. See quarantine-patch-design.md.)
 // ============================================================================
 
+// Audit-confirmed geo mislabels: relays whose DECLARED location is wrong and
+// whose IP location is independently verified correct (surfaced by the
+// enrichment worker's /audit as classification "likely_mislabel"). Listed here
+// by fingerprint so applyQuarantineFilter force-quarantines them — nulling the
+// bad declared coords so enrichFromCache relocates them via their (correct) IP.
+// This is a curated allowlist, not an automatic heuristic: each entry was
+// reviewed (IP country + MaxMind city + relay nickname all agreed).
+//   03A9FFF0… "CWPRELAYBRA01": declared LT, actually Campinas/BR (acc 20km, nick "BRA").
+const AUDIT_FORCE_QUARANTINE = new Set([
+  '03A9FFF09DBF84B37412A556849FE8A978E6CF10'
+]);
+
 const CENTROID_BLOCKLIST_HIGH = [
   { lat: 37.7684, lng: -97.5634, label: 'US centroid (Lebanon, KS)' },  // verified_count 311
   { lat: 46.9803, lng:   9.5512, label: 'Liechtenstein centroid' },     // verified_count 252
@@ -3922,6 +3934,16 @@ function applyQuarantineFilter(relays) {
         continue;
       }
       let geoQuality = 'trusted';
+
+      // Audit override (curated allowlist): force-quarantine confirmed geo
+      // mislabels BEFORE the centroid logic, so their wrong declared coords are
+      // nulled and enrichFromCache relocates them via verified IP. Additive —
+      // does not affect any relay not explicitly listed.
+      if (AUDIT_FORCE_QUARANTINE.has(String(fp).toUpperCase())) {
+        filtered[fp] = Object.assign({}, r, QUARANTINED_FIELDS, { geoQuality: 'quarantined_audit_mismatch' });
+        stats.quarantined_audit_mismatch = (stats.quarantined_audit_mismatch | 0) + 1;
+        continue;
+      }
 
       const highHit = _qHitsBlocklist(r.coordinates, CENTROID_BLOCKLIST_HIGH);
       if (highHit) {
