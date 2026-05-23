@@ -34,7 +34,7 @@
  * on next page navigation, which deletes the old cache (the activate
  * handler filters keys !== CACHE) and re-precaches STATIC against the
  * current worker. Bump per release. */
-const WORKER_VERSION = 'v426';
+const WORKER_VERSION = 'v424';
 
 /* v410: shared cross-worker KV schema. Inlined at build time from kv-schema.js
  * (single source of truth). Exposes _kvSchema.validate(obj, schema, opts) and
@@ -131,12 +131,17 @@ async function _bmGetTile(env, z, x, y) {
 }
 
 // main basemap router — returns a Response, or null if not a /basemap/ path
+const _BM_CACHE_VER = 'v2';  // bump to invalidate all edge-cached basemap responses
 async function _bmHandle(request, env, ctx) {
   const url = new URL(request.url);
   const path = url.pathname;
   if (!path.startsWith('/basemap/')) return null;
   const cache = caches.default;
-  const hit = await cache.match(request);
+  /* Versioned cache key: a synthetic same-origin URL carrying _BM_CACHE_VER, so
+   * bumping the version sidesteps stale entries (e.g. the gzip-encoded tiles
+   * cached before the raw-MVT fix) without needing a manual dashboard purge. */
+  const cacheKey = new Request(url.origin + '/__bmcache/' + _BM_CACHE_VER + path, request);
+  const hit = await cache.match(cacheKey);
   if (hit) return hit;
   let resp;
   try {
@@ -162,7 +167,7 @@ async function _bmHandle(request, env, ctx) {
       else resp = new Response(obj.body, { headers: { 'Content-Type': 'text/javascript; charset=utf-8', 'Cache-Control': 'public, max-age=86400, immutable' } });
     } else resp = new Response('not found', { status: 404 });
   } catch (e) { resp = new Response('basemap error: ' + e.message, { status: 500 }); }
-  if (resp.ok && request.method === 'GET') ctx.waitUntil(cache.put(request, resp.clone()));
+  if (resp.ok && request.method === 'GET') ctx.waitUntil(cache.put(cacheKey, resp.clone()));
   return resp;
 }
 /* ===== END BASEMAP SERVING ===== */
