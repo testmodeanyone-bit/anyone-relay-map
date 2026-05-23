@@ -8060,6 +8060,11 @@ let tkAnim    = null;
 ══════════════════════════════════════════ */
 const TYPE_COL = { exit:'#ff6b35', guard:'#a78bfa', middle:'#2dd4bf', hardware:'#fbbf24', unknown:'#00f5ff' };
 
+/* v364: decluster flag defined early (before ns()) so the marker-sizing branch
+ * can reference it safely — const TDZ means a later definition would throw if
+ * ns() ever ran first. Single source of truth; the draw-path code reads this. */
+const _DECLUSTER_ENABLED = (function(){ try { return new URLSearchParams(location.search).get('decluster') === '1'; } catch(_){ return false; } })();
+
 function ns(n, type, zone){
   const effectiveType = (type === 'hardware' && !hwOverlayOn) ? 'unknown' : type;
   let col = TYPE_COL[effectiveType] || TYPE_COL.unknown;
@@ -8069,6 +8074,18 @@ function ns(n, type, zone){
   const r = v => Math.max(1.2, v * inv);
   const rings = rr => rr.map(v => Math.max(2, v * inv));
   const isHw = type==='hardware' && hwOverlayOn;
+  /* v364: Osiris-style sizing in decluster mode (?decluster=1 only). Smaller,
+   * more uniform dots with rings suppressed — matches the clean look of
+   * osirisai.live. Default map (flag off) keeps the original sizing exactly. */
+  if(typeof _DECLUSTER_ENABLED !== 'undefined' && _DECLUSTER_ENABLED){
+    /* compressed scale: big zones only modestly larger than small ones, so
+     * once subdivided the dots read as uniform points rather than blobs. */
+    if(n>=500)return{col,r:r(5),  rings:[],glow:'gs', hw: isHw};
+    if(n>=100)return{col,r:r(4.2),rings:[],glow:'gs', hw: isHw};
+    if(n>= 20)return{col,r:r(3.6),rings:[],glow:'gs', hw: isHw};
+    if(n>=  5)return{col,r:r(3),  rings:[],glow:'gs', hw: isHw};
+    return          {col,r:r(2.6),rings:[],glow:'gs', hw: isHw};
+  }
   if(n>=500)return{col,r:r(9),  rings:rings([14,20]),glow:'gl', hw: isHw};
   if(n>=100)return{col,r:r(7),  rings:rings([11,16]),glow:'gm', hw: isHw};
   if(n>= 20)return{col,r:r(5),  rings:rings([8]),    glow:'gs', hw: isHw};
@@ -10918,7 +10935,9 @@ function drawNodesCanvas(data){
     /* Matches the SVG rect rotate(45) + center circle. */
     if(_hwOn && d.hwCount > 0) {
       const hwRatio = d.hwCount / d.relayCount;
-      const hw_r = s.r * (hwRatio >= 0.5 ? 1.5 : 1.2);
+      /* v364: keep diamond shape but shrink the multiplier in decluster mode. */
+      const _hwMult = (typeof _DECLUSTER_ENABLED !== 'undefined' && _DECLUSTER_ENABLED) ? (hwRatio >= 0.5 ? 1.15 : 1.0) : (hwRatio >= 0.5 ? 1.5 : 1.2);
+      const hw_r = s.r * _hwMult;
       /* Optional dashed circle for high-HW zones (5+). */
       if(d.hwCount >= 5) {
         ctx.beginPath();
@@ -10971,68 +10990,19 @@ function drawNodesCanvas(data){
   }
 }
 
-/* ============================================================================
- * v362: Zoom-aware RENDER-ONLY zone subdivision (Option A).
- * Splits dense hex zones into finer sub-zones FOR DISPLAY when zoomed in, so
- * crowded areas resolve into individual relays (Osiris-style) instead of fat
- * blobs. Data identity stays hexId everywhere; this only transforms the array
- * the renderers consume. Ships OFF — enable with ?decluster=1. When off or
- * zoomed out, returns input UNCHANGED (zero behaviour change).
- * Reuses tagZones() to regenerate tier fields on sub-zones (no re-implementation).
- * ========================================================================== */
-const _DECLUSTER_ENABLED = (function(){ try { return new URLSearchParams(location.search).get('decluster') === '1'; } catch(_){ return false; } })();
-const _DECLUSTER_START_K = 2.2;
-function _subdivideZonesForZoom(zones, k){
-  if(!_DECLUSTER_ENABLED || !(k > _DECLUSTER_START_K) || !Array.isArray(zones)) return zones;
-  /* v362: if no zone carries per-relay coords (e.g. data predates the parse */
-  /* change, or coords absent), there is nothing to subdivide — return the */
-  /* SAME array reference so behaviour + hot-path cost are identical to today. */
-  let _any = false;
-  for(let i=0;i<zones.length;i++){ if(zones[i] && Array.isArray(zones[i].relayCoords) && zones[i].relayCoords.length){ _any=true; break; } }
-  if(!_any) return zones;
-  const mergePx = Math.max(4, 46 / Math.pow(k, 0.95));
-  const out = [];
-  let didSplit = false;
-  for(const z of zones){
-    if(!z || !Array.isArray(z.relayCoords) || z.relayCoords.length !== z.fingerprints.length || z.relayCount <= 1){
-      out.push(z); continue;
-    }
-    const buckets = new Map();
-    const cell = Math.max(1, mergePx);
-    for(let i=0;i<z.relayCoords.length;i++){
-      const c = z.relayCoords[i]; if(!c) continue;
-      const sp = proj([c[1], c[0]]); if(!sp) continue;
-      const key = Math.floor(sp[0]/cell)+'|'+Math.floor(sp[1]/cell);
-      let b = buckets.get(key);
-      if(!b){ b={fps:[],coords:[],sumLat:0,sumLng:0}; buckets.set(key,b); }
-      b.fps.push(z.fingerprints[i]); b.coords.push(c); b.sumLat+=c[0]; b.sumLng+=c[1];
-    }
-    if(buckets.size <= 1){ out.push(z); continue; }
-    didSplit = true;
-    let n=0;
-    for(const b of buckets.values()){
-      out.push({
-        index: z.index+'#'+(n++), _parentIndex: z.index,
-        geo: [b.sumLat/b.coords.length, b.sumLng/b.coords.length],
-        relayCount: b.fps.length, fingerprints: b.fps, relayCoords: b.coords,
-        countryCode: z.countryCode, countryName: z.countryName,
-        regionName: z.regionName, cityName: z.cityName,
-        isps: {}, topIsps: [], bwMibs: z.bwMibs ? z.bwMibs*(b.fps.length/z.relayCount) : 0
-      });
-    }
-  }
-  if(didSplit && typeof tagZones === 'function'){ try { tagZones(out); } catch(_){} }
-  return out;
-}
+/* v366: _subdivideZonesForZoom removed — coordinate subdivision proven inert on co-located relay data (see drawNodes note). */
 
 function drawNodes(data){
   /* v339 Phase 7: same timing hook as drawNodesCanvas. For canvas-mode */
   /* users this function short-circuits early so the work is recorded in */
   /* drawNodesCanvas; for SVG-mode users it records the full SVG build. */
   var _perfT0 = (typeof window !== 'undefined' && window.__acPerf && typeof performance !== 'undefined') ? performance.now() : 0;
-  /* v362: zoom-aware subdivision (no-op unless ?decluster=1 AND zoomed in). */
-  /* Applied before the redraw-skip hash so re-splitting on zoom triggers a redraw. */
-  data = _subdivideZonesForZoom(data, (typeof _lastK !== 'undefined' && _lastK > 0) ? _lastK : 1);
+  /* v366: zoom-aware coordinate subdivision removed. Proven inert on real data —
+   * relays are co-located (e.g. Amsterdam: 525 relays on 1 coordinate), so
+   * screen-space splitting produced ~0 sub-zones. TorMap (same data shape, larger
+   * scale) confirms sized aggregation is the right pattern, not subdivision/fan.
+   * The decluster flag now only drives the Osiris-style smaller-uniform-dot
+   * sizing in ns() + shrunk HW diamonds. */
   const hash = data.length + '|' + data.slice(0,5).map(d=>d.relayCount+''+d.dominantType).join(',');
   if(hash === _lastDrawHash) return;
   _lastDrawHash = hash;
@@ -11130,7 +11100,9 @@ function drawNodes(data){
 
     if(hwOverlayOn && d.hwCount > 0){
       const hwRatio = d.hwCount / relayCount;
-      const hw_r = s.r * (hwRatio >= 0.5 ? 1.5 : 1.2); // bigger diamond if zone is mostly HW
+      /* v364: keep diamond shape, shrink multiplier in decluster mode. */
+      const _hwMult = (typeof _DECLUSTER_ENABLED !== 'undefined' && _DECLUSTER_ENABLED) ? (hwRatio >= 0.5 ? 1.15 : 1.0) : (hwRatio >= 0.5 ? 1.5 : 1.2);
+      const hw_r = s.r * _hwMult; // bigger diamond if zone is mostly HW (full size only when not declustering)
       if(d.hwCount >= 5){
         grp.append('circle').attr('r', hw_r + 2.8)
           .attr('fill','none')
