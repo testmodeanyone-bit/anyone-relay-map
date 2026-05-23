@@ -10739,9 +10739,10 @@ function initMapLibre(zones){
       map.addSource('relays', { type:'geojson', data:geo, cluster:true, clusterRadius:44, clusterMaxZoom:11 });
       // cluster bubbles, sized + tinted by count (TorMap-style aggregation)
       map.addLayer({ id:'clusters', type:'circle', source:'relays', filter:['has','point_count'],
-        paint:{ 'circle-color':['step',['get','point_count'],'rgba(45,212,191,0.25)',25,'rgba(167,139,250,0.28)',150,'rgba(251,191,36,0.30)',400,'rgba(220,38,38,0.32)'],
-          'circle-radius':['step',['get','point_count'],10,25,16,150,24,400,34],
-          'circle-stroke-width':1.2,'circle-stroke-color':'rgba(94,234,212,0.6)' }});
+        paint:{ 'circle-color':['interpolate',['linear'],['get','point_count'],
+            1,'rgba(45,212,191,0.55)', 50,'rgba(94,234,212,0.55)', 150,'rgba(251,191,36,0.6)', 400,'rgba(251,146,60,0.65)', 1000,'rgba(220,38,38,0.7)'],
+          'circle-radius':['interpolate',['linear'],['get','point_count'], 1,9, 50,15, 150,20, 500,28, 1000,36],
+          'circle-stroke-width':1.4,'circle-stroke-color':'#cdeee7' }});
       /* v372: cluster count labels — glyphs now self-hosted at /basemap/glyphs/
        * (Open Sans Regular, injected into style.json by the worker). */
       map.addLayer({ id:'cluster-count', type:'symbol', source:'relays', filter:['has','point_count'],
@@ -10761,6 +10762,13 @@ function initMapLibre(zones){
       ['clusters','relay-points'].forEach(l=>{ map.on('mouseenter',l,()=>map.getCanvas().style.cursor='pointer'); map.on('mouseleave',l,()=>map.getCanvas().style.cursor=''); });
       try { setStatus && setStatus(''); } catch(_){}
       console.log('[maplibre] rendered', geo.features.length, 'relays');
+      /* v373: fix partial-render-on-load. The map can paint before its container
+       * has settled its final size (sidebar/layout reflow), leaving half the canvas
+       * blank until an interaction. Nudge resize on the next frames + once more
+       * shortly after so the full world paints without user interaction. */
+      requestAnimationFrame(() => { try { map.resize(); } catch(_){} });
+      setTimeout(() => { try { map.resize(); } catch(_){} }, 350);
+      setTimeout(() => { try { map.resize(); } catch(_){} }, 1200);
     });
     map.on('error', e => console.error('[maplibre]', (e && e.error && e.error.message) || e));
   })().catch(e => console.error('initMapLibre failed:', e && e.message));
