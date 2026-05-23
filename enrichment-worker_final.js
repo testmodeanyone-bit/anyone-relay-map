@@ -14873,10 +14873,43 @@ async function auditMismatches(env, opts) {
     }
   }
 
+  /* Second pass: classify each mismatch as a LIKELY GENUINE MISLABEL vs a
+   * LIKELY HOSTING ARTIFACT. The signal that distinguished CWPRELAYBRA01 (a
+   * real Brazil relay declared as Lithuania) from the 38 benign cases:
+   *   - hosting artifact: IP resolves to a major hosting-hub country (operator
+   *     in country X renting a server in a DE/US/NL/GB/FR datacenter), OR the
+   *     declared->ip country pair appears multiple times (a cluster = a common
+   *     hosting route, not an individual error).
+   *   - genuine mislabel: IP in a NON-hub country AND the pair is a singleton.
+   * This is triage guidance for human review, NOT an action trigger — the
+   * override (if built) acts on an explicit allowlist, never on this heuristic
+   * automatically. */
+  const HOSTING_HUBS = new Set(["US", "DE", "NL", "GB", "FR"]);
+  const pairCount = {};
+  for (const r of rows) {
+    const k = r.declared + ">" + r.ipCountry;
+    pairCount[k] = (pairCount[k] | 0) + 1;
+  }
+  let likelyMislabel = 0, likelyHosting = 0;
+  for (const r of rows) {
+    const k = r.declared + ">" + r.ipCountry;
+    const hubIp = HOSTING_HUBS.has(r.ipCountry);
+    const clustered = pairCount[k] > 1;
+    r.classification = (!hubIp && !clustered) ? "likely_mislabel" : "likely_hosting";
+    if (r.classification === "likely_mislabel") likelyMislabel++; else likelyHosting++;
+  }
+
   return {
     mode: "audit-readonly",
     builtAt: Date.now(),
     stats,
+    summary: {
+      relaysChecked: stats.compared,
+      countryMismatches: stats.mismatches,
+      likelyMislabel,       // genuine errors worth correcting (e.g. CWPRELAYBRA01)
+      likelyHosting,        // benign: operator in X, server in a hosting hub
+      couldNotCheck: { noDeclaredCountry: stats.noDeclared, noConsensusIp: stats.noIp, ipUnresolved: stats.ipUnresolved }
+    },
     mismatchCount: stats.mismatches,
     returned: rows.length,
     capped: stats.mismatches > rows.length,
