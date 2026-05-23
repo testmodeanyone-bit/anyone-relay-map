@@ -14884,6 +14884,67 @@ async function auditMismatches(env, opts) {
   };
 }
 
+/* ── inspectFp: READ-ONLY full MaxMind detail for ONE fingerprint ───────────
+ * Diagnostic companion to /audit. Given a single relay fingerprint, returns
+ * the full MaxMind resolution of its consensus IP — AS name/number, city,
+ * country, coords, accuracy radius — plus its declared geo from the registry,
+ * so the two can be compared in detail. This is what turns "it's in BR somehow"
+ * into "it's on AS-NNNN (some hosting co) near <city>".
+ *
+ * Writes NOTHING. The relay's IP is used for the lookup but is NOT returned
+ * (only the geo facts MaxMind derives from it). Same token gate as /audit. */
+async function inspectFp(env, fpInput) {
+  if (!fpInput || !/^[A-Fa-f0-9]{6,}$/.test(fpInput)) {
+    return { error: "missing or invalid fp (expected hex fingerprint)" };
+  }
+  const fp = fpInput.toUpperCase();
+  const reader = await getReader(env);
+  const regResp = await proxyFetch(env, `/api/relay-registry`);
+  if (!regResp.ok) return { error: `registry ${regResp.status}` };
+  const reg = await regResp.json();
+  const relays = reg.relays || {};
+  const regKey = Object.keys(relays).find((k) => k.toUpperCase() === fp);
+  const declared = regKey ? {
+    countryCode: relays[regKey].countryCode || null,
+    countryName: relays[regKey].countryName || null,
+    coordinates: Array.isArray(relays[regKey].coordinates) ? relays[regKey].coordinates : null,
+    geoQuality: relays[regKey].geoQuality || null
+  } : null;
+
+  let ipMap;
+  try { ipMap = await fetchIpMap(env); }
+  catch (e) { return { error: `consensus fetch failed: ${e.message}` }; }
+  const ip = ipMap[fp];
+  if (!ip) {
+    return { fp, inRegistry: !!regKey, declared, ipResolution: null, note: "no consensus IP for this fp" };
+  }
+
+  /* Full MaxMind record (NOT just country, unlike /audit). IP itself not returned. */
+  let rec = null;
+  try { rec = reader.get(ip.trim()); } catch (_) { rec = null; }
+  let ipResolution = null;
+  if (rec) {
+    const loc = rec.location || {};
+    ipResolution = {
+      country: rec.country && rec.country.iso_code ? rec.country.iso_code : null,
+      countryName: rec.country && rec.country.names ? (rec.country.names.en || null) : null,
+      city: rec.city && rec.city.names ? (rec.city.names.en || null) : null,
+      subdivision: rec.subdivisions && rec.subdivisions[0] && rec.subdivisions[0].names ? (rec.subdivisions[0].names.en || null) : null,
+      coordinates: (typeof loc.latitude === "number" && typeof loc.longitude === "number") ? [loc.latitude, loc.longitude] : null,
+      accuracyRadiusKm: typeof loc.accuracy_radius === "number" ? loc.accuracy_radius : null,
+      /* AS data only present if the worker has an ASN database loaded; the City
+       * db alone won't have it. Surfaced if available, null otherwise. */
+      asNumber: rec.autonomous_system_number || (rec.traits && rec.traits.autonomous_system_number) || null,
+      asOrg: rec.autonomous_system_organization || (rec.traits && rec.traits.autonomous_system_organization) || null
+    };
+  }
+
+  const countryMismatch = !!(declared && declared.countryCode && ipResolution && ipResolution.country &&
+    declared.countryCode.toUpperCase() !== ipResolution.country.toUpperCase());
+
+  return { fp, inRegistry: !!regKey, declared, ipResolution, countryMismatch };
+}
+
 var enrichment_worker_default = {
   async scheduled(event, env, ctx) {
     ctx.waitUntil(runSlice(env, 25).catch((e) => console.warn("[enrich.scheduled]", e)));
@@ -14981,6 +15042,19 @@ var enrichment_worker_default = {
       }
       const limit = url.searchParams.get("limit") || "500";
       const result = await auditMismatches(env, { limit });
+      return Response.json(result);
+    }
+    if (url.pathname === "/inspect") {
+      /* READ-ONLY single-fp MaxMind detail. Same token gate as /audit/run. */
+      const auth = isAuthorized(req, env);
+      if (auth === null) {
+        return new Response("/inspect disabled: set RUN_TOKEN secret to enable.", { status: 503 });
+      }
+      if (!auth) {
+        return new Response("unauthorized: /inspect requires a valid token (?token= or Authorization: Bearer)", { status: 401 });
+      }
+      const fp = url.searchParams.get("fp") || "";
+      const result = await inspectFp(env, fp);
       return Response.json(result);
     }
     return new Response("enrichment worker: GET /run?n=50 (auth required) or /status", { status: 200 });
