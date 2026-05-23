@@ -10742,10 +10742,11 @@ function initMapLibre(zones){
         paint:{ 'circle-color':['step',['get','point_count'],'rgba(45,212,191,0.25)',25,'rgba(167,139,250,0.28)',150,'rgba(251,191,36,0.30)',400,'rgba(220,38,38,0.32)'],
           'circle-radius':['step',['get','point_count'],10,25,16,150,24,400,34],
           'circle-stroke-width':1.2,'circle-stroke-color':'rgba(94,234,212,0.6)' }});
-      /* v371: cluster-count labels need a style "glyphs" property, which the
-       * label-free v1 basemap doesn't provide. Omit the number labels for now —
-       * cluster size is already conveyed by bubble radius + color. Add glyphs
-       * later to bring back counts. */
+      /* v372: cluster count labels — glyphs now self-hosted at /basemap/glyphs/
+       * (Open Sans Regular, injected into style.json by the worker). */
+      map.addLayer({ id:'cluster-count', type:'symbol', source:'relays', filter:['has','point_count'],
+        layout:{ 'text-field':['get','point_count_abbreviated'], 'text-font':['Open Sans Regular'], 'text-size':12 },
+        paint:{ 'text-color':'#e4e4e9', 'text-halo-color':'rgba(2,11,18,0.7)', 'text-halo-width':1 }});
       map.addLayer({ id:'relay-points', type:'circle', source:'relays', filter:['!',['has','point_count']],
         paint:{ 'circle-color':['case',['==',['get','hw'],1],'#fbbf24',['match',['get','tier'],'exit','#DC2626','guard','#a78bfa','middle','#2dd4bf','#888']],
           'circle-radius':['interpolate',['linear'],['zoom'],2,2,8,4,14,6],
