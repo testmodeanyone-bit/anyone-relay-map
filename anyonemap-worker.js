@@ -58,7 +58,7 @@
  * on next page navigation, which deletes the old cache (the activate
  * handler filters keys !== CACHE) and re-precaches STATIC against the
  * current worker. Bump per release. */
-const WORKER_VERSION = 'v426';
+const WORKER_VERSION = 'v427';
 
 /* v410: shared cross-worker KV schema. Inlined at build time from kv-schema.js
  * (single source of truth). Exposes _kvSchema.validate(obj, schema, opts) and
@@ -350,7 +350,7 @@ async function _bmGetTile(env, z, x, y) {
 }
 
 // main basemap router — returns a Response, or null if not a /basemap/ path
-const _BM_CACHE_VER = 'v2';  // bump to invalidate all edge-cached basemap responses
+const _BM_CACHE_VER = 'v3';  // bump to invalidate all edge-cached basemap responses
 async function _bmHandle(request, env, ctx) {
   const url = new URL(request.url);
   const path = url.pathname;
@@ -368,6 +368,10 @@ async function _bmHandle(request, env, ctx) {
       const obj = await env.BASEMAP.get('style.json');
       if (!obj) resp = new Response('no style', { status: 404 });
       else { let txt = await obj.text(); txt = txt.replace(/__ORIGIN__/g, url.origin);
+        /* Inject the self-hosted glyphs endpoint so symbol layers (cluster counts)
+         * can render text. Added at serve time so the R2 style.json doesn't need
+         * re-uploading. Only added if the style doesn't already declare glyphs. */
+        try { const st = JSON.parse(txt); if (!st.glyphs) { st.glyphs = url.origin + '/basemap/glyphs/{fontstack}/{range}.pbf'; txt = JSON.stringify(st); } } catch(_e) {}
         resp = new Response(txt, { headers: { 'Content-Type': 'application/json', 'Cache-Control': 'public, max-age=3600' } }); }
     } else if (path.startsWith('/basemap/tiles/')) {
       const m = path.match(/\/basemap\/tiles\/(\d+)\/(\d+)\/(\d+)\.(mvt|pbf)$/);
@@ -384,6 +388,27 @@ async function _bmHandle(request, env, ctx) {
       const obj = await env.BASEMAP.get('maplibre-gl-csp-worker.js');
       if (!obj) resp = new Response('no worker', { status: 404 });
       else resp = new Response(obj.body, { headers: { 'Content-Type': 'text/javascript; charset=utf-8', 'Cache-Control': 'public, max-age=86400, immutable' } });
+    } else if (path.startsWith('/basemap/glyphs/')) {
+      /* Glyph PBFs for symbol-layer text (cluster count labels). MapLibre requests
+       * /basemap/glyphs/{fontstack}/{range}.pbf. We host Open Sans Regular ranges
+       * in R2 under glyphs/{fontstack}/{range}.pbf. We only ship the 0-255 range
+       * (digits + Latin), which covers cluster counts; any other requested range
+       * returns 204 so MapLibre falls back gracefully without erroring. */
+      const gm = path.match(/\/basemap\/glyphs\/([^/]+)\/(\d+-\d+)\.pbf$/);
+      if (!gm) resp = new Response('bad glyph', { status: 400 });
+      else {
+        const range = gm[2];
+        if (range !== '0-255') { resp = new Response('', { status: 204 }); }
+        else {
+          const stack = decodeURIComponent(gm[1]);
+          /* Single hosted font; map any requested stack to our one glyph file so
+           * the style's font-stack name doesn't have to match byte-for-byte. */
+          let obj = await env.BASEMAP.get('glyphs/' + stack + '/0-255.pbf');
+          if (!obj) obj = await env.BASEMAP.get('glyphs/Open Sans Regular/0-255.pbf');
+          if (!obj) resp = new Response('', { status: 204 });
+          else resp = new Response(obj.body, { headers: { 'Content-Type': 'application/x-protobuf', 'Cache-Control': 'public, max-age=86400, immutable' } });
+        }
+      }
     } else resp = new Response('not found', { status: 404 });
   } catch (e) { resp = new Response('basemap error: ' + e.message, { status: 500 }); }
   if (resp.ok && request.method === 'GET') ctx.waitUntil(cache.put(cacheKey, resp.clone()));
