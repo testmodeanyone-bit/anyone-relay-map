@@ -58,7 +58,7 @@
  * on next page navigation, which deletes the old cache (the activate
  * handler filters keys !== CACHE) and re-precaches STATIC against the
  * current worker. Bump per release. */
-const WORKER_VERSION = 'v427';
+const WORKER_VERSION = 'v425';
 
 /* v410: shared cross-worker KV schema. Inlined at build time from kv-schema.js
  * (single source of truth). Exposes _kvSchema.validate(obj, schema, opts) and
@@ -262,7 +262,121 @@ function extract(obj, schema) {
   return { SCHEMA_VERSION, SNAPSHOT_KEY, EXIT_RELAYS_LATEST, validate, extract };
 })();
 
-export default { async fetch(request, env, ctx) { const _url = new URL(request.url); const _h = _url.hostname; const _path = _url.pathname; /* v300: exact match instead of .endsWith — endsWith would allow attacker-named subdomains and any *localhost suffix in client-controlled Host headers. */ const _allowedHosts = new Set(["anyonemap.anyonerelaysmap.workers.dev","map.anyone.io","localhost"]); if(!_allowedHosts.has(_h)){ return new Response("Unauthorized domain",{status:403}); } /* v373: _url and _path are now hoisted above — every route below reuses them instead of calling `new URL(request.url)` again. Saves 8 redundant URL parses per request and unifies the routing style. */ /* Analytics: record request shape. Non-blocking, safe if binding absent.
+
+/* ===== BASEMAP SERVING (self-hosted MapLibre tiles from R2 binding BASEMAP) =====
+ * Inlined plain functions (no import/export) so build-worker.js bundles them.
+ * Verified end-to-end against a real Protomaps PMTiles file. */
+const _BM_HEADER_SIZE = 127;
+
+async function _bmGunzip(buf) {
+  const ds = new DecompressionStream('gzip');
+  const stream = new Response(buf).body.pipeThrough(ds);
+  return new Uint8Array(await new Response(stream).arrayBuffer());
+}
+function _bmU8(dv, p) { return dv.getUint8(p); }
+function _bmU64(dv, p) { const lo = dv.getUint32(p, true), hi = dv.getUint32(p + 4, true); return hi * 4294967296 + lo; }
+function _bmVarint(arr, pos) { let r = 0, s = 0, b; do { b = arr[pos++]; r += (b & 0x7f) * Math.pow(2, s); s += 7; } while (b & 0x80); return [r, pos]; }
+function _bmZxyToTileId(z, x, y) {
+  let acc = 0; for (let t = 0; t < z; t++) acc += Math.pow(4, t);
+  let n = Math.pow(2, z), rx, ry, d = 0, xx = x, yy = y;
+  for (let s = n / 2; s >= 1; s = Math.floor(s / 2)) {
+    rx = (xx & s) > 0 ? 1 : 0; ry = (yy & s) > 0 ? 1 : 0;
+    d += s * s * ((3 * rx) ^ ry);
+    if (ry === 0) { if (rx === 1) { xx = s - 1 - xx; yy = s - 1 - yy; } const tmp = xx; xx = yy; yy = tmp; }
+  }
+  return acc + d;
+}
+
+// per-isolate cache of header + root directory
+let _bmHeader = null, _bmRootDir = null;
+
+async function _bmRead(env, offset, length) {
+  const obj = await env.BASEMAP.get('planet.pmtiles', { range: { offset, length } });
+  if (!obj) throw new Error('planet.pmtiles missing in R2');
+  return await obj.arrayBuffer();
+}
+async function _bmGetHeader(env) {
+  if (_bmHeader) return _bmHeader;
+  const ab = await _bmRead(env, 0, _BM_HEADER_SIZE);
+  const dv = new DataView(ab);
+  const magic = String.fromCharCode(_bmU8(dv,0),_bmU8(dv,1),_bmU8(dv,2),_bmU8(dv,3),_bmU8(dv,4),_bmU8(dv,5),_bmU8(dv,6));
+  if (magic !== 'PMTiles') throw new Error('bad pmtiles magic');
+  if (_bmU8(dv, 7) !== 3) throw new Error('pmtiles spec != 3');
+  _bmHeader = {
+    rootDirOffset: _bmU64(dv, 8), rootDirLength: _bmU64(dv, 16),
+    leafDirOffset: _bmU64(dv, 40),
+    tileDataOffset: _bmU64(dv, 56),
+    internalCompression: _bmU8(dv, 97), tileCompression: _bmU8(dv, 98),
+    minZoom: _bmU8(dv, 100), maxZoom: _bmU8(dv, 101)
+  };
+  return _bmHeader;
+}
+async function _bmReadDir(env, offset, length) {
+  const ab = await _bmRead(env, offset, length);
+  let bytes = new Uint8Array(ab);
+  if (_bmHeader.internalCompression === 2) bytes = await _bmGunzip(bytes);
+  let pos = 0, n; [n, pos] = _bmVarint(bytes, pos);
+  const e = new Array(n); let last = 0;
+  for (let i = 0; i < n; i++) { let v; [v, pos] = _bmVarint(bytes, pos); last += v; e[i] = { tileId: last, runLength: 0, length: 0, offset: 0 }; }
+  for (let i = 0; i < n; i++) { let v; [v, pos] = _bmVarint(bytes, pos); e[i].runLength = v; }
+  for (let i = 0; i < n; i++) { let v; [v, pos] = _bmVarint(bytes, pos); e[i].length = v; }
+  for (let i = 0; i < n; i++) { let v; [v, pos] = _bmVarint(bytes, pos); e[i].offset = (v === 0 && i > 0) ? (e[i-1].offset + e[i-1].length) : (v - 1); }
+  return e;
+}
+function _bmFind(entries, tileId) {
+  let lo = 0, hi = entries.length - 1, ans = null;
+  while (lo <= hi) { const mid = (lo + hi) >> 1, en = entries[mid];
+    if (tileId < en.tileId) hi = mid - 1;
+    else if (tileId > en.tileId) { if (tileId < en.tileId + Math.max(en.runLength,1)) { ans = en; break; } lo = mid + 1; ans = en; }
+    else { ans = en; break; } }
+  return ans;
+}
+async function _bmGetTile(env, z, x, y) {
+  const h = await _bmGetHeader(env);
+  if (z < h.minZoom || z > h.maxZoom) return null;
+  const tileId = _bmZxyToTileId(z, x, y);
+  if (!_bmRootDir) _bmRootDir = await _bmReadDir(env, h.rootDirOffset, h.rootDirLength);
+  let entries = _bmRootDir, e = _bmFind(entries, tileId), guard = 0;
+  while (e && e.runLength === 0 && guard++ < 4) { entries = await _bmReadDir(env, h.leafDirOffset + e.offset, e.length); e = _bmFind(entries, tileId); }
+  if (!e || e.runLength === 0) return null;
+  if (tileId < e.tileId || tileId >= e.tileId + e.runLength) return null;
+  const ab = await _bmRead(env, h.tileDataOffset + e.offset, e.length);
+  return new Uint8Array(ab);
+}
+
+// main basemap router — returns a Response, or null if not a /basemap/ path
+async function _bmHandle(request, env, ctx) {
+  const url = new URL(request.url);
+  const path = url.pathname;
+  if (!path.startsWith('/basemap/')) return null;
+  const cache = caches.default;
+  const hit = await cache.match(request);
+  if (hit) return hit;
+  let resp;
+  try {
+    if (path === '/basemap/style.json') {
+      const obj = await env.BASEMAP.get('style.json');
+      if (!obj) resp = new Response('no style', { status: 404 });
+      else { let txt = await obj.text(); txt = txt.replace(/__ORIGIN__/g, url.origin);
+        resp = new Response(txt, { headers: { 'Content-Type': 'application/json', 'Cache-Control': 'public, max-age=3600' } }); }
+    } else if (path.startsWith('/basemap/tiles/')) {
+      const m = path.match(/\/basemap\/tiles\/(\d+)\/(\d+)\/(\d+)\.(mvt|pbf)$/);
+      if (!m) resp = new Response('bad tile', { status: 400 });
+      else {
+        const tile = await _bmGetTile(env, +m[1], +m[2], +m[3]);
+        if (!tile) resp = new Response('', { status: 204 });
+        else resp = new Response(tile, { headers: { 'Content-Type': 'application/x-protobuf', 'Content-Encoding': 'gzip', 'Cache-Control': 'public, max-age=86400, immutable' } });
+      }
+    } else resp = new Response('not found', { status: 404 });
+  } catch (e) { resp = new Response('basemap error: ' + e.message, { status: 500 }); }
+  if (resp.ok && request.method === 'GET') ctx.waitUntil(cache.put(request, resp.clone()));
+  return resp;
+}
+/* ===== END BASEMAP SERVING ===== */
+
+export default { async fetch(request, env, ctx) { const _url = new URL(request.url); const _h = _url.hostname; const _path = _url.pathname; /* v300: exact match instead of .endsWith — endsWith would allow attacker-named subdomains and any *localhost suffix in client-controlled Host headers. */ const _allowedHosts = new Set(["anyonemap.anyonerelaysmap.workers.dev","map.anyone.io","localhost"]); if(!_allowedHosts.has(_h)){ return new Response("Unauthorized domain",{status:403}); }
+      const _bm = await _bmHandle(request, env, ctx);
+      if (_bm) return _bm; /* v373: _url and _path are now hoisted above — every route below reuses them instead of calling `new URL(request.url)` again. Saves 8 redundant URL parses per request and unifies the routing style. */ /* Analytics: record request shape. Non-blocking, safe if binding absent.
    * v380: separate static-asset traffic into its own kind. Previously the
    * sw.js / design-tokens.css / icon / manifest / robots fetches all landed
    * in 'subpage_view' alongside actual user navigations to /bitcoin and
