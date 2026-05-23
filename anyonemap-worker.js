@@ -58,7 +58,7 @@
  * on next page navigation, which deletes the old cache (the activate
  * handler filters keys !== CACHE) and re-precaches STATIC against the
  * current worker. Bump per release. */
-const WORKER_VERSION = 'v428';
+const WORKER_VERSION = 'v429';
 
 /* v410: shared cross-worker KV schema. Inlined at build time from kv-schema.js
  * (single source of truth). Exposes _kvSchema.validate(obj, schema, opts) and
@@ -350,7 +350,7 @@ async function _bmGetTile(env, z, x, y) {
 }
 
 // main basemap router — returns a Response, or null if not a /basemap/ path
-const _BM_CACHE_VER = 'v3';  // bump to invalidate all edge-cached basemap responses
+const _BM_CACHE_VER = 'v4';  // bump to invalidate all edge-cached basemap responses
 async function _bmHandle(request, env, ctx) {
   const url = new URL(request.url);
   const path = url.pathname;
@@ -401,9 +401,12 @@ async function _bmHandle(request, env, ctx) {
         if (range !== '0-255') { resp = new Response('', { status: 204 }); }
         else {
           const stack = decodeURIComponent(gm[1]);
-          /* Single hosted font; map any requested stack to our one glyph file so
-           * the style's font-stack name doesn't have to match byte-for-byte. */
-          let obj = await env.BASEMAP.get('glyphs/' + stack + '/0-255.pbf');
+          /* Single hosted font for cluster counts. Try a flat key first (simplest
+           * to upload to R2 — no folders or spaces, like the worker JS file), then
+           * fall back to folder-style keys. Any requested fontstack maps to this
+           * one file, so the style's font name doesn't have to match byte-for-byte. */
+          let obj = await env.BASEMAP.get('maplibre-glyphs-0-255.pbf');
+          if (!obj) obj = await env.BASEMAP.get('glyphs/' + stack + '/0-255.pbf');
           if (!obj) obj = await env.BASEMAP.get('glyphs/Open Sans Regular/0-255.pbf');
           if (!obj) resp = new Response('', { status: 204 });
           else resp = new Response(obj.body, { headers: { 'Content-Type': 'application/x-protobuf', 'Cache-Control': 'public, max-age=86400, immutable' } });
