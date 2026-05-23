@@ -131,7 +131,7 @@ async function _bmGetTile(env, z, x, y) {
 }
 
 // main basemap router — returns a Response, or null if not a /basemap/ path
-const _BM_CACHE_VER = 'v4';  // bump to invalidate all edge-cached basemap responses
+const _BM_CACHE_VER = 'v5';  // bump to invalidate all edge-cached basemap responses
 async function _bmHandle(request, env, ctx) {
   const url = new URL(request.url);
   const path = url.pathname;
