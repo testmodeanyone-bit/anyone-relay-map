@@ -367,6 +367,13 @@ async function _bmHandle(request, env, ctx) {
         if (!tile) resp = new Response('', { status: 204 });
         else resp = new Response(tile, { headers: { 'Content-Type': 'application/x-protobuf', 'Content-Encoding': 'gzip', 'Cache-Control': 'public, max-age=86400, immutable' } });
       }
+    } else if (path === '/basemap/maplibre-worker.js') {
+      /* MapLibre's tile-parsing Web Worker, self-hosted same-origin so it loads
+       * under the strict CSP (blob: workers are blocked; 'self' workers are not).
+       * The file maplibre-gl-csp-worker.js is stored in R2 alongside the tiles. */
+      const obj = await env.BASEMAP.get('maplibre-gl-csp-worker.js');
+      if (!obj) resp = new Response('no worker', { status: 404 });
+      else resp = new Response(obj.body, { headers: { 'Content-Type': 'text/javascript; charset=utf-8', 'Cache-Control': 'public, max-age=86400, immutable' } });
     } else resp = new Response('not found', { status: 404 });
   } catch (e) { resp = new Response('basemap error: ' + e.message, { status: 500 }); }
   if (resp.ok && request.method === 'GET') ctx.waitUntil(cache.put(request, resp.clone()));
