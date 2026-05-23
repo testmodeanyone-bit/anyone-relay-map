@@ -34,7 +34,7 @@
  * on next page navigation, which deletes the old cache (the activate
  * handler filters keys !== CACHE) and re-precaches STATIC against the
  * current worker. Bump per release. */
-const WORKER_VERSION = 'v426';
+const WORKER_VERSION = 'v424';
 
 /* v410: shared cross-worker KV schema. Inlined at build time from kv-schema.js
  * (single source of truth). Exposes _kvSchema.validate(obj, schema, opts) and
@@ -122,7 +122,12 @@ async function _bmGetTile(env, z, x, y) {
   if (!e || e.runLength === 0) return null;
   if (tileId < e.tileId || tileId >= e.tileId + e.runLength) return null;
   const ab = await _bmRead(env, h.tileDataOffset + e.offset, e.length);
-  return new Uint8Array(ab);
+  let bytes = new Uint8Array(ab);
+  /* PMTiles stores MVT gzip-compressed (tileCompression===2). MapLibre's worker
+   * expects raw protobuf, and serving with Content-Encoding:gzip double-confused
+   * the chain (parse errors). So decompress here and serve raw MVT. */
+  if (h.tileCompression === 2) { try { bytes = await _bmGunzip(bytes); } catch(_e) {} }
+  return bytes;
 }
 
 // main basemap router — returns a Response, or null if not a /basemap/ path
@@ -146,7 +151,7 @@ async function _bmHandle(request, env, ctx) {
       else {
         const tile = await _bmGetTile(env, +m[1], +m[2], +m[3]);
         if (!tile) resp = new Response('', { status: 204 });
-        else resp = new Response(tile, { headers: { 'Content-Type': 'application/x-protobuf', 'Content-Encoding': 'gzip', 'Cache-Control': 'public, max-age=86400, immutable' } });
+        else resp = new Response(tile, { headers: { 'Content-Type': 'application/x-protobuf', 'Cache-Control': 'public, max-age=86400, immutable' } });
       }
     } else if (path === '/basemap/maplibre-worker.js') {
       /* MapLibre's tile-parsing Web Worker, self-hosted same-origin so it loads
