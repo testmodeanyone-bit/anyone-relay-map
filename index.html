@@ -10758,6 +10758,28 @@ function initMapLibre(zones){
     map.on('load', () => {
       const geo = buildGeoJSON(zones);
       map.addSource('relays', { type:'geojson', data:geo, cluster:true, clusterRadius:44, clusterMaxZoom:11 });
+
+      /* v382: place labels (cities + countries) from the basemap's own `places`
+       * source-layer (the planet.pmtiles already carries it). Added BEFORE the relay
+       * layers so relay dots/clusters/diamonds always sit on top of text. Uses name:en
+       * to stay within hosted glyph ranges; density is controlled by the tiles'
+       * min_zoom + population_rank so it declutters automatically. Styled to match the
+       * moody brand theme (dim teal countries, soft grey-teal cities). */
+      // country labels — dim, uppercase, wide tracking, sit quietly under everything
+      map.addLayer({ id:'country-labels', type:'symbol', source:'protomaps', 'source-layer':'places',
+        filter:['==',['get','kind'],'country'],
+        layout:{ 'text-field':['coalesce',['get','name:en'],['get','name']], 'text-font':['Open Sans Regular'],
+          'text-size':['interpolate',['linear'],['zoom'],2,9,5,13], 'text-letter-spacing':0.18,
+          'text-transform':'uppercase', 'text-max-width':9 },
+        paint:{ 'text-color':'rgba(94,234,212,0.5)', 'text-halo-color':'rgba(2,11,18,0.85)', 'text-halo-width':1.2 }});
+      // city labels — soft grey-teal, density self-limits via population_rank sort
+      map.addLayer({ id:'city-labels', type:'symbol', source:'protomaps', 'source-layer':'places',
+        filter:['==',['get','kind'],'locality'], minzoom:3,
+        layout:{ 'text-field':['coalesce',['get','name:en'],['get','name']], 'text-font':['Open Sans Regular'],
+          'text-size':['interpolate',['linear'],['zoom'],3,9,6,11,7,13], 'text-anchor':'top', 'text-offset':[0,0.4],
+          'text-max-width':8, 'symbol-sort-key':['*',-1,['coalesce',['get','population_rank'],0]] },
+        paint:{ 'text-color':'rgba(180,210,205,0.82)', 'text-halo-color':'rgba(2,11,18,0.9)', 'text-halo-width':1.1 }});
+
       // cluster bubbles, sized + tinted by count (TorMap-style aggregation)
       map.addLayer({ id:'clusters', type:'circle', source:'relays', filter:['has','point_count'],
         paint:{ 'circle-color':['interpolate',['linear'],['get','point_count'],
@@ -10873,19 +10895,41 @@ function initMapLibre(zones){
       try { setStatus && setStatus(''); } catch(_){}
       console.log('[maplibre] rendered', geo.features.length, 'relays');
     });
-    /* v374: robust fix for partial-render-on-load. The map often paints before its
-     * container has settled final size (sidebar/layout reflow) AND before the style
-     * fully finishes, leaving half the canvas blank until the user interacts.
-     * Fixed timers fired too early to help. Instead resize on the 'idle' event
-     * (fires after the first COMPLETE render, when style+tiles are done), a few
-     * times, then detach. Keep spaced timer fallbacks as a belt-and-suspenders. */
+    /* v381: bulletproof cold-load paint. MapLibre can measure its container before
+     * the layout has settled (sidebar/flex reflow), sizing the canvas wrong so it
+     * paints blank/half until the user interacts. v374 used the 'idle' event + fixed
+     * timers, which still occasionally raced. The precise fix is a ResizeObserver on
+     * the host element: it fires exactly when the container's box gets/changes its
+     * real size — no timing guesswork. We resize on every genuine size change (and
+     * also handle the window 'resize' for safety). A tiny dedupe avoids redundant
+     * resizes. The idle handler is kept as a complementary first-paint nudge. */
+    let _lastW = 0, _lastH = 0;
+    const _resizeIfChanged = () => {
+      try {
+        const r = host.getBoundingClientRect();
+        const w = Math.round(r.width), h = Math.round(r.height);
+        if (w > 0 && h > 0 && (w !== _lastW || h !== _lastH)) {
+          _lastW = w; _lastH = h; map.resize();
+        }
+      } catch(_){}
+    };
+    try {
+      const _ro = new ResizeObserver(_resizeIfChanged);
+      _ro.observe(host);
+      window.__anyoneMapLibreRO = _ro; // keep a ref so it isn't GC'd
+    } catch(_){ /* ResizeObserver unsupported — fall back to timers below */ }
+    // complementary first-paint nudge: resize once the first complete render is done
     let _idleResizes = 0;
     const _onIdle = () => {
-      try { map.resize(); } catch(_){}
-      if (++_idleResizes >= 3) { try { map.off('idle', _onIdle); } catch(_){} }
+      _resizeIfChanged();
+      if (++_idleResizes >= 2) { try { map.off('idle', _onIdle); } catch(_){} }
     };
     map.on('idle', _onIdle);
-    [200, 600, 1500, 3000].forEach(ms => setTimeout(() => { try { map.resize(); } catch(_){} }, ms));
+    // window resize (e.g. devtools open, rotate) — ResizeObserver covers most of this
+    // but the explicit listener is a cheap safety net.
+    window.addEventListener('resize', _resizeIfChanged);
+    // belt-and-suspenders timer fallbacks (mainly for browsers without ResizeObserver)
+    [150, 500, 1500].forEach(ms => setTimeout(_resizeIfChanged, ms));
     map.on('error', e => console.error('[maplibre]', (e && e.error && e.error.message) || e));
   })().catch(e => console.error('initMapLibre failed:', e && e.message));
 }
