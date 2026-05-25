@@ -10695,21 +10695,39 @@ function initMapLibre(zones){
   // build per-relay GeoJSON points from zones (each zone carries relayCoords + tier counts)
   function buildGeoJSON(zoneList){
     const feats = [];
+    /* v377: flag hardware + tier per-relay by FINGERPRINT (via the hwFps/exitFps/
+     * guardFps sets) instead of distributing zone counts positionally. The old
+     * `i < hwCount` approach produced hw:0 for every relay because z.hwCount isn't
+     * populated on zones — so the hardware-diamond layer had nothing to render.
+     * Fingerprint membership is also more accurate than count-distribution. */
+    const _hw = (typeof hwFps !== 'undefined' && hwFps) ? hwFps : null;
+    const _ex = (typeof exitFps !== 'undefined' && exitFps) ? exitFps : null;
+    const _gu = (typeof guardFps !== 'undefined' && guardFps) ? guardFps : null;
     (zoneList||[]).forEach(z => {
       const coords = z.relayCoords || [];
       const fps = z.fingerprints || [];   // parallel to relayCoords
       const e = z.exitCount||0, g = z.guardCount||0, hw = z.hwCount||0;
-      // tier bag: distribute the zone's tier counts across its relays (visual fidelity)
+      // tier bag fallback (positional) when fingerprint sets are unavailable
       const bag = [];
       for(let i=0;i<e;i++) bag.push('exit');
       for(let i=0;i<g;i++) bag.push('guard');
       while(bag.length < coords.length) bag.push('middle');
       coords.forEach((c, i) => {
         if(!c || c.length < 2) return;
+        const fp = fps[i] || '';
+        const FP = fp.toUpperCase();
+        // prefer fingerprint-set membership; fall back to positional bag
+        let tier = bag[i] || 'middle';
+        if (fp && (_ex || _gu)) {
+          if (_ex && _ex.has(FP)) tier = 'exit';
+          else if (_gu && _gu.has(FP)) tier = 'guard';
+          else tier = 'middle';
+        }
+        const isHw = (fp && _hw) ? (_hw.has(FP) ? 1 : 0) : (i < hw ? 1 : 0);
         feats.push({ type:'Feature',
           geometry:{ type:'Point', coordinates:[c[1], c[0]] }, // [lng,lat]
-          properties:{ tier: bag[i]||'middle', hw: i < hw ? 1 : 0,
-            fp: fps[i] || '',   // v375: per-relay fingerprint → enables click-to-detail
+          properties:{ tier: tier, hw: isHw,
+            fp: fp,   // v375: per-relay fingerprint → enables click-to-detail
             lat: c[0], lng: c[1],
             city: z.cityName || z.countryName || z.countryCode || '', asn: z.asName || '' } });
       });
@@ -10751,24 +10769,59 @@ function initMapLibre(zones){
       map.addLayer({ id:'cluster-count', type:'symbol', source:'relays', filter:['has','point_count'],
         layout:{ 'text-field':['get','point_count_abbreviated'], 'text-font':['Open Sans Regular'], 'text-size':12 },
         paint:{ 'text-color':'#eafdf9', 'text-halo-color':'rgba(2,11,18,0.85)', 'text-halo-width':1.2 }});
-      map.addLayer({ id:'relay-points', type:'circle', source:'relays', filter:['!',['has','point_count']],
-        paint:{ 'circle-color':['case',['==',['get','hw'],1],'#fbbf24',['match',['get','tier'],'exit','#DC2626','guard','#a78bfa','middle','#2dd4bf','#888']],
+      map.addLayer({ id:'relay-points', type:'circle', source:'relays', filter:['all',['!',['has','point_count']],['==',['get','hw'],0]],
+        paint:{ 'circle-color':['match',['get','tier'],'exit','#DC2626','guard','#a78bfa','middle','#2dd4bf','#888'],
           'circle-radius':['interpolate',['linear'],['zoom'],2,2,8,4,14,6],
-          'circle-stroke-width':['case',['==',['get','hw'],1],1,0],'circle-stroke-color':'#fff','circle-opacity':0.92 }});
+          'circle-stroke-width':0,'circle-stroke-color':'#fff','circle-opacity':0.92 }});
+      /* v378: hardware relays rendered as DIAMONDS (parity with the D3 map, where
+       * HW = diamond). MapLibre circle layers can't draw diamonds, so we draw an
+       * amber diamond on a canvas, export it as a PNG data URL, decode it via an
+       * Image, and addImage() that — then a symbol layer with icon-image. NOTE: the
+       * raw-ImageData and SDF forms of addImage did NOT paint in this environment
+       * (verified live); only a decoded Image object renders reliably. Color is
+       * baked into the bitmap (non-SDF can't use icon-color). HW relays are excluded
+       * from relay-points above so they show ONLY as a diamond, not a dot too.
+       * The layer is added inside the Image onload so the icon exists before it's
+       * referenced; if anything fails we just skip diamonds (HW still shows via the
+       * relay-points fallback path on next style reload). */
+      try {
+        const _S = 40, _c = document.createElement('canvas'); _c.width = _S; _c.height = _S;
+        const _x = _c.getContext('2d'), _cx = _S/2, _cy = _S/2, _R = _S/2 - 4;
+        _x.beginPath(); _x.moveTo(_cx,_cy-_R); _x.lineTo(_cx+_R,_cy); _x.lineTo(_cx,_cy+_R); _x.lineTo(_cx-_R,_cy); _x.closePath();
+        _x.fillStyle = '#fbbf24'; _x.fill();
+        _x.lineWidth = 2.5; _x.strokeStyle = '#02131d'; _x.stroke();
+        const _im = new Image();
+        _im.onload = () => {
+          try {
+            if (!map.hasImage('hw-diamond')) map.addImage('hw-diamond', _im, { pixelRatio: 2 });
+            if (!map.getLayer('hw-diamonds')) {
+              map.addLayer({ id:'hw-diamonds', type:'symbol', source:'relays',
+                filter:['all',['!',['has','point_count']],['==',['get','hw'],1]],
+                layout:{ 'icon-image':'hw-diamond', 'icon-allow-overlap':true, 'icon-ignore-placement':true,
+                  'icon-size':['interpolate',['linear'],['zoom'],2,0.4,8,0.65,14,0.9] },
+                paint:{ 'icon-opacity':0.95 }});
+            }
+          } catch(e){ console.warn('[maplibre] hw-diamond layer add failed:', e && e.message); }
+        };
+        _im.onerror = () => console.warn('[maplibre] hw-diamond image decode failed');
+        _im.src = _c.toDataURL('image/png');
+      } catch(e){ console.warn('[maplibre] hw-diamond setup failed:', e && e.message); }
       // click cluster -> zoom in
       map.on('click','clusters',(ev)=>{ const f=map.queryRenderedFeatures(ev.point,{layers:['clusters']})[0]; if(!f) return;
         map.getSource('relays').getClusterExpansionZoom(f.properties.cluster_id).then(z=>map.easeTo({center:f.geometry.coordinates, zoom:z})); });
-      // click relay -> open the REAL detail panel (same as D3 map), falling back to a popup
-      map.on('click','relay-points',(ev)=>{ const p=ev.features[0].properties;
-        const fp = p.fp, coords = ev.features[0].geometry.coordinates;
-        if (fp && typeof selectRelay === 'function') {
-          /* v375: reuse the existing detail flow — flies to relay, opens relay
-           * browser panel, fetches live relay data into #relay-detail, updates URL. */
-          try { selectRelay(fp, (p.lat!=null?+p.lat:coords[1]), (p.lng!=null?+p.lng:coords[0])); return; } catch(_){}
-        }
-        new maplibregl.Popup({offset:8}).setLngLat(coords)
-          .setHTML('<b>'+(p.city||'Unknown')+'</b><br>'+p.tier+(p.hw==1?' · hardware':'')+(p.asn?'<br>'+p.asn:'')).addTo(map); });
-      ['clusters','relay-points'].forEach(l=>{ map.on('mouseenter',l,()=>map.getCanvas().style.cursor='pointer'); map.on('mouseleave',l,()=>map.getCanvas().style.cursor=''); });
+      // click relay or hw-diamond -> open the REAL detail panel (same as D3 map)
+      ['relay-points','hw-diamonds'].forEach(lyr => {
+        map.on('click', lyr, (ev)=>{ const p=ev.features[0].properties;
+          const fp = p.fp, coords = ev.features[0].geometry.coordinates;
+          if (fp && typeof selectRelay === 'function') {
+            /* v375: reuse the existing detail flow — flies to relay, opens relay
+             * browser panel, fetches live relay data into #relay-detail, updates URL. */
+            try { selectRelay(fp, (p.lat!=null?+p.lat:coords[1]), (p.lng!=null?+p.lng:coords[0])); return; } catch(_){}
+          }
+          new maplibregl.Popup({offset:8}).setLngLat(coords)
+            .setHTML('<b>'+(p.city||'Unknown')+'</b><br>'+p.tier+(p.hw==1?' · hardware':'')+(p.asn?'<br>'+p.asn:'')).addTo(map); });
+      });
+      ['clusters','relay-points','hw-diamonds'].forEach(l=>{ map.on('mouseenter',l,()=>map.getCanvas().style.cursor='pointer'); map.on('mouseleave',l,()=>map.getCanvas().style.cursor=''); });
 
       /* v376: tier filtering. Mirrors the Relay Browser filter (Exit/Guard/Middle/HW)
        * onto the map: matching relays stay bright, non-matching dim to near-invisible.
@@ -10777,11 +10830,13 @@ function initMapLibre(zones){
       window._mlApplyTierFilter = function(type){
         try {
           const t = (type||'all').toLowerCase();
+          const hasDiamonds = !!map.getLayer('hw-diamonds');
           if (t === 'all') {
             map.setPaintProperty('relay-points','circle-opacity',0.92);
             map.setPaintProperty('relay-points','circle-stroke-opacity',1);
             map.setPaintProperty('clusters','circle-opacity',1);
             map.setPaintProperty('cluster-count','text-opacity',1);
+            if (hasDiamonds) map.setPaintProperty('hw-diamonds','icon-opacity',0.95);
             return;
           }
           // match expression: hw filter checks hw==1; others check tier==t
@@ -10790,6 +10845,8 @@ function initMapLibre(zones){
             : ['case', ['==',['get','tier'],t], 0.95, 0.06];
           map.setPaintProperty('relay-points','circle-opacity', match);
           map.setPaintProperty('relay-points','circle-stroke-opacity', match);
+          // hardware diamonds: bright when hw filter active, dimmed otherwise
+          if (hasDiamonds) map.setPaintProperty('hw-diamonds','icon-opacity', t === 'hw' ? 0.95 : 0.08);
           // dim clusters + counts while a specific tier is active (they're mixed)
           map.setPaintProperty('clusters','circle-opacity',0.25);
           map.setPaintProperty('cluster-count','text-opacity',0.3);
