@@ -10697,6 +10697,7 @@ function initMapLibre(zones){
     const feats = [];
     (zoneList||[]).forEach(z => {
       const coords = z.relayCoords || [];
+      const fps = z.fingerprints || [];   // parallel to relayCoords
       const e = z.exitCount||0, g = z.guardCount||0, hw = z.hwCount||0;
       // tier bag: distribute the zone's tier counts across its relays (visual fidelity)
       const bag = [];
@@ -10708,6 +10709,8 @@ function initMapLibre(zones){
         feats.push({ type:'Feature',
           geometry:{ type:'Point', coordinates:[c[1], c[0]] }, // [lng,lat]
           properties:{ tier: bag[i]||'middle', hw: i < hw ? 1 : 0,
+            fp: fps[i] || '',   // v375: per-relay fingerprint → enables click-to-detail
+            lat: c[0], lng: c[1],
             city: z.cityName || z.countryName || z.countryCode || '', asn: z.asName || '' } });
       });
     });
@@ -10755,9 +10758,15 @@ function initMapLibre(zones){
       // click cluster -> zoom in
       map.on('click','clusters',(ev)=>{ const f=map.queryRenderedFeatures(ev.point,{layers:['clusters']})[0]; if(!f) return;
         map.getSource('relays').getClusterExpansionZoom(f.properties.cluster_id).then(z=>map.easeTo({center:f.geometry.coordinates, zoom:z})); });
-      // click relay -> popup
+      // click relay -> open the REAL detail panel (same as D3 map), falling back to a popup
       map.on('click','relay-points',(ev)=>{ const p=ev.features[0].properties;
-        new maplibregl.Popup({offset:8}).setLngLat(ev.features[0].geometry.coordinates)
+        const fp = p.fp, coords = ev.features[0].geometry.coordinates;
+        if (fp && typeof selectRelay === 'function') {
+          /* v375: reuse the existing detail flow — flies to relay, opens relay
+           * browser panel, fetches live relay data into #relay-detail, updates URL. */
+          try { selectRelay(fp, (p.lat!=null?+p.lat:coords[1]), (p.lng!=null?+p.lng:coords[0])); return; } catch(_){}
+        }
+        new maplibregl.Popup({offset:8}).setLngLat(coords)
           .setHTML('<b>'+(p.city||'Unknown')+'</b><br>'+p.tier+(p.hw==1?' · hardware':'')+(p.asn?'<br>'+p.asn:'')).addTo(map); });
       ['clusters','relay-points'].forEach(l=>{ map.on('mouseenter',l,()=>map.getCanvas().style.cursor='pointer'); map.on('mouseleave',l,()=>map.getCanvas().style.cursor=''); });
       try { setStatus && setStatus(''); } catch(_){}
