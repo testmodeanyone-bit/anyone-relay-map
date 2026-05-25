@@ -10769,6 +10769,50 @@ function initMapLibre(zones){
         new maplibregl.Popup({offset:8}).setLngLat(coords)
           .setHTML('<b>'+(p.city||'Unknown')+'</b><br>'+p.tier+(p.hw==1?' · hardware':'')+(p.asn?'<br>'+p.asn:'')).addTo(map); });
       ['clusters','relay-points'].forEach(l=>{ map.on('mouseenter',l,()=>map.getCanvas().style.cursor='pointer'); map.on('mouseleave',l,()=>map.getCanvas().style.cursor=''); });
+
+      /* v376: tier filtering. Mirrors the Relay Browser filter (Exit/Guard/Middle/HW)
+       * onto the map: matching relays stay bright, non-matching dim to near-invisible.
+       * Clusters mix tiers, so when a filter is active we just dim the cluster layer
+       * (the individual relays carry the precise filter). 'all' restores everything. */
+      window._mlApplyTierFilter = function(type){
+        try {
+          const t = (type||'all').toLowerCase();
+          if (t === 'all') {
+            map.setPaintProperty('relay-points','circle-opacity',0.92);
+            map.setPaintProperty('relay-points','circle-stroke-opacity',1);
+            map.setPaintProperty('clusters','circle-opacity',1);
+            map.setPaintProperty('cluster-count','text-opacity',1);
+            return;
+          }
+          // match expression: hw filter checks hw==1; others check tier==t
+          const match = (t === 'hw')
+            ? ['case', ['==',['get','hw'],1], 0.95, 0.06]
+            : ['case', ['==',['get','tier'],t], 0.95, 0.06];
+          map.setPaintProperty('relay-points','circle-opacity', match);
+          map.setPaintProperty('relay-points','circle-stroke-opacity', match);
+          // dim clusters + counts while a specific tier is active (they're mixed)
+          map.setPaintProperty('clusters','circle-opacity',0.25);
+          map.setPaintProperty('cluster-count','text-opacity',0.3);
+        } catch(_){}
+      };
+      // make the bottom legend chips clickable to drive the same filter (toggle off => all)
+      try {
+        const chipMap = { 'cb-leg-exit':'exit','cb-leg-guard':'guard','cb-leg-mid':'middle','cb-leg-hw':'hw' };
+        let _activeChip = null;
+        Object.keys(chipMap).forEach(id => {
+          const el = document.getElementById(id);
+          if (!el) return;
+          el.style.cursor = 'pointer';
+          el.addEventListener('click', () => {
+            const tier = chipMap[id];
+            const next = (_activeChip === tier) ? 'all' : tier;
+            _activeChip = (next === 'all') ? null : tier;
+            if (typeof applyRelayFilter === 'function') applyRelayFilter(next);
+            else window._mlApplyTierFilter(next);
+          });
+        });
+      } catch(_){}
+
       try { setStatus && setStatus(''); } catch(_){}
       console.log('[maplibre] rendered', geo.features.length, 'relays');
     });
@@ -22746,6 +22790,10 @@ function applyRelayFilter(type){
   updateRelayStats(filteredRelays);
   renderRelayList(sortRelayList(filteredRelays).slice(0, 80));
   buildCountryBars(filteredRelays);
+  /* v376: if the MapLibre map is active, mirror the tier filter onto it so the
+   * map and the relay-browser list stay in sync (Exit/Guard/Middle/HW). No-op
+   * on the default D3 map. */
+  try { if (typeof window._mlApplyTierFilter === 'function') window._mlApplyTierFilter(type); } catch(_){}
 }
 
 function buildCountryBars(list){
