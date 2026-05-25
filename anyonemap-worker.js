@@ -398,16 +398,22 @@ async function _bmHandle(request, env, ctx) {
       if (!gm) resp = new Response('bad glyph', { status: 400 });
       else {
         const range = gm[2];
-        if (range !== '0-255') { resp = new Response('', { status: 204 }); }
+        /* v382: place labels (city/country names) need accented-Latin glyphs, so we
+         * now host ranges 0-255, 256-511 and 512-767 (covers all name:en values
+         * worldwide — é, ü, ș, ă, etc). Any OTHER requested range returns 204 so
+         * MapLibre falls back gracefully (e.g. CJK/Cyrillic ranges we don't ship;
+         * we use name:en in the label layers so those aren't needed). */
+        const HOSTED_RANGES = new Set(['0-255', '256-511', '512-767']);
+        if (!HOSTED_RANGES.has(range)) { resp = new Response('', { status: 204 }); }
         else {
           const stack = decodeURIComponent(gm[1]);
-          /* Single hosted font for cluster counts. Try a flat key first (simplest
-           * to upload to R2 — no folders or spaces, like the worker JS file), then
-           * fall back to folder-style keys. Any requested fontstack maps to this
-           * one file, so the style's font name doesn't have to match byte-for-byte. */
-          let obj = await env.BASEMAP.get('maplibre-glyphs-0-255.pbf');
-          if (!obj) obj = await env.BASEMAP.get('glyphs/' + stack + '/0-255.pbf');
-          if (!obj) obj = await env.BASEMAP.get('glyphs/Open Sans Regular/0-255.pbf');
+          /* Flat key first (simplest to upload to R2 — no folders/spaces), then
+           * fall back to folder-style keys. Any requested fontstack maps to the
+           * same hosted Open Sans Regular files, so the style's font name doesn't
+           * have to match byte-for-byte. */
+          let obj = await env.BASEMAP.get('maplibre-glyphs-' + range + '.pbf');
+          if (!obj) obj = await env.BASEMAP.get('glyphs/' + stack + '/' + range + '.pbf');
+          if (!obj) obj = await env.BASEMAP.get('glyphs/Open Sans Regular/' + range + '.pbf');
           if (!obj) resp = new Response('', { status: 204 });
           else resp = new Response(obj.body, { headers: { 'Content-Type': 'application/x-protobuf', 'Cache-Control': 'public, max-age=86400, immutable' } });
         }
