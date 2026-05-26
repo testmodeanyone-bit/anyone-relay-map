@@ -10759,6 +10759,26 @@ function initMapLibre(zones){
       const geo = buildGeoJSON(zones);
       map.addSource('relays', { type:'geojson', data:geo, cluster:true, clusterRadius:44, clusterMaxZoom:11 });
 
+      /* v383: roads from the basemap's own `roads` source-layer (already in the
+       * planet.pmtiles). At our zoom range (0-7) these are mostly highways/motorways
+       * + a few major roads — exactly the arteries that add map realism without
+       * street-level clutter. Two thin tiers styled to match the moody theme: major
+       * roads dimmest, highways slightly brighter. Added BEFORE labels + relays so
+       * text and relay markers always sit on top. Fade in with zoom so the world
+       * view stays clean. */
+      map.addLayer({ id:'roads-major', type:'line', source:'protomaps', 'source-layer':'roads',
+        filter:['==',['get','kind'],'major_road'],
+        layout:{ 'line-cap':'round', 'line-join':'round' },
+        paint:{ 'line-color':'rgba(94,234,212,0.16)',
+          'line-width':['interpolate',['linear'],['zoom'],4,0.3,7,0.7,11,1.4],
+          'line-opacity':['interpolate',['linear'],['zoom'],3,0,5,0.6,8,1] }});
+      map.addLayer({ id:'roads-highway', type:'line', source:'protomaps', 'source-layer':'roads',
+        filter:['==',['get','kind'],'highway'],
+        layout:{ 'line-cap':'round', 'line-join':'round' },
+        paint:{ 'line-color':'rgba(94,234,212,0.28)',
+          'line-width':['interpolate',['linear'],['zoom'],3,0.4,7,1.0,11,2.0],
+          'line-opacity':['interpolate',['linear'],['zoom'],2,0,4,0.7,8,1] }});
+
       /* v382: place labels (cities + countries) from the basemap's own `places`
        * source-layer (the planet.pmtiles already carries it). Added BEFORE the relay
        * layers so relay dots/clusters/diamonds always sit on top of text. Uses name:en
