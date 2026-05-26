@@ -58,7 +58,7 @@
  * on next page navigation, which deletes the old cache (the activate
  * handler filters keys !== CACHE) and re-precaches STATIC against the
  * current worker. Bump per release. */
-const WORKER_VERSION = 'v439';
+const WORKER_VERSION = 'v443';
 
 /* v410: shared cross-worker KV schema. Inlined at build time from kv-schema.js
  * (single source of truth). Exposes _kvSchema.validate(obj, schema, opts) and
@@ -350,7 +350,7 @@ async function _bmGetTile(env, z, x, y) {
 }
 
 // main basemap router — returns a Response, or null if not a /basemap/ path
-const _BM_CACHE_VER = 'v5';  // bump to invalidate all edge-cached basemap responses
+const _BM_CACHE_VER = 'v6';  // bump to invalidate all edge-cached basemap responses (v6: clear stale glyph 204s cached before the 256-511/512-767 ranges were uploaded to R2)
 async function _bmHandle(request, env, ctx) {
   const url = new URL(request.url);
   const path = url.pathname;
@@ -381,6 +381,35 @@ async function _bmHandle(request, env, ctx) {
         if (!tile) resp = new Response('', { status: 204 });
         else resp = new Response(tile, { headers: { 'Content-Type': 'application/x-protobuf', 'Cache-Control': 'public, max-age=86400, immutable' } });
       }
+    } else if (path.startsWith('/basemap/hd/')) {
+      /* v384: high-detail vector tiles proxied from MapTiler (OpenMapTiles v3
+       * schema), for deep/street-level zoom that our self-hosted z0-7 planet file
+       * doesn't carry. The MapTiler API key lives ONLY here as a worker secret
+       * (env.MAPTILER_KEY) — it's injected server-side and never reaches the client,
+       * the style.json, or any browser request. The browser only ever talks to our
+       * own origin (/basemap/hd/...), which also keeps the strict CSP happy.
+       * Edge-cached so repeat views don't burn MapTiler quota. */
+      const m = path.match(/\/basemap\/hd\/(\d+)\/(\d+)\/(\d+)\.(?:pbf|mvt)$/);
+      if (!m) resp = new Response('bad hd tile', { status: 400 });
+      else if (!env.MAPTILER_KEY) resp = new Response('', { status: 204 });
+      else {
+        const up = 'https://api.maptiler.com/tiles/v3/' + m[1] + '/' + m[2] + '/' + m[3] + '.pbf?key=' + env.MAPTILER_KEY;
+        const r = await fetch(up, { cf: { cacheTtl: 86400, cacheEverything: true } });
+        if (r.status === 200) {
+          resp = new Response(r.body, { headers: { 'Content-Type': 'application/x-protobuf', 'Content-Encoding': r.headers.get('content-encoding') || '', 'Cache-Control': 'public, max-age=86400, immutable' } });
+        } else {
+          // 204 (empty tile), 400 (out of bounds), etc — pass through as empty so MapLibre moves on
+          resp = new Response('', { status: r.status === 200 ? 200 : 204 });
+        }
+      }
+    } else if (path === '/basemap/hd/tiles.json') {
+      /* TileJSON for the MapTiler source, rewritten so tile URLs point at OUR proxy
+       * (not MapTiler directly), keeping the key server-side. */
+      resp = new Response(JSON.stringify({
+        tilejson: '2.2.0', scheme: 'xyz', minzoom: 0, maxzoom: 14,
+        tiles: [url.origin + '/basemap/hd/{z}/{x}/{y}.pbf'],
+        vector_layers: [] // MapLibre reads layers from the tiles; style references source-layers directly
+      }), { headers: { 'Content-Type': 'application/json', 'Cache-Control': 'public, max-age=3600' } });
     } else if (path === '/basemap/maplibre-worker.js') {
       /* MapLibre's tile-parsing Web Worker, self-hosted same-origin so it loads
        * under the strict CSP (blob: workers are blocked; 'self' workers are not).
@@ -398,16 +427,22 @@ async function _bmHandle(request, env, ctx) {
       if (!gm) resp = new Response('bad glyph', { status: 400 });
       else {
         const range = gm[2];
-        if (range !== '0-255') { resp = new Response('', { status: 204 }); }
+        /* v382: place labels (city/country names) need accented-Latin glyphs, so we
+         * now host ranges 0-255, 256-511 and 512-767 (covers all name:en values
+         * worldwide — é, ü, ș, ă, etc). Any OTHER requested range returns 204 so
+         * MapLibre falls back gracefully (e.g. CJK/Cyrillic ranges we don't ship;
+         * we use name:en in the label layers so those aren't needed). */
+        const HOSTED_RANGES = new Set(['0-255', '256-511', '512-767']);
+        if (!HOSTED_RANGES.has(range)) { resp = new Response('', { status: 204 }); }
         else {
           const stack = decodeURIComponent(gm[1]);
-          /* Single hosted font for cluster counts. Try a flat key first (simplest
-           * to upload to R2 — no folders or spaces, like the worker JS file), then
-           * fall back to folder-style keys. Any requested fontstack maps to this
-           * one file, so the style's font name doesn't have to match byte-for-byte. */
-          let obj = await env.BASEMAP.get('maplibre-glyphs-0-255.pbf');
-          if (!obj) obj = await env.BASEMAP.get('glyphs/' + stack + '/0-255.pbf');
-          if (!obj) obj = await env.BASEMAP.get('glyphs/Open Sans Regular/0-255.pbf');
+          /* Flat key first (simplest to upload to R2 — no folders/spaces), then
+           * fall back to folder-style keys. Any requested fontstack maps to the
+           * same hosted Open Sans Regular files, so the style's font name doesn't
+           * have to match byte-for-byte. */
+          let obj = await env.BASEMAP.get('maplibre-glyphs-' + range + '.pbf');
+          if (!obj) obj = await env.BASEMAP.get('glyphs/' + stack + '/' + range + '.pbf');
+          if (!obj) obj = await env.BASEMAP.get('glyphs/Open Sans Regular/' + range + '.pbf');
           if (!obj) resp = new Response('', { status: 204 });
           else resp = new Response(obj.body, { headers: { 'Content-Type': 'application/x-protobuf', 'Cache-Control': 'public, max-age=86400, immutable' } });
         }
