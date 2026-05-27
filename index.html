@@ -1471,6 +1471,10 @@ document.addEventListener('keydown', function(e){
   // ═══ ESCAPE — close the topmost open panel ═══
   if(e.key === 'Escape'){
     e.preventDefault();
+    // v459: a floating relay detail card (from a map-dot click) is the most transient
+    // overlay — close it first if open.
+    var rd = document.getElementById('relay-detail');
+    if(rd && rd.classList.contains('rd-floating') && rd.classList.contains('visible') && typeof closeRelayDetail === 'function'){ closeRelayDetail(); return; }
     // Priority order: AnyChat > Health > Relay Browser > Domains > Signals
     if(AC && AC.open && typeof toggleAnyChat === 'function'){ toggleAnyChat(); return; }
     var health = document.getElementById('health-panel');
@@ -5193,18 +5197,19 @@ body.light .rs-btn.active{background:rgba(0,180,255,.1);border-color:rgba(0,180,
 .rd-btn.copy:hover{background:rgba(0,245,255,.18);border-color:rgba(0,245,255,.5);box-shadow:0 0 16px rgba(0,245,255,.12);}
 .rd-btn.copy.copied{background:rgba(52,211,153,.12);color:var(--an-green,#34d399);border-color:rgba(52,211,153,.4);}
 #relay-detail.visible{display:block;}
-/* v456: when a relay DOT on the map is clicked, the detail card detaches from the
- * Relay Browser and floats as a standalone card (top-left, under the header) instead
- * of forcing the whole browser panel open. Same rich content, just repositioned. */
+/* v456/v458: when a relay DOT on the map is clicked, the detail card detaches from
+ * the Relay Browser and floats as a standalone card positioned next to the clicked
+ * dot (top/left set dynamically in selectRelay). Semi-transparent so the map shows
+ * through. */
 #relay-detail.rd-floating{
   position:fixed; top:64px; left:16px; z-index:1400;
-  width:300px; max-width:calc(100vw - 32px); max-height:calc(100vh - 96px); overflow-y:auto;
-  margin-top:0; background:rgba(4,16,24,.92);
-  border:1px solid rgba(0,245,255,.28); border-radius:12px;
-  box-shadow:0 12px 40px rgba(0,0,0,.5), 0 0 0 1px rgba(0,245,255,.05);
-  backdrop-filter:blur(18px); -webkit-backdrop-filter:blur(18px);
+  width:288px; max-width:calc(100vw - 24px); max-height:calc(100vh - 96px); overflow-y:auto;
+  margin-top:0; background:rgba(4,16,24,.72);
+  border:1px solid rgba(0,245,255,.32); border-radius:12px;
+  box-shadow:0 12px 40px rgba(0,0,0,.45), 0 0 0 1px rgba(0,245,255,.05);
+  backdrop-filter:blur(10px); -webkit-backdrop-filter:blur(10px);
 }
-body.light #relay-detail.rd-floating{ background:rgba(255,255,255,.94); border-color:rgba(0,100,160,.3); }
+body.light #relay-detail.rd-floating{ background:rgba(255,255,255,.82); border-color:rgba(0,100,160,.3); }
 .rd-title{font-family:'Orbitron',sans-serif;font-size:11px;color:var(--cyan);margin-bottom:8px;display:flex;align-items:center;justify-content:space-between;}
 .rd-row{display:flex;justify-content:space-between;align-items:center;padding:3px 0;border-bottom:1px solid rgba(0,245,255,.05);}
 .rd-row:last-child{border-bottom:none;}
@@ -7883,7 +7888,7 @@ input:focus-visible, textarea:focus-visible, select:focus-visible{
     <div class="rd-title" style="display:flex;align-items:center;gap:6px;">
       <span id="rd-nickname" style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">—</span>
       <span id="rd-status" style="font-size:9px;flex-shrink:0;"></span>
-      <button onclick="document.getElementById('relay-detail').classList.remove('visible'); document.getElementById('relay-detail').classList.remove('rd-floating'); window._currentDetailFp=null;" style="background:none;border:none;color:rgba(0,245,255,.45);cursor:pointer;font-size:16px;line-height:1;padding:2px 4px;flex-shrink:0;" title="Close">✕</button>
+      <button onclick="closeRelayDetail()" style="background:rgba(0,245,255,.08);border:1px solid rgba(0,245,255,.2);border-radius:6px;color:rgba(0,245,255,.8);cursor:pointer;font-size:15px;line-height:1;padding:3px 7px;flex-shrink:0;transition:all .15s;" onmouseover="this.style.background='rgba(255,80,80,.2)';this.style.borderColor='rgba(255,80,80,.5)';this.style.color='#ff6b6b';" onmouseout="this.style.background='rgba(0,245,255,.08)';this.style.borderColor='rgba(0,245,255,.2)';this.style.color='rgba(0,245,255,.8)';" title="Close (Esc)">✕</button>
     </div>
     <div class="rd-row"><span class="rd-key">Fingerprint</span><span class="rd-val" id="rd-fp" style="font-size:9px;font-family:monospace">—</span></div>
     <div class="rd-row"><span class="rd-key">IP Address</span><span class="rd-val" id="rd-ip">—</span></div>
@@ -11207,8 +11212,11 @@ function initMapLibre(zones){
           const fp = p.fp, coords = ev.features[0].geometry.coordinates;
           if (fp && typeof selectRelay === 'function') {
             /* v375: reuse the existing detail flow — flies to relay, opens relay
-             * browser panel, fetches live relay data into #relay-detail, updates URL. */
-            try { selectRelay(fp, (p.lat!=null?+p.lat:coords[1]), (p.lng!=null?+p.lng:coords[0]), true); return; } catch(_){}
+             * browser panel, fetches live relay data into #relay-detail, updates URL.
+             * v458: pass the click's screen pixel point so the floating card anchors
+             * next to the clicked dot instead of a fixed corner. */
+            try { window.__rdAnchor = ev.point ? {x:ev.point.x, y:ev.point.y} : null;
+                  selectRelay(fp, (p.lat!=null?+p.lat:coords[1]), (p.lng!=null?+p.lng:coords[0]), true); return; } catch(_){}
           }
           new maplibregl.Popup({offset:8}).setLngLat(coords)
             .setHTML('<b>'+(p.city||'Unknown')+'</b><br>'+p.tier+(p.hw==1?' · hardware':'')+(p.asn?'<br>'+p.asn:'')).addTo(map); });
@@ -22819,28 +22827,106 @@ function renderComparison(){
   </div>`;
 }
 
+/* v459: single source of truth for closing the relay detail card. Works whether the
+ * card is inline (in the Relay Browser) or floating (re-parented to body). Clears the
+ * auto-dismiss timer, removes the floating class, restores the card to its home parent
+ * so the next inline use isn't broken, clears the highlighted fp, and strips ?fp= from
+ * the URL. */
+function closeRelayDetail(){
+  var c = document.getElementById('relay-detail');
+  if(window.__rdAutoTimer){ clearTimeout(window.__rdAutoTimer); window.__rdAutoTimer = null; }
+  if(c){
+    c.classList.remove('visible');
+    c.classList.remove('rd-floating');
+    c.style.left = ''; c.style.top = '';
+    // restore into the Relay Browser at its original DOM position if we moved it to body
+    if(window.__rdHome && c.parentElement === document.body){
+      try {
+        if(window.__rdHome.next && window.__rdHome.next.parentElement === window.__rdHome.parent){
+          window.__rdHome.parent.insertBefore(c, window.__rdHome.next);
+        } else if(window.__rdHome.parent){
+          window.__rdHome.parent.appendChild(c);
+        }
+      } catch(_){}
+    }
+  }
+  window._currentDetailFp = null;
+  try {
+    var u = new URL(window.location.href);
+    if(u.searchParams.has('fp')){ u.searchParams.delete('fp'); history.replaceState(null,'',u.toString()); }
+  } catch(_){}
+}
+
 function selectRelay(fp, lat, lon, fromMap){
   /* v233: clicking the same relay again toggles the detail card closed. */
   var _card = document.getElementById('relay-detail');
   if(_card && _card.classList.contains('visible') && window._currentDetailFp === fp){
-    _card.classList.remove('visible');
-    _card.classList.remove('rd-floating');
-    window._currentDetailFp = null;
-    try {
-      var _u = new URL(window.location.href);
-      if(_u.searchParams.has('fp')){ _u.searchParams.delete('fp'); history.replaceState(null,'',_u.toString()); }
-    } catch(_){}
+    closeRelayDetail();
     return;
   }
   flyToRelay(lat, lon);
   /* v456 (Option B): a click on a relay DOT on the map shows the full detail as a
    * standalone floating card WITHOUT opening the Relay Browser list. A click on a
    * relay card inside the browser keeps the old inline behaviour. The map click
-   * handler passes fromMap=true. */
+   * handler passes fromMap=true.
+   * v457: #relay-detail lives inside #relay-panel (the Relay Browser). When the browser
+   * is hidden (display:none), its children don't render even with position:fixed — so a
+   * floating card trapped inside it was invisible (0x0). Fix: re-parent the card to
+   * document.body while floating, and restore it into the panel for inline use. We
+   * remember the original anchor so it goes back to the right spot. */
   if(fromMap){
-    if(_card){ _card.classList.add('rd-floating'); }
+    if(_card){
+      if(!window.__rdHome){ window.__rdHome = { parent: _card.parentElement, next: _card.nextElementSibling }; }
+      if(_card.parentElement !== document.body){ document.body.appendChild(_card); }
+      _card.classList.add('rd-floating');
+      /* v458: position the card next to the clicked dot (screen pixel point captured
+       * in window.__rdAnchor by the map click handler) instead of a fixed corner.
+       * Offset it slightly up-right of the dot, then clamp to stay fully on-screen.
+       * The card measures ~300px wide; height varies, so we measure after a tick. */
+      const anchor = window.__rdAnchor;
+      const place = () => {
+        const a = anchor || { x: 80, y: 120 };
+        const cw = _card.offsetWidth || 300;
+        const ch = _card.offsetHeight || 280;
+        const pad = 12, gap = 16;
+        let left = a.x + gap;                 // prefer right of the dot
+        if(left + cw > window.innerWidth - pad) left = a.x - cw - gap; // flip to left if off-screen
+        if(left < pad) left = pad;
+        let top = a.y - 20;                    // roughly align card top near the dot
+        if(top + ch > window.innerHeight - pad) top = window.innerHeight - ch - pad;
+        if(top < pad) top = pad;
+        _card.style.left = Math.round(left) + 'px';
+        _card.style.top  = Math.round(top)  + 'px';
+      };
+      place();
+      // re-place after content loads (height changes once data arrives)
+      setTimeout(place, 60); setTimeout(place, 400);
+      /* v459: auto-dismiss the floating card after 15s of being open. Clear any prior
+       * timer first so opening a new relay resets the countdown. The timer is also
+       * cleared on manual close (closeRelayDetail) and is cancelled while the operator
+       * hovers the card, so it won't vanish out from under them mid-read. */
+      if(window.__rdAutoTimer){ clearTimeout(window.__rdAutoTimer); }
+      const armAuto = () => { window.__rdAutoTimer = setTimeout(() => {
+        if(document.getElementById('relay-detail')?.classList.contains('rd-floating')) closeRelayDetail();
+      }, 15000); };
+      armAuto();
+      _card.onmouseenter = () => { if(window.__rdAutoTimer){ clearTimeout(window.__rdAutoTimer); window.__rdAutoTimer = null; } };
+      _card.onmouseleave = () => { if(_card.classList.contains('rd-floating')) armAuto(); };
+    }
   } else {
-    if(_card){ _card.classList.remove('rd-floating'); }
+    if(_card){
+      if(window.__rdAutoTimer){ clearTimeout(window.__rdAutoTimer); window.__rdAutoTimer = null; }
+      _card.classList.remove('rd-floating');
+      _card.style.left = ''; _card.style.top = '';
+      // restore into the Relay Browser at its original position if we moved it
+      if(window.__rdHome && _card.parentElement === document.body){
+        if(window.__rdHome.next && window.__rdHome.next.parentElement === window.__rdHome.parent){
+          window.__rdHome.parent.insertBefore(_card, window.__rdHome.next);
+        } else if(window.__rdHome.parent){
+          window.__rdHome.parent.appendChild(_card);
+        }
+      }
+    }
     const panel = document.getElementById('relay-panel');
     if(panel && panel.style.display === 'none') openRelayBrowser();
   }
@@ -22933,8 +23019,9 @@ async function fetchRelayDetail(fp){
     : '<span style="color:#ff6b35;font-size:10px">&#9675; ' + _i18t('rdOffline','OFFLINE') + '</span>';
 
   card.innerHTML = `
-    <div class="rd-title">
-      <span>${_aoEscHtml(nickname||'—')}</span>${dot}
+    <div class="rd-title" style="display:flex;align-items:center;gap:6px;">
+      <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${_aoEscHtml(nickname||'—')}</span>${dot}
+      <button onclick="closeRelayDetail()" aria-label="Close" title="Close (Esc)" style="background:rgba(0,245,255,.08);border:1px solid rgba(0,245,255,.25);border-radius:6px;color:rgba(0,245,255,.85);cursor:pointer;font-size:14px;line-height:1;padding:3px 7px;flex-shrink:0;transition:all .15s;" onmouseover="this.style.background='rgba(255,80,80,.22)';this.style.borderColor='rgba(255,80,80,.55)';this.style.color='#ff6b6b';" onmouseout="this.style.background='rgba(0,245,255,.08)';this.style.borderColor='rgba(0,245,255,.25)';this.style.color='rgba(0,245,255,.85)';">✕</button>
     </div>
     <div class="rd-row"><span class="rd-key">${_i18t('rdLocation','Location')}</span><span class="rd-val">${flag} ${loc||'—'}</span></div>
     <div class="rd-row"><span class="rd-key">${_i18t('rdIsp','ISP')}</span><span class="rd-val rd-isp">${isp||'—'}</span></div>
@@ -22997,13 +23084,8 @@ async function fetchRelayDetail(fp){
       /* On a zone marker (clicking another node): ignore */
       if(t.closest && t.closest('#nodes')) return;
       /* Otherwise: close the detail card. */
-      card.classList.remove('visible');
-      card.classList.remove('rd-floating');
-      window._currentDetailFp = null;
-      try {
-        var url = new URL(window.location.href);
-        if(url.searchParams.has('fp')){ url.searchParams.delete('fp'); history.replaceState(null,'',url.toString()); }
-      } catch(_){}
+      if(typeof closeRelayDetail === 'function'){ closeRelayDetail(); }
+      else { card.classList.remove('visible'); card.classList.remove('rd-floating'); window._currentDetailFp = null; }
     }, true);
   }
   if(document.readyState === 'loading') document.addEventListener('DOMContentLoaded', wire);
@@ -23082,8 +23164,9 @@ function renderRelayCard(card, d, fp){
     const loc  = [mapRec.cityName||mapRec.regionName||'', mapRec.countryName||''].filter(Boolean).join(', ') || '—';
     const isp  = mapRec.asName || '—';
     card.innerHTML = `
-      <div class="rd-title">
-        <span>${_i18t('rdUnregistered','Unregistered Relay')}</span>${dot}
+      <div class="rd-title" style="display:flex;align-items:center;gap:6px;">
+        <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${_i18t('rdUnregistered','Unregistered Relay')}</span>${dot}
+        <button onclick="closeRelayDetail()" aria-label="Close" title="Close (Esc)" style="background:rgba(0,245,255,.08);border:1px solid rgba(0,245,255,.25);border-radius:6px;color:rgba(0,245,255,.85);cursor:pointer;font-size:14px;line-height:1;padding:3px 7px;flex-shrink:0;transition:all .15s;" onmouseover="this.style.background='rgba(255,80,80,.22)';this.style.borderColor='rgba(255,80,80,.55)';this.style.color='#ff6b6b';" onmouseout="this.style.background='rgba(0,245,255,.08)';this.style.borderColor='rgba(0,245,255,.25)';this.style.color='rgba(0,245,255,.85)';">✕</button>
       </div>
       <div class="rd-row"><span class="rd-key">${_i18t('rdFingerprint','Fingerprint')}</span>
         <span class="rd-val" style="font-size:9px;font-family:monospace" title="${fp}">${fp.slice(0,10)}&hellip;${fp.slice(-6)}</span></div>
@@ -23166,8 +23249,9 @@ function renderRelayCard(card, d, fp){
   const flag2 = isoToFlag(d.country_iso || '');  // re-compute flag after merge
 
   card.innerHTML = `
-    <div class="rd-title">
-      <span>${_aoEscHtml(d.nickname||'—')}</span>${dot}
+    <div class="rd-title" style="display:flex;align-items:center;gap:6px;">
+      <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${_aoEscHtml(d.nickname||'—')}</span>${dot}
+      <button onclick="closeRelayDetail()" aria-label="Close" title="Close (Esc)" style="background:rgba(0,245,255,.08);border:1px solid rgba(0,245,255,.25);border-radius:6px;color:rgba(0,245,255,.85);cursor:pointer;font-size:14px;line-height:1;padding:3px 7px;flex-shrink:0;transition:all .15s;" onmouseover="this.style.background='rgba(255,80,80,.22)';this.style.borderColor='rgba(255,80,80,.55)';this.style.color='#ff6b6b';" onmouseout="this.style.background='rgba(0,245,255,.08)';this.style.borderColor='rgba(0,245,255,.25)';this.style.color='rgba(0,245,255,.85)';">✕</button>
     </div>
     <div class="rd-row">
       <span class="rd-key">${_i18t('rdLocation','Location')}</span>
