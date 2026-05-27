@@ -10782,11 +10782,14 @@ function initMapLibre(zones){
       host.style.cssText='position:absolute;inset:0;z-index:5;'; wrap.appendChild(host); }
 
     const map = new maplibregl.Map({ container: host, style: '/basemap/style.json',
-      /* v452 (issue 8): open more zoomed-in than the old far-out world (z1.6). z2.5
-       * centered at [ -25, 38 ] frames the North-Atlantic so both the US east coast and
-       * Europe — where relay density is highest — are visible on load, instead of a tiny
-       * world. Still global enough to read the whole network. */
-      center:[-25,38], zoom:2.5, maxZoom:15, attributionControl:{compact:true} });
+      /* v465: open centered lower so the whole network — including the southern points —
+       * is visible on load. center [-20,15] zoom 2.0 fits Argentina (~-34,-64) and Zambia
+       * /South Africa (~-13 to -26, 28) along with the dense northern hubs (Europe up to
+       * lat 65) and the US east coast. This also ensures ALL Signal hub arcs, including the
+       * Johannesburg hub at -26, are on-screen when Signals is toggled on. Verified live:
+       * Argentina, Zambia, the S.Africa hub, north-Europe hubs and US-east all sit well
+       * within the viewport (11-77% vertically) at this center/zoom. */
+      center:[-20,15], zoom:2.0, maxZoom:15, attributionControl:{compact:true} });
     window.__anyoneMapLibre = map;
     map.addControl(new maplibregl.NavigationControl({showCompass:false}), 'bottom-right');
 
@@ -11174,6 +11177,111 @@ function initMapLibre(zones){
             startFiring();
           }
         });
+      })();
+
+      /* v462: FOUNDATION / ANYCHAT BEACON — port of the old D3 drawFoundationBeacon().
+       * A fixed, pulsing teal hexagon marker at the Anyone Foundation location in the
+       * Dominican Republic (lon -70.1627, lat 18.7357), branded "AnyChat" with an amber
+       * "Enter AnyChat" CTA; clicking it opens AnyChat. On the D3 map this drew on the
+       * SVG; here we use a maplibregl.Marker with a custom HTML element so it tracks the
+       * geo position automatically on pan/zoom. Built once. */
+      (function(){
+        if(window.__mlFoundationBeacon) return;
+        const DR = [-70.1627, 18.7357];
+        const el = document.createElement('div');
+        el.id = 'ml-foundation-beacon';
+        /* v463: the element MUST have real dimensions. v462 used width:0;height:0 with
+         * position:absolute children at top:50% — with a zero-size positioned parent the
+         * percentages resolved against the wrong containing block and the hexagon rendered
+         * ~800px below the map (off-screen). Now the element is a fixed 1px box and every
+         * child is centered/offset relative to that 1px origin, which MapLibre centers on
+         * the DR coordinate via the marker's own transform. */
+        el.style.cssText = 'position:relative;width:1px;height:1px;cursor:pointer;overflow:visible;';
+        el.innerHTML = `
+          <style>
+            #ml-foundation-beacon > *{position:absolute;left:0;top:0;}
+            #ml-foundation-beacon .fbm-aura{border-radius:50%;
+              background:radial-gradient(circle, rgba(45,212,191,.28) 0%, rgba(45,212,191,0) 70%);
+              pointer-events:none;animation:fbmAura 3s ease-in-out infinite;}
+            #ml-foundation-beacon .fbm-aura.a1{width:64px;height:64px;margin-left:-32px;margin-top:-32px;}
+            #ml-foundation-beacon .fbm-aura.a2{width:96px;height:96px;margin-left:-48px;margin-top:-48px;animation-delay:.8s;opacity:.5;}
+            @keyframes fbmAura{0%,100%{opacity:.35;transform:scale(.85);}50%{opacity:.6;transform:scale(1.12);}}
+            #ml-foundation-beacon .fbm-hex{width:26px;height:26px;margin-left:-13px;margin-top:-13px;
+              animation:fbmBreathe 3s ease-in-out infinite;pointer-events:auto;}
+            @keyframes fbmBreathe{0%,100%{transform:scale(1);filter:drop-shadow(0 0 6px rgba(45,212,191,.45));}
+              50%{transform:scale(1.15);filter:drop-shadow(0 0 14px rgba(45,212,191,.75));}}
+            #ml-foundation-beacon:hover .fbm-hex{filter:drop-shadow(0 0 20px rgba(45,212,191,.95));}
+            #ml-foundation-beacon .fbm-label{top:16px;left:50%;transform:translateX(-50%);
+              font-family:'Orbitron',sans-serif;font-size:9px;font-weight:700;color:#2dd4bf;letter-spacing:1px;
+              white-space:nowrap;text-shadow:0 0 8px rgba(45,212,191,.8);pointer-events:auto;}
+            #ml-foundation-beacon .fbm-cta{top:30px;left:50%;transform:translateX(-50%);
+              font-size:8px;font-weight:700;color:#fbbf24;white-space:nowrap;pointer-events:auto;}
+            #ml-foundation-beacon .fbm-particle{width:3px;height:3px;border-radius:50%;margin-left:-1.5px;margin-top:-1.5px;
+              pointer-events:none;animation:fbmParticle 2.5s ease-out forwards;}
+            @keyframes fbmParticle{0%{opacity:.8;transform:translate(0,0) scale(1);}80%{opacity:.3;}
+              100%{opacity:0;transform:translate(var(--dx,40px),var(--dy,-30px)) scale(.3);}}
+          </style>
+          <div class="fbm-aura a1"></div>
+          <div class="fbm-aura a2"></div>
+          <svg class="fbm-hex" width="26" height="26" viewBox="-13 -13 26 26" aria-label="AnyChat beacon">
+            <path d="M9.526,-5.5L0,-11L-9.526,-5.5L-9.526,5.5L0,11L9.526,5.5Z" fill="rgba(45,212,191,.12)" stroke="#2dd4bf" stroke-width="1.8"/>
+            <path d="M5.196,-3L0,-6L-5.196,-3L-5.196,3L0,6L5.196,3Z" fill="none" stroke="rgba(45,212,191,.3)" stroke-width="0.8"/>
+            <circle r="2.5" fill="#2dd4bf"/>
+          </svg>
+          <div class="fbm-label">AnyChat</div>
+          <div class="fbm-cta">▸ Enter AnyChat ◂</div>`;
+        const open = (e)=>{ e.stopPropagation(); try{ if(typeof toggleAnyChat==='function') toggleAnyChat(); }catch(_){} };
+        el.addEventListener('click', open);
+        /* v464: hover tooltip removed — the "AnyChat / Click to enter AnyChat" text is
+         * already shown at the bottom of the screen, so the floating tooltip was redundant. */
+        try {
+          window.__mlFoundationBeacon = new maplibregl.Marker({ element: el, anchor:'center' })
+            .setLngLat(DR).addTo(map);
+          /* v463: an app-wide CSS rule left the marker wrapper's top/left as `auto`, so it
+           * sat at its static document-flow position (~737px, the canvas height, below the
+           * map) and the geo transform then offset from THERE — rendering the beacon far
+           * below the visible map. Fix: force position:absolute; top:0; left:0 on whichever
+           * element carries the .maplibregl-marker class (that's where MapLibre puts the
+           * translate transform), so the transform is measured from the map's top-left. */
+          const _fix = (n) => { if(n){ n.style.setProperty('position','absolute','important'); n.style.setProperty('top','0','important'); n.style.setProperty('left','0','important'); } };
+          const _me = window.__mlFoundationBeacon.getElement();
+          // the marker-class node is either the element itself or its parent
+          let _mk = _me;
+          if(_me && !(_me.classList && _me.classList.contains('maplibregl-marker'))){
+            _mk = _me.closest ? (_me.closest('.maplibregl-marker') || _me.parentElement) : _me.parentElement;
+          }
+          _fix(_mk);
+          /* v464: particle dispersal — port of the old map's fbParticle emit. Every ~3s,
+           * spawn 3-5 small teal/green dots at the beacon center that drift outward at a
+           * random angle (40-120px) and fade over 2.5s, then are removed. Paused when the
+           * tab is hidden. Particles are appended into the beacon element so they ride the
+           * marker's geo transform and sit at the beacon origin. */
+          (function(){
+            const host = el;
+            const emit = () => {
+              if(document.hidden) return;
+              if(!document.getElementById('ml-foundation-beacon')) { clearInterval(window.__fbmParticleTimer); return; }
+              const count = 3 + Math.floor(Math.random()*3);
+              for(let p=0;p<count;p++){
+                const ang = Math.random()*Math.PI*2;
+                const dist = 40 + Math.random()*80;
+                const dot = document.createElement('div');
+                dot.className = 'fbm-particle';
+                const sz = (1.2 + Math.random()*1.3)*2;
+                dot.style.width = sz+'px'; dot.style.height = sz+'px';
+                dot.style.marginLeft = (-sz/2)+'px'; dot.style.marginTop = (-sz/2)+'px';
+                dot.style.background = Math.random() > 0.3 ? '#2dd4bf' : '#34d399';
+                dot.style.setProperty('--dx', (Math.cos(ang)*dist)+'px');
+                dot.style.setProperty('--dy', (Math.sin(ang)*dist)+'px');
+                host.appendChild(dot);
+                setTimeout(()=>{ try{ dot.remove(); }catch(_){} }, 2600);
+              }
+            };
+            if(window.__fbmParticleTimer) clearInterval(window.__fbmParticleTimer);
+            window.__fbmParticleTimer = setInterval(emit, 3000);
+            emit();
+          })();
+        } catch(e){ console.warn('[maplibre] foundation beacon failed:', e && e.message); }
       })();
       /* v378: hardware relays rendered as DIAMONDS (parity with the D3 map, where
        * HW = diamond). MapLibre circle layers can't draw diamonds, so we draw an
@@ -30614,6 +30722,34 @@ if(AC.minimized)AC._minUnread=(AC._minUnread||0)+1;return _origAdd.apply(this,ar
 <script>/* v370: Extend timezone band from 12 to 15 cells. *//* *//* Adds HNL (Pacific), MEX (Latin America), JNB (Africa) at their natural *//* slots by UTC offset. Original v364 mirrored from SVG #tz-strip which *//* has hard-coded 12 cities with longitude-projected x positions. Rather *//* than modify the SVG (which encodes geographic data), v370 takes over *//* the HTML band rendering: stops v364's poll, writes 15 cells directly *//* via Intl.DateTimeFormat (DST-aware), and refreshes every 30 seconds. */(function(){if(window.__v370Init)return;window.__v370Init=true;var ZONES=[{city:'HNL',tz:'Pacific/Honolulu'},{city:'ANC',tz:'America/Anchorage'},{city:'LAX',tz:'America/Los_Angeles'},{city:'MEX',tz:'America/Mexico_City'},{city:'JFK',tz:'America/New_York'},{city:'GRU',tz:'America/Sao_Paulo'},{city:'SCL',tz:'America/Santiago'},{city:'LHR',tz:'Europe/London'},{city:'LAG',tz:'Africa/Lagos'},{city:'CDG',tz:'Europe/Paris'},{city:'FRA',tz:'Europe/Berlin'},{city:'CAI',tz:'Africa/Cairo'},{city:'JNB',tz:'Africa/Johannesburg'},{city:'MOW',tz:'Europe/Moscow'},{city:'DXB',tz:'Asia/Dubai'},{city:'BOM',tz:'Asia/Kolkata'},{city:'SIN',tz:'Asia/Singapore'},{city:'KUL',tz:'Asia/Kuala_Lumpur'},{city:'HKG',tz:'Asia/Hong_Kong'},{city:'NRT',tz:'Asia/Tokyo'},{city:'SYD',tz:'Australia/Sydney'},{city:'AKL',tz:'Pacific/Auckland'}];function fmtTime(tz){try{return new Intl.DateTimeFormat('en-GB',{hour:'2-digit',minute:'2-digit',hour12:false,timeZone:tz}).format(new Date());}catch(e){return'--:--';}}function buildCell(z){var cell=document.createElement('div');cell.className='tz-cell';cell.setAttribute('data-tz',z.tz);cell.style.cssText='flex:1;min-width:0;display:flex;flex-direction:row;gap:6px;align-items:baseline;justify-content:center;font-size:9px;letter-spacing:0.1em;';var c=document.createElement('span');c.className='tz-city';c.style.cssText='color:rgba(45,212,191,1);font-weight:700;font-size:11px;';c.textContent=z.city;var t=document.createElement('span');t.className='tz-time';t.style.cssText='color:rgba(228,228,233,0.85);font-weight:600;font-size:10px;';t.textContent=fmtTime(z.tz);cell.appendChild(c);cell.appendChild(t);return cell;}function rebuild(){var band=document.getElementById('tz-html-band');if(!band)return false;band.innerHTML='';for(var i=0;i<ZONES.length;i++)band.appendChild(buildCell(ZONES[i]));return true;}function refreshTimes(){var cells=document.querySelectorAll('#tz-html-band .tz-cell');if(cells.length!==ZONES.length){rebuild();return;}for(var i=0;i<cells.length;i++){var t=cells[i].querySelector('.tz-time');if(t)t.textContent=fmtTime(ZONES[i].tz);}}function takeover(){if(!document.getElementById('tz-html-band'))return false;if(!rebuild())return false;if(window.__v364PollHandle){clearInterval(window.__v364PollHandle);window.__v364PollHandle=null;}return true;}function init(){var ok=takeover();if(!ok){setTimeout(init,250);return;}if(window.__v370PollHandle)clearInterval(window.__v370PollHandle);window.__v370PollHandle=setInterval(function(){if(!document.getElementById('tz-html-band'))return;if(document.querySelectorAll('#tz-html-band .tz-cell').length!==ZONES.length){rebuild();return;}refreshTimes();},30000);}if(document.readyState==='loading'){document.addEventListener('DOMContentLoaded',function(){setTimeout(init,500);});}else{setTimeout(init,500);}})();</script>
 <script>/* v371: Fix v370 race condition that broke the timezone band entirely. *//* *//* v370 bug: takeover() cleared window.__v364PollHandle BEFORE checking *//* if the band existed. When v370 ran before v364 had created the band *//* (which was the typical timing on production), v370 killed v364's poll *//* then found no band to populate. v364's polling interval was the only *//* thing that would have created the band — so the band never appeared. *//* Result on prod: timezone strip area was completely empty. *//* *//* Fix: in v370's takeover(), only clear v364's poll AFTER successfully *//* rebuilding the band. If the band doesn't exist yet, return false and *//* let v370's setTimeout(init, 250) retry loop run. Each retry checks *//* for the band first; when v364's poll has finally created it, v370 *//* takes over and replaces v364's 12 cells with v370's 15. *//* *//* Verified live: manually creating the band element causes v370's *//* existing 30s poll to populate all 15 cells within ~30s. With the *//* fix here, v370 picks up the band v364 created without killing v364 *//* prematurely. */(function(){if(window.__v371Init)return;window.__v371Init=true;})();</script>
 <script>/* v372: Swap staging API to production for DOMAIN_API. *//* *//* Discovered in v371 audit: DOMAIN_API was pointed at *//* api-stage.ec.anyone.tech instead of api.ec.anyone.tech. The other two *//* endpoints (fingerprint-map, relays/) already used prod. Three fetches *//* per page session went to staging in production. *//* *//* Verified before shipping: both endpoints return HTTP 200 from the *//* Cloudflare Worker origin; prod returns the same 1,615-domain array *//* shape that the DOMAINS panel displays. Substitution is data-equivalent *//* with no risk to the panel's behavior. *//* *//* This IIFE is a deployment marker only — the actual fix is a static *//* string change to the DOMAIN_API constant earlier in the source. */(function(){if(window.__v372Init)return;window.__v372Init=true;})();</script>
+<script>/* v466: REMOVE the timezone strip entirely (per request). The strip was an HTML
+   band (#tz-html-band) of world-city clocks across the top of the map, plus a hidden
+   SVG source (#tz-strip), maintained by the v364/v370 IIFEs on update timers. We stop
+   those timers, remove both elements, and reclaim the 26px the band reserved at the top
+   of the map (#map-wrap was pushed to top:78px for it; back to 52px now). Also re-pin the
+   Signals popup (#sig-counts) up to top:56px since it was anchored below the band. */
+(function(){
+  if(window.__v466Init) return; window.__v466Init = true;
+  function nuke(){
+    try { if(window.__v364PollHandle){ clearInterval(window.__v364PollHandle); window.__v364PollHandle=null; } } catch(_){}
+    try { if(window.__v370PollHandle){ clearInterval(window.__v370PollHandle); window.__v370PollHandle=null; } } catch(_){}
+    var band = document.getElementById('tz-html-band'); if(band) band.remove();
+    var svg = document.getElementById('tz-strip'); if(svg) svg.remove();
+  }
+  // CSS: keep them gone even if a stray timer recreates one, reclaim the top gap,
+  // and move the signals popup back under the header.
+  var s = document.createElement('style'); s.setAttribute('data-v466','tz-removed');
+  s.textContent = '#tz-html-band,#tz-strip{display:none !important;}'
+    + '#map-wrap{top:52px !important;}'
+    + '#sig-counts{top:56px !important;}';
+  (document.head||document.documentElement).appendChild(s);
+  // run now + a few times to catch the band if a late timer recreates it before our
+  // timer-clears land, then stop.
+  nuke();
+  var n=0, iv=setInterval(function(){ nuke(); if(++n>10) clearInterval(iv); }, 500);
+  if(document.readyState==='loading') document.addEventListener('DOMContentLoaded', nuke);
+})();</script>
+
 </body>
 </html><!-- ══ MOBILE BOTTOM NAV ══ -->
 <div id="mobile-nav">
