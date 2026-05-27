@@ -34,7 +34,7 @@
  * on next page navigation, which deletes the old cache (the activate
  * handler filters keys !== CACHE) and re-precaches STATIC against the
  * current worker. Bump per release. */
-const WORKER_VERSION = 'v444';
+const WORKER_VERSION = 'v456';
 
 /* v410: shared cross-worker KV schema. Inlined at build time from kv-schema.js
  * (single source of truth). Exposes _kvSchema.validate(obj, schema, opts) and
@@ -131,7 +131,7 @@ async function _bmGetTile(env, z, x, y) {
 }
 
 // main basemap router — returns a Response, or null if not a /basemap/ path
-const _BM_CACHE_VER = 'v6';  // bump to invalidate all edge-cached basemap responses (v6: clear stale glyph 204s cached before the 256-511/512-767 ranges were uploaded to R2)
+const _BM_CACHE_VER = 'v8';  // bump to invalidate all edge-cached basemap responses (v8: force a brand-new internal cache key so the stale immutable-cached maplibre-worker.js entry can't be served; route now uses max-age=300, no immutable)
 async function _bmHandle(request, env, ctx) {
   const url = new URL(request.url);
   const path = url.pathname;
@@ -141,8 +141,15 @@ async function _bmHandle(request, env, ctx) {
    * bumping the version sidesteps stale entries (e.g. the gzip-encoded tiles
    * cached before the raw-MVT fix) without needing a manual dashboard purge. */
   const cacheKey = new Request(url.origin + '/__bmcache/' + _BM_CACHE_VER + path, request);
-  const hit = await cache.match(cacheKey);
-  if (hit) return hit;
+  /* v449: the maplibre-worker.js script must NOT be served from the internal edge
+   * cache — a stale (streamed, hang-prone) copy got pinned there and kept blocking
+   * the map load. Always run the route fresh for it (it's tiny + buffered now), and
+   * skip writing it back to the internal cache below. */
+  const _isWorkerScript = (path === '/basemap/maplibre-worker.js');
+  if (!_isWorkerScript) {
+    const hit = await cache.match(cacheKey);
+    if (hit) return hit;
+  }
   let resp;
   try {
     if (path === '/basemap/style.json') {
@@ -194,10 +201,30 @@ async function _bmHandle(request, env, ctx) {
     } else if (path === '/basemap/maplibre-worker.js') {
       /* MapLibre's tile-parsing Web Worker, self-hosted same-origin so it loads
        * under the strict CSP (blob: workers are blocked; 'self' workers are not).
-       * The file maplibre-gl-csp-worker.js is stored in R2 alongside the tiles. */
+       * The file maplibre-gl-csp-worker.js is stored in R2 alongside the tiles.
+       * v394: BUFFER the body fully (arrayBuffer) instead of streaming obj.body.
+       * Streaming the R2 ReadableStream and then resp.clone()-ing it for the edge
+       * cache tees one upstream stream into two consumers; if R2 stalls mid-stream
+       * the client response hangs in "pending" forever — which blocked MapLibre's
+       * load event entirely (no relay layers, blank map) intermittently. A fully
+       * buffered ArrayBuffer response can't stall mid-transfer and caches cleanly.
+       * This script is small + static, so buffering is cheap. */
       const obj = await env.BASEMAP.get('maplibre-gl-csp-worker.js');
       if (!obj) resp = new Response('no worker', { status: 404 });
-      else resp = new Response(obj.body, { headers: { 'Content-Type': 'text/javascript; charset=utf-8', 'Cache-Control': 'public, max-age=86400, immutable' } });
+      else {
+        const buf = await obj.arrayBuffer();
+        /* v448: short max-age (5min) instead of immutable/24h. The worker script is
+         * tiny and rarely changes, but the previous immutable header let Cloudflare's
+         * CDN pin a stale (hang-prone) copy for 24h, masking the buffered fix. A short
+         * TTL means any future change propagates in minutes. The client also versions
+         * the URL (?wv=) for instant cache-busting on known changes. */
+        /* v449: no-store so neither Cloudflare's CDN nor the internal edge cache pins
+         * this response. The earlier immutable/long-max-age headers let the CDN keep a
+         * stale streamed (hang-prone) copy for hours, masking the buffered fix. The
+         * script is tiny (~340KB) and the client versions the URL (?wv=), so serving it
+         * fresh from R2 each time is cheap and guarantees correctness. */
+        resp = new Response(buf, { headers: { 'Content-Type': 'text/javascript; charset=utf-8', 'Cache-Control': 'no-store', 'Content-Length': String(buf.byteLength) } });
+      }
     } else if (path.startsWith('/basemap/glyphs/')) {
       /* Glyph PBFs for symbol-layer text (cluster count labels). MapLibre requests
        * /basemap/glyphs/{fontstack}/{range}.pbf. We host Open Sans Regular ranges
@@ -230,7 +257,7 @@ async function _bmHandle(request, env, ctx) {
       }
     } else resp = new Response('not found', { status: 404 });
   } catch (e) { resp = new Response('basemap error: ' + e.message, { status: 500 }); }
-  if (resp.ok && request.method === 'GET') ctx.waitUntil(cache.put(cacheKey, resp.clone()));
+  if (resp.ok && request.method === 'GET' && !_isWorkerScript) ctx.waitUntil(cache.put(cacheKey, resp.clone()));
   return resp;
 }
 /* ===== END BASEMAP SERVING ===== */
@@ -694,7 +721,7 @@ if (_path === "/design-tokens.css") {
 
 
 
-const html = "__INDEX_HTML_PLACEHOLDER__"; /* v300/v392: HTML-attribute escape for the meta tags. v300 added this because clientIP (then injected as ac-client-ip) fell back to client-controlled X-Forwarded-For, which would let an attacker break out of the attribute. v392 removed the IP meta tag entirely (see _ipMeta comment below) so the original threat is gone, but the escape stays for defense-in-depth on cfCountry/isTor: they're Cloudflare-trusted today, but a future code change that derives them differently shouldn't be able to silently introduce an XSS. Cheap insurance. */ const _attrEsc = function(s){ return String(s == null ? '' : s).replace(/[&<>"']/g, function(c){ return ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' })[c]; }); }; /* v392: ac-client-ip meta tag removed. Echoing the client's IP back into the HTML body was a privacy regression: it bled into intermediate proxies, defeated edge caching (Vary: CF-Connecting-IP was never set), and exposed the IP to any script running on the page including third-party CDN-loaded libraries. The only client-side consumer was the abuse-report POST body, which is unnecessary — the receiving worker (anyclip-proxy/api/chat-abuse-report) already knows the reporter's IP from its own CF-Connecting-IP header. Server-side enrichment is both more correct (client can't spoof it) and more private (never enters HTML). country and isTor stay: country is a coarse signal the server already sends in many headers, and isTor is a derived boolean — neither uniquely identifies a user. */ const _ipMeta = `<meta name="ac-client-country" content="${_attrEsc(cfCountry)}"><meta name="ac-is-tor" content="${_attrEsc(isTor)}">`; const _html = html.replace("</head>", _ipMeta + "</head>"); return new Response(_html, { headers: { "Content-Type": "text/html; charset=utf-8", /* v391: dedup'd headers object. v300 fixed duplicate Content-Security-Policy (last-key-wins silently dropped the strict allowlist); the same pattern had silently regressed on FIVE other keys. Cache-Control had no-store vs no-cache,no-store,must-revalidate (same intent, kept the stricter). X-Frame-Options, X-Content-Type-Options, Referrer-Policy were duplicates with identical values (harmless but noise). Permissions-Policy was the dangerous one: an early entry granted microphone=(self) for the Operators Lounge voice-message feature; a later entry "camera=(), microphone=(), geolocation=(), payment=()" REVOKED mic. Last-key-wins meant voice-record was silently broken in-browser despite the mic-grant being right there in source. Merged into one policy: mic granted to self, everything else explicitly empty. Add a lint rule for duplicate object keys before this happens a third time. */ "Permissions-Policy": "microphone=(self), camera=(), geolocation=(), payment=()", "X-Content-Type-Options": "nosniff", "X-Frame-Options": "DENY", "Referrer-Policy": "strict-origin-when-cross-origin", "Content-Security-Policy": "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdnjs.cloudflare.com https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; connect-src 'self' https://*.anyone.tech https://*.partykit.dev wss://*.partykit.dev https://api.allorigins.win https://corsproxy.io https://cdn.jsdelivr.net https://anyclip-proxy.anyonerelaysmap.workers.dev https://api.pinata.cloud https://*.mypinata.cloud https://*.ably.io wss://*.ably.io https://fonts.googleapis.com https://fonts.gstatic.com; img-src 'self' data: blob: https:; media-src 'self' blob:; font-src 'self' https://fonts.gstatic.com; frame-ancestors 'none'; base-uri 'self'; form-action 'self';", "Cache-Control": "no-cache, no-store, must-revalidate" } }); } ,
+const html = "__INDEX_HTML_PLACEHOLDER__"; /* v300/v392: HTML-attribute escape for the meta tags. v300 added this because clientIP (then injected as ac-client-ip) fell back to client-controlled X-Forwarded-For, which would let an attacker break out of the attribute. v392 removed the IP meta tag entirely (see _ipMeta comment below) so the original threat is gone, but the escape stays for defense-in-depth on cfCountry/isTor: they're Cloudflare-trusted today, but a future code change that derives them differently shouldn't be able to silently introduce an XSS. Cheap insurance. */ const _attrEsc = function(s){ return String(s == null ? '' : s).replace(/[&<>"']/g, function(c){ return ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' })[c]; }); }; /* v392: ac-client-ip meta tag removed. Echoing the client's IP back into the HTML body was a privacy regression: it bled into intermediate proxies, defeated edge caching (Vary: CF-Connecting-IP was never set), and exposed the IP to any script running on the page including third-party CDN-loaded libraries. The only client-side consumer was the abuse-report POST body, which is unnecessary — the receiving worker (anyclip-proxy/api/chat-abuse-report) already knows the reporter's IP from its own CF-Connecting-IP header. Server-side enrichment is both more correct (client can't spoof it) and more private (never enters HTML). country and isTor stay: country is a coarse signal the server already sends in many headers, and isTor is a derived boolean — neither uniquely identifies a user. */ const _ipMeta = `<meta name="ac-client-country" content="${_attrEsc(cfCountry)}"><meta name="ac-is-tor" content="${_attrEsc(isTor)}">`; const _html = html.replace("</head>", _ipMeta + "</head>"); return new Response(_html, { headers: { "Content-Type": "text/html; charset=utf-8", /* v391: dedup'd headers object. v300 fixed duplicate Content-Security-Policy (last-key-wins silently dropped the strict allowlist); the same pattern had silently regressed on FIVE other keys. Cache-Control had no-store vs no-cache,no-store,must-revalidate (same intent, kept the stricter). X-Frame-Options, X-Content-Type-Options, Referrer-Policy were duplicates with identical values (harmless but noise). Permissions-Policy was the dangerous one: an early entry granted microphone=(self) for the Operators Lounge voice-message feature; a later entry "camera=(), microphone=(), geolocation=(), payment=()" REVOKED mic. Last-key-wins meant voice-record was silently broken in-browser despite the mic-grant being right there in source. Merged into one policy: mic granted to self, everything else explicitly empty. Add a lint rule for duplicate object keys before this happens a third time. */ "Permissions-Policy": "microphone=(self), camera=(), geolocation=(), payment=()", "X-Content-Type-Options": "nosniff", "X-Frame-Options": "DENY", "Referrer-Policy": "strict-origin-when-cross-origin", "Content-Security-Policy": "default-src 'self'; worker-src 'self' blob:; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdnjs.cloudflare.com https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; connect-src 'self' https://*.anyone.tech https://*.partykit.dev wss://*.partykit.dev https://api.allorigins.win https://corsproxy.io https://cdn.jsdelivr.net https://anyclip-proxy.anyonerelaysmap.workers.dev https://api.pinata.cloud https://*.mypinata.cloud https://*.ably.io wss://*.ably.io https://fonts.googleapis.com https://fonts.gstatic.com; img-src 'self' data: blob: https:; media-src 'self' blob:; font-src 'self' https://fonts.gstatic.com; frame-ancestors 'none'; base-uri 'self'; form-action 'self';", "Cache-Control": "no-cache, no-store, must-revalidate" } }); } ,
 
   /* v377: cron-triggered job that pulls a fresh bitnodes.io snapshot once a day
    * and stores it in KV. Requires a cron trigger in wrangler.toml/jsonc:
