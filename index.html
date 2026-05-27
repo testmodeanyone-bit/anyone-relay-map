@@ -5193,6 +5193,18 @@ body.light .rs-btn.active{background:rgba(0,180,255,.1);border-color:rgba(0,180,
 .rd-btn.copy:hover{background:rgba(0,245,255,.18);border-color:rgba(0,245,255,.5);box-shadow:0 0 16px rgba(0,245,255,.12);}
 .rd-btn.copy.copied{background:rgba(52,211,153,.12);color:var(--an-green,#34d399);border-color:rgba(52,211,153,.4);}
 #relay-detail.visible{display:block;}
+/* v456: when a relay DOT on the map is clicked, the detail card detaches from the
+ * Relay Browser and floats as a standalone card (top-left, under the header) instead
+ * of forcing the whole browser panel open. Same rich content, just repositioned. */
+#relay-detail.rd-floating{
+  position:fixed; top:64px; left:16px; z-index:1400;
+  width:300px; max-width:calc(100vw - 32px); max-height:calc(100vh - 96px); overflow-y:auto;
+  margin-top:0; background:rgba(4,16,24,.92);
+  border:1px solid rgba(0,245,255,.28); border-radius:12px;
+  box-shadow:0 12px 40px rgba(0,0,0,.5), 0 0 0 1px rgba(0,245,255,.05);
+  backdrop-filter:blur(18px); -webkit-backdrop-filter:blur(18px);
+}
+body.light #relay-detail.rd-floating{ background:rgba(255,255,255,.94); border-color:rgba(0,100,160,.3); }
 .rd-title{font-family:'Orbitron',sans-serif;font-size:11px;color:var(--cyan);margin-bottom:8px;display:flex;align-items:center;justify-content:space-between;}
 .rd-row{display:flex;justify-content:space-between;align-items:center;padding:3px 0;border-bottom:1px solid rgba(0,245,255,.05);}
 .rd-row:last-child{border-bottom:none;}
@@ -7871,7 +7883,7 @@ input:focus-visible, textarea:focus-visible, select:focus-visible{
     <div class="rd-title" style="display:flex;align-items:center;gap:6px;">
       <span id="rd-nickname" style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">—</span>
       <span id="rd-status" style="font-size:9px;flex-shrink:0;"></span>
-      <button onclick="document.getElementById('relay-detail').classList.remove('visible'); window._currentDetailFp=null;" style="background:none;border:none;color:rgba(0,245,255,.45);cursor:pointer;font-size:16px;line-height:1;padding:2px 4px;flex-shrink:0;" title="Close">✕</button>
+      <button onclick="document.getElementById('relay-detail').classList.remove('visible'); document.getElementById('relay-detail').classList.remove('rd-floating'); window._currentDetailFp=null;" style="background:none;border:none;color:rgba(0,245,255,.45);cursor:pointer;font-size:16px;line-height:1;padding:2px 4px;flex-shrink:0;" title="Close">✕</button>
     </div>
     <div class="rd-row"><span class="rd-key">Fingerprint</span><span class="rd-val" id="rd-fp" style="font-size:9px;font-family:monospace">—</span></div>
     <div class="rd-row"><span class="rd-key">IP Address</span><span class="rd-val" id="rd-ip">—</span></div>
@@ -10740,9 +10752,17 @@ function initMapLibre(zones){
 
   (async () => {
     loadCss('https://cdn.jsdelivr.net/npm/maplibre-gl@4.7.1/dist/maplibre-gl.css');
-    if(!window.maplibregl) await loadScript('https://cdn.jsdelivr.net/npm/maplibre-gl@4.7.1/dist/maplibre-gl-csp.js');
-    // CSP: load the tile-parsing worker from our own origin (blob: workers are blocked)
-    maplibregl.setWorkerUrl('/basemap/maplibre-worker.js');
+    /* v450: Eliminate the self-hosted worker dependency. We previously loaded the
+     * maplibre-gl-CSP build and pointed its worker at our own /basemap/maplibre-worker.js
+     * (served from R2). That R2-served worker script intermittently hung ("pending"),
+     * which blocked map.on('load') and left a blank map with no relays. Root-cause fix:
+     * load the STANDARD maplibre-gl build, which creates its tile-parsing worker from an
+     * inline blob: URL automatically — no separate worker request, no R2, nothing to hang.
+     * Verified live that blob: workers are permitted under our CSP (the original
+     * "blob: workers are blocked" assumption no longer holds), and we also add
+     * `worker-src 'self' blob:` to the CSP (worker-shell.js) to make this explicit.
+     * No setWorkerUrl() call — the standard build handles its own worker. */
+    if(!window.maplibregl) await loadScript('https://cdn.jsdelivr.net/npm/maplibre-gl@4.7.1/dist/maplibre-gl.js');
 
     // overlay container on top of the existing map
     const wrap = document.getElementById('map-wrap') || document.body;
@@ -10751,13 +10771,31 @@ function initMapLibre(zones){
       host.style.cssText='position:absolute;inset:0;z-index:5;'; wrap.appendChild(host); }
 
     const map = new maplibregl.Map({ container: host, style: '/basemap/style.json',
-      center:[10,30], zoom:1.6, maxZoom:15, attributionControl:{compact:true} });
+      /* v452 (issue 8): open more zoomed-in than the old far-out world (z1.6). z2.5
+       * centered at [ -25, 38 ] frames the North-Atlantic so both the US east coast and
+       * Europe — where relay density is highest — are visible on load, instead of a tiny
+       * world. Still global enough to read the whole network. */
+      center:[-25,38], zoom:2.5, maxZoom:15, attributionControl:{compact:true} });
     window.__anyoneMapLibre = map;
     map.addControl(new maplibregl.NavigationControl({showCompass:false}), 'bottom-right');
 
     map.on('load', () => {
+      /* v388: fix the "flash to old map" during sidebar toggle. The old D3 canvas
+       * (#map-canvas, z-index 2) sits underneath the MapLibre host (z-index 5) at full
+       * opacity. Normally MapLibre fully covers it, but when the sidebar toggles and
+       * #map-wrap resizes, MapLibre's canvas lags the reflow for a frame, exposing the
+       * D3 map underneath. Since MapLibre is active, the D3 canvas is dead weight — hide
+       * it so nothing can flash through. (The ?maplibre=0 fallback never runs this code,
+       * so the classic D3 map still works there.) */
+      try {
+        ['map-canvas','canvas-a11y-overlay'].forEach(id => { const el=document.getElementById(id); if(el) el.style.display='none'; });
+        const d3map = document.getElementById('map'); // the D3 SVG/container
+        if (d3map && d3map.id !== 'maplibre-host') d3map.style.visibility='hidden';
+      } catch(_){}
       const geo = buildGeoJSON(zones);
-      map.addSource('relays', { type:'geojson', data:geo, cluster:true, clusterRadius:44, clusterMaxZoom:11 });
+      /* v387: clustering DISABLED — every relay is shown as its own "ping" (glowing
+       * dot) rather than merged into count bubbles. */
+      map.addSource('relays', { type:'geojson', data:geo });
 
       /* v383: roads from the basemap's own `roads` source-layer (already in the
        * planet.pmtiles). At our zoom range (0-7) these are mostly highways/motorways
@@ -10842,20 +10880,290 @@ function initMapLibre(zones){
         paint:{ 'text-color':'rgba(180,210,205,0.82)', 'text-halo-color':'rgba(2,11,18,0.9)', 'text-halo-width':1.1 }});
 
       // cluster bubbles, sized + tinted by count (TorMap-style aggregation)
-      map.addLayer({ id:'clusters', type:'circle', source:'relays', filter:['has','point_count'],
-        paint:{ 'circle-color':['interpolate',['linear'],['get','point_count'],
-            1,'rgba(45,212,191,0.6)', 80,'rgba(94,234,212,0.62)', 250,'rgba(153,246,228,0.5)', 600,'rgba(167,139,250,0.62)', 1500,'rgba(167,139,250,0.78)'],
-          'circle-radius':['interpolate',['linear'],['get','point_count'], 1,9, 50,15, 150,20, 500,28, 1000,36],
-          'circle-stroke-width':1.3,'circle-stroke-color':'rgba(153,246,228,0.85)' }});
-      /* v372: cluster count labels — glyphs now self-hosted at /basemap/glyphs/
-       * (Open Sans Regular, injected into style.json by the worker). */
-      map.addLayer({ id:'cluster-count', type:'symbol', source:'relays', filter:['has','point_count'],
-        layout:{ 'text-field':['get','point_count_abbreviated'], 'text-font':['Open Sans Regular'], 'text-size':12 },
-        paint:{ 'text-color':'#eafdf9', 'text-halo-color':'rgba(2,11,18,0.85)', 'text-halo-width':1.2 }});
-      map.addLayer({ id:'relay-points', type:'circle', source:'relays', filter:['all',['!',['has','point_count']],['==',['get','hw'],0]],
-        paint:{ 'circle-color':['match',['get','tier'],'exit','#DC2626','guard','#a78bfa','middle','#2dd4bf','#888'],
-          'circle-radius':['interpolate',['linear'],['zoom'],2,2,8,4,14,6],
-          'circle-stroke-width':0,'circle-stroke-color':'#fff','circle-opacity':0.92 }});
+      /* v387: relay "pings" — no clusters. Two layers per relay: a soft glow halo
+       * underneath + a crisp core dot on top, tier-colored. Zoom-graduated so at world
+       * zoom the ~7,100 dots stay small/translucent (density reads as a glow, not a
+       * solid blob) and grow to full crisp pings as you zoom in. Hardware relays are
+       * excluded here (hw==0) — they render as diamonds in the hd-diamonds layer. */
+      // glow halo (larger, very translucent — gives the luminous "ping" feel)
+      // v390: brighter + larger so non-HW relays are easy to spot (were too faint).
+      map.addLayer({ id:'relay-glow', type:'circle', source:'relays', filter:['==',['get','hw'],0],
+        paint:{ 'circle-color':['match',['get','tier'],'exit','#ef4444','guard','#a78bfa','middle','#2dd4bf','#888'],
+          'circle-radius':['interpolate',['linear'],['zoom'],1,3.5,4,6,8,12,14,20],
+          'circle-blur':1,
+          'circle-opacity':['interpolate',['linear'],['zoom'],1,0.3,4,0.42,8,0.55,14,0.6] }});
+      // crisp core dot — v390: bigger + fully opaque sooner so relays read clearly
+      map.addLayer({ id:'relay-points', type:'circle', source:'relays', filter:['==',['get','hw'],0],
+        paint:{ 'circle-color':['match',['get','tier'],'exit','#fca5a5','guard','#ddd6fe','middle','#99f6e4','#ccc'],
+          'circle-radius':['interpolate',['linear'],['zoom'],1,1.6,4,2.4,8,3.6,14,5.5],
+          'circle-stroke-width':['interpolate',['linear'],['zoom'],1,0,6,0.5,12,1],
+          'circle-stroke-color':'rgba(255,255,255,0.5)',
+          'circle-opacity':['interpolate',['linear'],['zoom'],1,0.85,4,0.95,8,1,14,1] }});
+
+      /* v389: PULSING radar pings. We animate the GLOW layer's radius + opacity with a
+       * single global sine wave (a "breathing" pulse) so the network looks alive. This
+       * is done with ONE rAF loop driving two setPaintProperty calls per frame — NOT
+       * per-point work — so it stays cheap even with ~7,100 pings. Efficiency guards:
+       *  - paused while the tab is hidden (visibilitychange)
+       *  - paused while the user is interacting (movestart) and resumed on moveend, so
+       *    panning/zooming stays smooth
+       *  - the pulse AMPLITUDE scales up with zoom: at world zoom it's a subtle breathe
+       *    (points overlap anyway), up close it's a stronger radar pulse.
+       * v390: base ramps below MUST match the relay-glow layer values above. */
+      (function(){
+        const baseGlowR = [1,3.5, 4,6, 8,12, 14,20];        // zoom->radius stops (match layer)
+        const baseGlowO = [1,0.3, 4,0.42, 8,0.55, 14,0.6];  // zoom->opacity stops (match layer)
+        const mkRamp = (stops, mul) => { const e=['interpolate',['linear'],['zoom']]; for(let i=0;i<stops.length;i+=2){ e.push(stops[i], +(stops[i+1]*mul).toFixed(3)); } return e; };
+        let raf = null, t0 = performance.now(), paused = false, interacting = false;
+        const frame = (now) => {
+          raf = null;
+          if (paused || interacting) return;
+          const z = map.getZoom();
+          // v390: a touch slower (2.8s) + slightly stronger pulse so the "radar" read is clearer
+          const amp = 0.15 + 0.4 * Math.max(0, Math.min(1, (z-3)/7));
+          const s = Math.sin((now - t0) / 2800 * Math.PI * 2); // -1..1
+          const rMul = 1 + amp * (s * 0.5 + 0.5);      // radius breathes 1 .. 1+amp
+          const oMul = 1 - (amp*0.55) * (s * 0.5 + 0.5);// opacity dips slightly as it expands
+          try {
+            map.setPaintProperty('relay-glow','circle-radius', mkRamp(baseGlowR, rMul));
+            map.setPaintProperty('relay-glow','circle-opacity', mkRamp(baseGlowO, oMul));
+          } catch(_){}
+          schedule();
+        };
+        const schedule = () => { if (!raf && !paused && !interacting) raf = requestAnimationFrame(frame); };
+        // pause during interaction for smooth pan/zoom; resume after
+        map.on('movestart', () => { interacting = true; });
+        map.on('moveend', () => { interacting = false; schedule(); });
+        // pause when tab hidden (saves battery/GPU)
+        document.addEventListener('visibilitychange', () => { paused = document.hidden; if(!paused){ t0 = performance.now(); schedule(); } });
+        window.__relayPulseStop = () => { paused = true; if(raf) cancelAnimationFrame(raf); };
+        schedule();
+      })();
+
+      /* v451: SIGNALS — animated traffic arcs on MapLibre (reimplements the old D3
+       * #conns/#arcs feature, which drew on the now-hidden D3 canvas). Concept mirrors
+       * buildConnectionWeb(): take the top hub zones (by relay count) and draw curved
+       * arcs between them, tier-colored, with a flowing animated dash to suggest live
+       * traffic routing. Implemented natively: one GeoJSON line source + two line layers
+       * (a soft glow underlay + a bright dashed overlay whose dash offset animates via a
+       * single rAF loop — cheap, ~60 arcs max). Exposed as window._mlSignals.{start,stop}
+       * so the existing Signals button (toggleSignals) drives it. */
+      (function(){
+        // quadratic-bezier-ish great-circle-ish curve between two [lng,lat] points.
+        // We lift the midpoint perpendicular to the chord so arcs bow outward like the
+        // old great-circle look; longer links bow more. 24 segments = smooth enough.
+        const arcCoords = (a, b) => {
+          const lng1=a[0], lat1=a[1], lng2=b[0], lat2=b[1];
+          const mx=(lng1+lng2)/2, my=(lat1+lat2)/2;
+          const dx=lng2-lng1, dy=lat2-lat1;
+          const dist=Math.sqrt(dx*dx+dy*dy);
+          // perpendicular offset for the control point; capped so it stays sane
+          const lift=Math.min(dist*0.18, 22);
+          const nx=-dy/(dist||1), ny=dx/(dist||1);
+          const cx=mx+nx*lift, cy=my+ny*lift;
+          const pts=[]; const N=24;
+          for(let i=0;i<=N;i++){ const t=i/N, mt=1-t;
+            const x=mt*mt*lng1 + 2*mt*t*cx + t*t*lng2;
+            const y=mt*mt*lat1 + 2*mt*t*cy + t*t*lat2;
+            pts.push([x,y]); }
+          return pts;
+        };
+        const buildArcGeo = () => {
+          const feats=[];
+          try {
+            if (typeof ranked === 'undefined' || !ranked || ranked.length < 4) return {type:'FeatureCollection',features:feats};
+            const total = ranked.reduce((s,d)=>s+(d.relayCount||0),0) || 1;
+            const hubs = ranked.slice(0,18).filter(z=>z && z.geo);    // top hubs
+            const reach = ranked.slice(18,55).filter(z=>z && z.geo);  // secondary
+            const seen = new Set();
+            const addArc = (z1,z2,strength) => {
+              const key = z1.geo.join(',')+'|'+z2.geo.join(',');
+              if (seen.has(key)) return; seen.add(key);
+              const a=[z1.geo[1],z1.geo[0]], b=[z2.geo[1],z2.geo[0]];
+              const dx=a[0]-b[0], dy=a[1]-b[1];
+              if (Math.sqrt(dx*dx+dy*dy) < 4) return; // skip very short links
+              feats.push({ type:'Feature',
+                properties:{ strength: strength },
+                geometry:{ type:'LineString', coordinates: arcCoords(a,b) } });
+            };
+            // hub-to-hub (sparse — every 3rd pair, "medium" density ~40 arcs)
+            for(let i=0;i<hubs.length;i++){ for(let j=i+3;j<hubs.length;j+=3){
+              addArc(hubs[i],hubs[j], ((hubs[i].relayCount+hubs[j].relayCount)/total)); } }
+            // a few hub-to-reach spokes from the top 6 hubs
+            hubs.slice(0,6).forEach((hub,hi)=>{
+              const peer = reach[(hi*5)%Math.max(1,reach.length)];
+              if (peer) addArc(hub,peer, ((hub.relayCount+(peer.relayCount||0))/total/2));
+            });
+          } catch(_){}
+          return {type:'FeatureCollection',features:feats};
+        };
+
+        let started=false;
+        const ensureLayers = () => {
+          if (map.getSource('signal-arcs')) return;
+          map.addSource('signal-arcs', { type:'geojson', data:{type:'FeatureCollection',features:[]} });
+          // soft glow underlay
+          map.addLayer({ id:'signal-arcs-glow', type:'line', source:'signal-arcs',
+            layout:{ 'line-cap':'round', 'line-join':'round' },
+            paint:{ 'line-color':'#5eead4', 'line-width':['interpolate',['linear'],['zoom'],1,1.2,5,2.2,10,3.5],
+              'line-opacity':0.12, 'line-blur':3 }});
+          // bright flowing dashed overlay
+          map.addLayer({ id:'signal-arcs-flow', type:'line', source:'signal-arcs',
+            layout:{ 'line-cap':'round', 'line-join':'round' },
+            paint:{ 'line-color':['interpolate',['linear'],['get','strength'],0,'#2dd4bf',0.02,'#5eead4',0.08,'#a78bfa'],
+              'line-width':['interpolate',['linear'],['zoom'],1,0.8,5,1.4,10,2.2],
+              'line-opacity':0.85, 'line-dasharray':[0,4,3] }});
+          /* v455: moving-packet layers — reproduces the old map's "circuits firing
+           * between relays". A point source holds the in-flight packet dots; each is a
+           * glowing circle whose coordinate we advance along an arc each frame. Two
+           * layers: a soft halo + a bright core, colored per packet (guard=purple,
+           * exit=orange, return=green) via the 'color' feature property. */
+          map.addSource('signal-packets', { type:'geojson', data:{type:'FeatureCollection',features:[]} });
+          map.addLayer({ id:'signal-packets-halo', type:'circle', source:'signal-packets',
+            paint:{ 'circle-radius':['interpolate',['linear'],['zoom'],1,5,5,8,10,12],
+              'circle-color':['get','color'], 'circle-blur':1, 'circle-opacity':0.35 }});
+          map.addLayer({ id:'signal-packets-core', type:'circle', source:'signal-packets',
+            paint:{ 'circle-radius':['interpolate',['linear'],['zoom'],1,2,5,3,10,4.5],
+              'circle-color':['get','color'], 'circle-opacity':0.95,
+              'circle-stroke-width':0.6, 'circle-stroke-color':'#ffffff' }});
+        };
+        /* v454: the per-rAF setPaintProperty('line-dasharray', [floatT,4,3]) approach
+         * froze after ~10 frames — MapLibre doesn't reliably repaint a continuously
+         * changing float dash, and per-frame dash mutation is janky by design. Switch to
+         * the documented MapLibre "ant-march" pattern: a small precomputed set of stepped
+         * dash frames cycled on a steady setInterval (~70ms). MapLibre handles discrete
+         * dash-array swaps reliably, producing a smooth flowing effect. */
+        const dashFrames = [
+          [0,4,3],[0.5,4,2.5],[1,4,2],[1.5,4,1.5],[2,4,1],[2.5,4,0.5],
+          [3,4,0],[0,0.5,3.5,3.5],[0,1,3,3],[0,1.5,2.5,2.5],[0,2,2,3],[0,2.5,1.5,3],
+          [0,3,1,3],[0,3.5,0.5,3]
+        ];
+        let dashIx = 0, timer = null;
+        const stepDash = () => {
+          dashIx = (dashIx + 1) % dashFrames.length;
+          try {
+            map.setPaintProperty('signal-arcs-flow','line-dasharray', dashFrames[dashIx]);
+          } catch(_){}
+        };
+
+        /* v455: CIRCUIT FIRING — moving packets between relays, like the old map.
+         * A pool of in-flight packets, each travelling a precomputed arc polyline over a
+         * duration. One rAF loop advances them all and rewrites the packet source. Circuits
+         * are fired on a ~1.6s timer: pick a real Guard→Middle→Exit triple (weighted by
+         * relay count) and launch colored packets along each hop + a green return leg,
+         * mirroring fireCircuit()/fireCircuitHop() from the D3 map. Also drives the
+         * out/in counters the Connection Web panel shows. */
+        let packets = [], pktRaf = null, fireTimer = null, pools = null, poolAge = 0;
+        const zGeo = z => [z.geo[1], z.geo[0]]; // [lng,lat]
+        const lerpAlong = (coords, t) => {
+          // t in 0..1 along a polyline (equal-segment approximation — fine for 24-seg arcs)
+          const n = coords.length - 1; const f = t * n; const i = Math.min(n-1, Math.floor(f)); const r = f - i;
+          const a = coords[i], b = coords[i+1];
+          return [a[0]+(b[0]-a[0])*r, a[1]+(b[1]-a[1])*r];
+        };
+        const renderPackets = () => {
+          const feats = packets.map(p => ({ type:'Feature', properties:{ color:p.color },
+            geometry:{ type:'Point', coordinates: lerpAlong(p.coords, p.t) } }));
+          try { const s = map.getSource('signal-packets'); if(s) s.setData({type:'FeatureCollection',features:feats}); } catch(_){}
+        };
+        const pktTick = (now) => {
+          pktRaf = null; if(!started){ packets=[]; renderPackets(); return; }
+          for(const p of packets){ p.t = (now - p.start) / p.dur; }
+          packets = packets.filter(p => p.t < 1);
+          renderPackets();
+          if(packets.length) pktRaf = requestAnimationFrame(pktTick);
+        };
+        const ensurePktLoop = () => { if(!pktRaf && packets.length) pktRaf = requestAnimationFrame(pktTick); };
+        const fireHop = (z1, z2, color) => {
+          if(!z1 || !z2 || !z1.geo || !z2.geo) return;
+          const coords = arcCoords(zGeo(z1), zGeo(z2));
+          // rough great-circle-ish length in degrees for a sane duration
+          const dx = coords[0][0]-coords[coords.length-1][0], dy = coords[0][1]-coords[coords.length-1][1];
+          const dist = Math.sqrt(dx*dx+dy*dy);
+          const dur = Math.min(2600, 700 + dist*22);
+          packets.push({ coords, color, start: performance.now(), t: 0, dur });
+          if(packets.length > 60) packets.splice(0, packets.length - 60); // cap
+          ensurePktLoop();
+        };
+        const buildPools = () => {
+          const guard=[], middle=[], exit=[];
+          try {
+            ranked.forEach(zone => {
+              if(!zone || !zone.geo) return;
+              let hasE=false,hasG=false,hasM=false;
+              const fps = zone.fingerprints || [];
+              for(const fp of fps){ const u=fp.toUpperCase();
+                if(exitFps && exitFps.has(u)) hasE=true; else if(guardFps && guardFps.has(u)) hasG=true; else hasM=true;
+                if(hasE&&hasG&&hasM) break; }
+              if(hasG) guard.push(zone); if(hasM) middle.push(zone); if(hasE) exit.push(zone);
+            });
+          } catch(_){}
+          // fallback: if flag data isn't ready, just use top zones for all roles so it still fires
+          if(guard.length<2||middle.length<2||exit.length<2){
+            const top = ranked.slice(0,30).filter(z=>z&&z.geo);
+            return { guard: top, middle: top, exit: top, weak:true };
+          }
+          return { guard, middle, exit, weak:false };
+        };
+        const pickW = pool => { const total=pool.reduce((s,z)=>s+(z.relayCount||1),0); let r=Math.random()*total;
+          for(const z of pool){ r-=(z.relayCount||1); if(r<=0) return z; } return pool[0]; };
+        const fireCircuit = () => {
+          if(!started) return;
+          if(!pools || poolAge < Date.now()-30000){ pools = buildPools(); poolAge = Date.now(); }
+          const g=pickW(pools.guard), m=pickW(pools.middle), e=pickW(pools.exit);
+          if(!g||!m||!e) return;
+          fireHop(g, m, '#a78bfa');                                   // guard → middle (purple)
+          setTimeout(()=>{ if(started) fireHop(m, e, '#ff8a3d'); }, 380 + Math.random()*260);  // middle → exit (orange)
+          // return leg (green = incoming)
+          const back = 1200 + Math.random()*600;
+          setTimeout(()=>{ if(!started) return; fireHop(e, m, '#34d399');
+            setTimeout(()=>{ if(started) fireHop(m, g, '#34d399'); }, 340+Math.random()*240);
+            try { if(typeof inCount!=='undefined'){ inCount++; if(typeof updateSignalCounts==='function') updateSignalCounts(); } } catch(_){}
+          }, back);
+          try { if(typeof outCount!=='undefined'){ outCount++; if(typeof updateSignalCounts==='function') updateSignalCounts(); } } catch(_){}
+        };
+        const startFiring = () => { if(fireTimer) return; const loop=()=>{ if(!started) return; fireCircuit();
+          fireTimer = setTimeout(loop, 1400 + Math.random()*700); }; loop(); };
+        const stopFiring = () => { if(fireTimer){ clearTimeout(fireTimer); fireTimer=null; } packets=[];
+          if(pktRaf){ cancelAnimationFrame(pktRaf); pktRaf=null; } renderPackets(); };
+        window._mlSignals = {
+          start(){
+            try {
+              ensureLayers();
+              map.getSource('signal-arcs').setData(buildArcGeo());
+              map.setLayoutProperty('signal-arcs-glow','visibility','visible');
+              map.setLayoutProperty('signal-arcs-flow','visibility','visible');
+              map.setLayoutProperty('signal-packets-halo','visibility','visible');
+              map.setLayoutProperty('signal-packets-core','visibility','visible');
+              started=true;
+              if(!timer && !document.hidden) timer = setInterval(stepDash, 70);
+              if(!document.hidden) startFiring();
+            } catch(_){}
+          },
+          stop(){
+            started=false; if(timer){ clearInterval(timer); timer=null; }
+            stopFiring();
+            try {
+              if(map.getLayer('signal-arcs-glow')) map.setLayoutProperty('signal-arcs-glow','visibility','none');
+              if(map.getLayer('signal-arcs-flow')) map.setLayoutProperty('signal-arcs-flow','visibility','none');
+              if(map.getLayer('signal-packets-halo')) map.setLayoutProperty('signal-packets-halo','visibility','none');
+              if(map.getLayer('signal-packets-core')) map.setLayoutProperty('signal-packets-core','visibility','none');
+            } catch(_){}
+          },
+          rebuild(){ try { if(started && map.getSource('signal-arcs')) map.getSource('signal-arcs').setData(buildArcGeo()); pools=null; } catch(_){} }
+        };
+        // pause animation + firing when the tab is hidden, resume when visible
+        document.addEventListener('visibilitychange', () => {
+          if(document.hidden){
+            if(timer){ clearInterval(timer); timer=null; }
+            if(fireTimer){ clearTimeout(fireTimer); fireTimer=null; }
+            if(pktRaf){ cancelAnimationFrame(pktRaf); pktRaf=null; }
+          } else if(started){
+            if(!timer) timer = setInterval(stepDash, 70);
+            startFiring();
+          }
+        });
+      })();
       /* v378: hardware relays rendered as DIAMONDS (parity with the D3 map, where
        * HW = diamond). MapLibre circle layers can't draw diamonds, so we draw an
        * amber diamond on a canvas, export it as a PNG data URL, decode it via an
@@ -10881,30 +11189,31 @@ function initMapLibre(zones){
               map.addLayer({ id:'hw-diamonds', type:'symbol', source:'relays',
                 filter:['all',['!',['has','point_count']],['==',['get','hw'],1]],
                 layout:{ 'icon-image':'hw-diamond', 'icon-allow-overlap':true, 'icon-ignore-placement':true,
-                  'icon-size':['interpolate',['linear'],['zoom'],2,0.4,8,0.65,14,0.9] },
-                paint:{ 'icon-opacity':0.95 }});
+                  /* v390: smaller so HW reads as an accent, not the dominant feature */
+                  'icon-size':['interpolate',['linear'],['zoom'],2,0.28,8,0.45,14,0.7] },
+                /* v390: dimmer + zoom-graduated so they're subtle at world zoom (where
+                 * ~650 of them used to swamp the tier pings) and clearer up close. */
+                paint:{ 'icon-opacity':['interpolate',['linear'],['zoom'],1,0.45,5,0.6,10,0.8,14,0.9] }});
             }
           } catch(e){ console.warn('[maplibre] hw-diamond layer add failed:', e && e.message); }
         };
         _im.onerror = () => console.warn('[maplibre] hw-diamond image decode failed');
         _im.src = _c.toDataURL('image/png');
       } catch(e){ console.warn('[maplibre] hw-diamond setup failed:', e && e.message); }
-      // click cluster -> zoom in
-      map.on('click','clusters',(ev)=>{ const f=map.queryRenderedFeatures(ev.point,{layers:['clusters']})[0]; if(!f) return;
-        map.getSource('relays').getClusterExpansionZoom(f.properties.cluster_id).then(z=>map.easeTo({center:f.geometry.coordinates, zoom:z})); });
-      // click relay or hw-diamond -> open the REAL detail panel (same as D3 map)
+      // v387: no clusters anymore — every relay is an individual ping. Click a relay
+      // or hw-diamond -> open the REAL detail panel (same as D3 map).
       ['relay-points','hw-diamonds'].forEach(lyr => {
         map.on('click', lyr, (ev)=>{ const p=ev.features[0].properties;
           const fp = p.fp, coords = ev.features[0].geometry.coordinates;
           if (fp && typeof selectRelay === 'function') {
             /* v375: reuse the existing detail flow — flies to relay, opens relay
              * browser panel, fetches live relay data into #relay-detail, updates URL. */
-            try { selectRelay(fp, (p.lat!=null?+p.lat:coords[1]), (p.lng!=null?+p.lng:coords[0])); return; } catch(_){}
+            try { selectRelay(fp, (p.lat!=null?+p.lat:coords[1]), (p.lng!=null?+p.lng:coords[0]), true); return; } catch(_){}
           }
           new maplibregl.Popup({offset:8}).setLngLat(coords)
             .setHTML('<b>'+(p.city||'Unknown')+'</b><br>'+p.tier+(p.hw==1?' · hardware':'')+(p.asn?'<br>'+p.asn:'')).addTo(map); });
       });
-      ['clusters','relay-points','hw-diamonds'].forEach(l=>{ map.on('mouseenter',l,()=>map.getCanvas().style.cursor='pointer'); map.on('mouseleave',l,()=>map.getCanvas().style.cursor=''); });
+      ['relay-points','hw-diamonds'].forEach(l=>{ map.on('mouseenter',l,()=>map.getCanvas().style.cursor='pointer'); map.on('mouseleave',l,()=>map.getCanvas().style.cursor=''); });
 
       /* v376: tier filtering. Mirrors the Relay Browser filter (Exit/Guard/Middle/HW)
        * onto the map: matching relays stay bright, non-matching dim to near-invisible.
@@ -10914,25 +11223,26 @@ function initMapLibre(zones){
         try {
           const t = (type||'all').toLowerCase();
           const hasDiamonds = !!map.getLayer('hw-diamonds');
+          const hasGlow = !!map.getLayer('relay-glow');
           if (t === 'all') {
-            map.setPaintProperty('relay-points','circle-opacity',0.92);
-            map.setPaintProperty('relay-points','circle-stroke-opacity',1);
-            map.setPaintProperty('clusters','circle-opacity',1);
-            map.setPaintProperty('cluster-count','text-opacity',1);
-            if (hasDiamonds) map.setPaintProperty('hw-diamonds','icon-opacity',0.95);
+            // v390: restore the zoom-graduated ping opacities (match the layer defs above)
+            map.setPaintProperty('relay-points','circle-opacity',['interpolate',['linear'],['zoom'],1,0.85,4,0.95,8,1,14,1]);
+            if (hasGlow) map.setPaintProperty('relay-glow','circle-opacity',['interpolate',['linear'],['zoom'],1,0.3,4,0.42,8,0.55,14,0.6]);
+            if (hasDiamonds) map.setPaintProperty('hw-diamonds','icon-opacity',['interpolate',['linear'],['zoom'],1,0.45,5,0.6,10,0.8,14,0.9]);
             return;
           }
-          // match expression: hw filter checks hw==1; others check tier==t
-          const match = (t === 'hw')
-            ? ['case', ['==',['get','hw'],1], 0.95, 0.06]
-            : ['case', ['==',['get','tier'],t], 0.95, 0.06];
-          map.setPaintProperty('relay-points','circle-opacity', match);
-          map.setPaintProperty('relay-points','circle-stroke-opacity', match);
+          // match expression: hw filter checks hw==1; others check tier==t.
+          // bright matched pings, dimmed others.
+          const coreMatch = (t === 'hw')
+            ? ['case', ['==',['get','hw'],1], 1, 0.04]
+            : ['case', ['==',['get','tier'],t], 1, 0.04];
+          const glowMatch = (t === 'hw')
+            ? ['case', ['==',['get','hw'],1], 0.6, 0.02]
+            : ['case', ['==',['get','tier'],t], 0.6, 0.02];
+          map.setPaintProperty('relay-points','circle-opacity', coreMatch);
+          if (hasGlow) map.setPaintProperty('relay-glow','circle-opacity', glowMatch);
           // hardware diamonds: bright when hw filter active, dimmed otherwise
-          if (hasDiamonds) map.setPaintProperty('hw-diamonds','icon-opacity', t === 'hw' ? 0.95 : 0.08);
-          // dim clusters + counts while a specific tier is active (they're mixed)
-          map.setPaintProperty('clusters','circle-opacity',0.25);
-          map.setPaintProperty('cluster-count','text-opacity',0.3);
+          if (hasDiamonds) map.setPaintProperty('hw-diamonds','icon-opacity', t === 'hw' ? 0.95 : 0.06);
         } catch(_){}
       };
       // make the bottom legend chips clickable to drive the same filter (toggle off => all)
@@ -10951,6 +11261,18 @@ function initMapLibre(zones){
             else window._mlApplyTierFilter(next);
           });
         });
+      } catch(_){}
+
+      /* v391/v393: rebind +/− zoom buttons (#zi/#zo) to MapLibre. setupMap() wired them
+       * to the D3 svg zoom; on MapLibre those did nothing. IMPORTANT: eased camera moves
+       * (zoomIn/easeTo) proved unreliable on this map (they get swallowed — verified
+       * live), while setZoom() applies instantly and reliably. We call map.stop() first
+       * to clear any in-flight animation, then setZoom by ±1 with a short transition. */
+      try {
+        const zi = document.getElementById('zi'), zo = document.getElementById('zo');
+        const zStep = (d) => { try { map.stop(); } catch(_){} map.setZoom(Math.max(0, Math.min(map.getMaxZoom(), map.getZoom() + d))); };
+        if (zi) zi.onclick = () => zStep(1);
+        if (zo) zo.onclick = () => zStep(-1);
       } catch(_){}
 
       try { setStatus && setStatus(''); } catch(_){}
@@ -10996,6 +11318,7 @@ function initMapLibre(zones){
 }
 
 function drawNodesCanvas(data){
+  if (window.__mlActive) return; // v392: MapLibre active — D3 canvas must not paint
   /* Renderer is now feature-complete through Phase 4: rings, core, glow, */
   /* bright center, ISP rings (v333), HW diamonds (v333), dim-state (v333), */
   /* hit-test+tooltip (v334), bursts+pulse (v335), DPR (v337 Phase 4). */
@@ -11310,6 +11633,12 @@ function drawNodesCanvas(data){
 /* v366: _subdivideZonesForZoom removed — coordinate subdivision proven inert on co-located relay data (see drawNodes note). */
 
 function drawNodes(data){
+  /* v392: when the MapLibre map is active, the D3 node layer must never paint (it
+   * would flash the old map on refresh/redraw). All the existing drawNodes callers
+   * (refresh timers, toggles, fetch handlers) safely no-op here. setupMap still ran,
+   * so D3 globals exist; we just don't draw. The ?maplibre=0 fallback leaves
+   * __mlActive falsy, so the classic map draws normally. */
+  if (window.__mlActive) return;
   /* v339 Phase 7: same timing hook as drawNodesCanvas. For canvas-mode */
   /* users this function short-circuits early so the work is recorded in */
   /* drawNodesCanvas; for SVG-mode users it records the full SVG build. */
@@ -21158,6 +21487,13 @@ function buildConnectionWeb(){
 /* ── TOGGLE SIGNALS ── */
 function toggleSignals(){
   signalsOn = !signalsOn;
+  /* v451: drive the MapLibre traffic-arc layer (the old D3 #arcs/#conns draw on the
+   * hidden D3 canvas, so on the MapLibre map Signals did nothing). When MapLibre is
+   * active, build/show or hide/teardown the animated arcs. The rest of this function
+   * still runs to update the button UI, counter, etc. */
+  if (window.__mlActive && typeof window._mlSignals === 'object' && window._mlSignals) {
+    try { signalsOn ? window._mlSignals.start() : window._mlSignals.stop(); } catch(_){}
+  }
   /* v112: stamp turn-on time so warming-up has a minimum visible window */
   if(signalsOn){ window._signalsOnAt = Date.now(); }
   document.body.classList.toggle('signals-active', signalsOn);
@@ -21559,8 +21895,16 @@ function toggleIspConc(){
 
 function toggleHwOverlay(){
   hwOverlayOn = document.getElementById('ov-hw').checked;
+  /* v391: also drive the MapLibre hw-diamonds layer (the old code only redrew the
+   * D3 nodes, so on the MapLibre map this toggle did nothing). */
+  try {
+    const m = window.__anyoneMapLibre;
+    if (m && m.getLayer('hw-diamonds')) {
+      m.setLayoutProperty('hw-diamonds','visibility', hwOverlayOn ? 'visible' : 'none');
+    }
+  } catch(_){}
   _lastDrawHash = '';
-  drawNodes(relayData);
+  if (typeof drawNodes === 'function') { try { drawNodes(relayData); } catch(_){} }
 }
 
 function toggleGeoBoost(){ /* v27: no-op — geo cluster badge auto-shows */ }
@@ -22475,11 +22819,12 @@ function renderComparison(){
   </div>`;
 }
 
-function selectRelay(fp, lat, lon){
+function selectRelay(fp, lat, lon, fromMap){
   /* v233: clicking the same relay again toggles the detail card closed. */
   var _card = document.getElementById('relay-detail');
   if(_card && _card.classList.contains('visible') && window._currentDetailFp === fp){
     _card.classList.remove('visible');
+    _card.classList.remove('rd-floating');
     window._currentDetailFp = null;
     try {
       var _u = new URL(window.location.href);
@@ -22488,8 +22833,17 @@ function selectRelay(fp, lat, lon){
     return;
   }
   flyToRelay(lat, lon);
-  const panel = document.getElementById('relay-panel');
-  if(panel && panel.style.display === 'none') openRelayBrowser();
+  /* v456 (Option B): a click on a relay DOT on the map shows the full detail as a
+   * standalone floating card WITHOUT opening the Relay Browser list. A click on a
+   * relay card inside the browser keeps the old inline behaviour. The map click
+   * handler passes fromMap=true. */
+  if(fromMap){
+    if(_card){ _card.classList.add('rd-floating'); }
+  } else {
+    if(_card){ _card.classList.remove('rd-floating'); }
+    const panel = document.getElementById('relay-panel');
+    if(panel && panel.style.display === 'none') openRelayBrowser();
+  }
   fetchRelayDetail(fp);
   const url = new URL(window.location.href);
   url.searchParams.set('fp', fp);
@@ -22633,12 +22987,18 @@ async function fetchRelayDetail(fp){
       if(card.contains(t)) return;
       /* On a relay list item or its descendants: ignore (let selectRelay run) */
       if(t.closest && t.closest('.rl-item')) return;
+      /* v456: clicks on the MapLibre canvas are how a relay dot is selected — ignore
+       * them here, otherwise this capture-phase handler would close the floating card
+       * in the same click that opened it. The map's own click handler manages selection
+       * (clicking empty map space leaves the card; click the ✕ or another dot to change). */
+      if(t.closest && t.closest('.maplibregl-canvas-container, .maplibregl-canvas, #maplibre-host, #map, #ml-map')) return;
       /* On a country path (will trigger selectCountry which manages its own state): ignore */
       if(t.closest && t.closest('.country')) return;
       /* On a zone marker (clicking another node): ignore */
       if(t.closest && t.closest('#nodes')) return;
       /* Otherwise: close the detail card. */
       card.classList.remove('visible');
+      card.classList.remove('rd-floating');
       window._currentDetailFp = null;
       try {
         var url = new URL(window.location.href);
@@ -23561,22 +23921,28 @@ async function init(){
     worldTopo=topo;
     relayData=data;
     applyStats(data);   // ← overwrite FALLBACK with live data when ready
-    setupMap();
     buildTicker(data);
-    drawNodes(data);
     buildCountryCache();
-    /* v380: MapLibre GPU map is now the DEFAULT. The D3 map above is still built
-     * underneath (kept fully intact) and MapLibre overlays on top of it. Escape
-     * hatch to the classic D3 map: ?maplibre=0 or ?classic=1. Legacy ?maplibre=1
-     * links still work. This keeps an instant, zero-deploy fallback if MapLibre
-     * ever fails to load in some browser. */
-    try {
-      const _qs = new URLSearchParams(location.search);
-      const _wantClassic = _qs.get('maplibre') === '0' || _qs.get('classic') === '1';
-      if (!_wantClassic && typeof initMapLibre === 'function') {
-        initMapLibre(data);
-      }
-    } catch(_e) { console.error('maplibre init skipped:', _e && _e.message); }
+    /* v392: MapLibre is the default. Previously D3 was fully built then hidden once
+     * MapLibre loaded — which made the old map FLASH on every refresh. Fix: decide up
+     * front. setupMap() still runs (it defines D3 globals like proj/svg that other
+     * code paths reference, so removing it is unsafe), but when MapLibre is active we
+     * (a) set a global flag so drawNodes() no-ops — D3 never paints any nodes — and
+     * (b) hide the D3 canvas/svg immediately, before MapLibre paints. Result: nothing
+     * to flash. The ?maplibre=0 / ?classic=1 fallback builds D3 normally. */
+    const _qs = new URLSearchParams(location.search);
+    const _wantClassic = _qs.get('maplibre') === '0' || _qs.get('classic') === '1';
+    window.__mlActive = !_wantClassic && (typeof initMapLibre === 'function');
+    setupMap();  // always: defines proj/svg/zoom/g globals other code needs
+    if (_wantClassic) {
+      drawNodes(data);
+    } else if (window.__mlActive) {
+      try {
+        ['map-canvas','canvas-a11y-overlay'].forEach(id=>{const el=document.getElementById(id); if(el) el.style.display='none';});
+        const _m=document.getElementById('map'); if(_m && _m.id!=='maplibre-host') _m.style.visibility='hidden';
+      } catch(_){}
+      initMapLibre(data);
+    }
     updateHealthButton();
     syncSidebarStats();
     setTimeout(checkNetworkAlerts, 3000);
