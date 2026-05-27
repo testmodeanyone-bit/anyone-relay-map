@@ -418,8 +418,90 @@ async function loadBtcNodes() {
   }
 }
 
+/* v471: BTC nodes on MapLibre. The old renderBtcNodes drew hexagon <polygon>s on the
+ * dead D3 SVG (invisible on the MapLibre map). When MapLibre is active we instead build
+ * a GeoJSON source from data.sample and a symbol layer using a canvas-drawn HOLLOW
+ * BITCOIN-ORANGE HEXAGON icon — visually distinct from our solid tier-colored relay
+ * circles (different shape AND color), and cheap to render for thousands of nodes. The
+ * hexagon outline echoes the old map's choice. We avoid the actual ₿ logo (brand mark +
+ * illegible at a few px). Off by default; toggled by the existing ₿ button via
+ * toggleBtcNodes(). */
+function _mlBtcEnsureIcon(map){
+  if(map.hasImage && map.hasImage('btc-hex')) return true;
+  try {
+    /* v472: draw the Bitcoin "\u20bf" symbol in YELLOW on a dark circular coin backing,
+     * instead of the hollow hexagon. The glyph reads instantly as Bitcoin and the dark
+     * disc keeps the yellow legible over any map color. Bigger canvas + larger icon-size
+     * so it's clearly noticeable when toggled on, and visually unmistakable vs our small
+     * tier-colored relay circles. (This renders the \u20bf CHARACTER, not a brand logo image.) */
+    var S = 48, c = document.createElement('canvas'); c.width=S; c.height=S;
+    var ctx = c.getContext('2d'); var cx=S/2, cy=S/2, r=21;
+    // dark coin backing with a yellow ring so it pops on light or dark map areas
+    ctx.beginPath(); ctx.arc(cx,cy,r,0,Math.PI*2);
+    ctx.fillStyle='rgba(20,16,4,0.82)'; ctx.fill();
+    ctx.lineWidth=2.5; ctx.strokeStyle='#f7c948'; ctx.stroke();
+    // the Bitcoin glyph in bright yellow
+    ctx.fillStyle='#f7c948';
+    ctx.font='bold 26px Arial, sans-serif';
+    ctx.textAlign='center'; ctx.textBaseline='middle';
+    ctx.fillText('\u20bf', cx, cy+1);
+    var img = ctx.getImageData(0,0,S,S);
+    if(map.hasImage('btc-hex')) map.removeImage('btc-hex');
+    map.addImage('btc-hex', img, { pixelRatio: 2 });
+    return true;
+  } catch(e){ console.warn('[maplibre] btc icon build failed:', e && e.message); return false; }
+}
+function _mlBtcShow(data){
+  var map = window.__anyoneMapLibre; if(!map || !data || !data.sample) return;
+  var feats = data.sample.map(function(n){
+    if(n.lon==null || n.lat==null) return null;
+    return { type:'Feature',
+      properties:{ city:n.city||'', cc:n.cc||'', org:n.org||'' },
+      geometry:{ type:'Point', coordinates:[+n.lon, +n.lat] } };
+  }).filter(Boolean);
+  var fc = { type:'FeatureCollection', features:feats };
+  _mlBtcEnsureIcon(map);
+  if(map.getSource('btc-nodes')){ map.getSource('btc-nodes').setData(fc); }
+  else { map.addSource('btc-nodes', { type:'geojson', data:fc }); }
+  if(!map.getLayer('btc-nodes-layer')){
+    /* place BELOW the relay dots so our relays stay the focus and read on top */
+    var beforeId = map.getLayer('relay-glow') ? 'relay-glow' : (map.getLayer('relay-points') ? 'relay-points' : undefined);
+    map.addLayer({ id:'btc-nodes-layer', type:'symbol', source:'btc-nodes',
+      layout:{ 'icon-image':'btc-hex',
+        'icon-size':['interpolate',['linear'],['zoom'],1,0.4,5,0.6,10,0.85],
+        'icon-allow-overlap':true, 'icon-ignore-placement':true },
+      paint:{ 'icon-opacity':['interpolate',['linear'],['zoom'],1,0.7,6,0.85,12,0.95] } }, beforeId);
+    /* hover tooltip — mirrors the old SVG <title>. One popup reused, follows the node. */
+    if(!window.__btcPopup){ window.__btcPopup = new maplibregl.Popup({ closeButton:false, closeOnClick:false, offset:10, className:'btc-popup' }); }
+    map.on('mouseenter','btc-nodes-layer', function(ev){
+      map.getCanvas().style.cursor='pointer';
+      var f = ev.features && ev.features[0]; if(!f) return;
+      var p = f.properties || {};
+      var loc = (p.city ? p.city+', ' : '') + (p.cc||'');
+      var org = p.org || ((typeof _i18t==='function')?_i18t('btcUnknownIsp','Unknown ISP'):'Unknown ISP');
+      var html = '<div style="font-family:inherit;white-space:nowrap"><b style="color:#f7931a">\u20bf '
+        + ((typeof _i18t==='function')?_i18t('btcTooltipNode','Bitcoin node'):'Bitcoin node') + '</b>'
+        + (loc?'<br><span style="color:#cbd5e1;font-size:11px">'+loc+'</span>':'')
+        + '<br><span style="color:#94a3b8;font-size:10px">'+org+'</span></div>';
+      window.__btcPopup.setLngLat(f.geometry.coordinates).setHTML(html).addTo(map);
+    });
+    map.on('mousemove','btc-nodes-layer', function(ev){
+      var f = ev.features && ev.features[0]; if(!f || !window.__btcPopup) return;
+      window.__btcPopup.setLngLat(f.geometry.coordinates);
+    });
+    map.on('mouseleave','btc-nodes-layer', function(){ map.getCanvas().style.cursor=''; if(window.__btcPopup) window.__btcPopup.remove(); });
+  } else {
+    map.setLayoutProperty('btc-nodes-layer','visibility','visible');
+  }
+}
+function _mlBtcHide(){
+  var map = window.__anyoneMapLibre; if(!map) return;
+  try { if(map.getLayer('btc-nodes-layer')) map.setLayoutProperty('btc-nodes-layer','visibility','none'); } catch(_){}
+}
 function renderBtcNodes(data) {
   if (!data || !data.sample) return;
+  /* v471: route to the MapLibre renderer when the MapLibre map is active. */
+  if (window.__mlActive) { _mlBtcShow(data); return; }
   var svg = document.querySelector('#map svg') || document.querySelector('svg');
   if (!svg) return;
   /* v247 (Bug #2): the original `var p = window.proj || ...` block built `p` but */
@@ -515,6 +597,7 @@ async function toggleBtcNodes() {
     } else {
       if (btn) btn.classList.remove('active');
       if (btn) btn.innerHTML = '₿ ' + _i18t('btcBtnLabel','BTC NODES');
+      if (window.__mlActive) { _mlBtcHide(); }
       if (_btcLayer) { _btcLayer.remove(); _btcLayer = null; }
       if (widget) widget.classList.remove('visible');
     }
@@ -10782,14 +10865,12 @@ function initMapLibre(zones){
       host.style.cssText='position:absolute;inset:0;z-index:5;'; wrap.appendChild(host); }
 
     const map = new maplibregl.Map({ container: host, style: '/basemap/style.json',
-      /* v465: open centered lower so the whole network — including the southern points —
-       * is visible on load. center [-20,15] zoom 2.0 fits Argentina (~-34,-64) and Zambia
-       * /South Africa (~-13 to -26, 28) along with the dense northern hubs (Europe up to
-       * lat 65) and the US east coast. This also ensures ALL Signal hub arcs, including the
-       * Johannesburg hub at -26, are on-screen when Signals is toggled on. Verified live:
-       * Argentina, Zambia, the S.Africa hub, north-Europe hubs and US-east all sit well
-       * within the viewport (11-77% vertically) at this center/zoom. */
-      center:[-20,15], zoom:2.0, maxZoom:15, attributionControl:{compact:true} });
+      /* v470: default view set to the exact framing the operator positioned by hand —
+       * center [3.383, 16.02] zoom 2. A wide world view: the Americas (Canada→Argentina) on
+       * the left, all of Europe + Africa centered, and Asia/Australia/Japan toward the right
+       * edge. Captured live from the map state the operator set, then baked in here and as
+       * the reset-button target. */
+      center:[3.383,16.02], zoom:2, maxZoom:15, attributionControl:{compact:true} });
     window.__anyoneMapLibre = map;
     map.addControl(new maplibregl.NavigationControl({showCompass:false}), 'bottom-right');
 
@@ -11295,11 +11376,36 @@ function initMapLibre(zones){
        * referenced; if anything fails we just skip diamonds (HW still shows via the
        * relay-points fallback path on next style reload). */
       try {
-        const _S = 40, _c = document.createElement('canvas'); _c.width = _S; _c.height = _S;
-        const _x = _c.getContext('2d'), _cx = _S/2, _cy = _S/2, _R = _S/2 - 4;
-        _x.beginPath(); _x.moveTo(_cx,_cy-_R); _x.lineTo(_cx+_R,_cy); _x.lineTo(_cx,_cy+_R); _x.lineTo(_cx-_R,_cy); _x.closePath();
+        /* v482: hardware-relay icon is an AMBER DIAMOND — Anyone Protocol's exclusive
+         * hardware-relay symbol (the historical mark from v378-v472). v481 briefly
+         * tried a triangle but the diamond is the correct brand shape. The diamond is
+         * a 4-vertex polygon (rotated square): top, right, bottom, left vertices.
+         *
+         *   - Shape: amber diamond (rotated square / rhombus, 4 vertices)
+         *   - Fill:  #fbbf24 (the canonical Anyone hardware-relay amber)
+         *   - Stroke: dark #02131d for definition against the basemap
+         *   - icon-size matches BTC nodes: [1,0.4],[5,0.6],[10,0.85]
+         *
+         * History:
+         *   v378-v472: amber diamond (original — this design)
+         *   v473: glowing Anyone signal-arc emblem (disliked)
+         *   v474: Anyone Router photo with round mask (disliked, dropped photo dep)
+         *   v481: triangle (wrong shape revert — diamond is the brand mark)
+         *   v482: back to amber diamond (current) — same canvas pipeline, only artwork
+         *         changes; layer wiring, click handlers, image key 'hw-diamond' untouched. */
+        const _S = 32, _c = document.createElement('canvas'); _c.width = _S; _c.height = _S;
+        const _x = _c.getContext('2d'), _cx = _S/2, _cy = _S/2;
+        // diamond: 4 vertices at top/right/bottom/left, rotated square
+        const _R = _S/2 - 3;
+        _x.beginPath();
+        _x.moveTo(_cx,       _cy - _R);  // top
+        _x.lineTo(_cx + _R,  _cy);       // right
+        _x.lineTo(_cx,       _cy + _R);  // bottom
+        _x.lineTo(_cx - _R,  _cy);       // left
+        _x.closePath();
         _x.fillStyle = '#fbbf24'; _x.fill();
-        _x.lineWidth = 2.5; _x.strokeStyle = '#02131d'; _x.stroke();
+        _x.lineWidth = 2; _x.strokeStyle = '#02131d'; _x.stroke();
+
         const _im = new Image();
         _im.onload = () => {
           try {
@@ -11308,17 +11414,194 @@ function initMapLibre(zones){
               map.addLayer({ id:'hw-diamonds', type:'symbol', source:'relays',
                 filter:['all',['!',['has','point_count']],['==',['get','hw'],1]],
                 layout:{ 'icon-image':'hw-diamond', 'icon-allow-overlap':true, 'icon-ignore-placement':true,
-                  /* v390: smaller so HW reads as an accent, not the dominant feature */
-                  'icon-size':['interpolate',['linear'],['zoom'],2,0.28,8,0.45,14,0.7] },
-                /* v390: dimmer + zoom-graduated so they're subtle at world zoom (where
-                 * ~650 of them used to swamp the tier pings) and clearer up close. */
-                paint:{ 'icon-opacity':['interpolate',['linear'],['zoom'],1,0.45,5,0.6,10,0.8,14,0.9] }});
+                  /* v482: size matches BTC nodes for visual consistency between the two
+                   * overlay marker types. Same expression as _mlBtcEnsureIcon's btc-hex. */
+                  'icon-size':['interpolate',['linear'],['zoom'],1,0.4,5,0.6,10,0.85] }
+              });
             }
           } catch(e){ console.warn('[maplibre] hw-diamond layer add failed:', e && e.message); }
         };
         _im.onerror = () => console.warn('[maplibre] hw-diamond image decode failed');
         _im.src = _c.toDataURL('image/png');
       } catch(e){ console.warn('[maplibre] hw-diamond setup failed:', e && e.message); }
+
+      /* v475: COUNTRY HOVER HIGHLIGHT — port of the old D3 country mouseenter/leave.
+       * On the D3 map, hovering a country lit it up (teal fill ~20% opacity) and showed
+       * a small tooltip with the flag, country name, and relay count. That feature died
+       * with the D3 SVG layer. We bring it back as a MapLibre fill layer below the relay
+       * dots, using feature-state for the hover highlight (no re-layout, very cheap) and
+       * a dedicated mini-tooltip so the existing #tip (relay-zone tooltip) isn't clobbered.
+       * worldTopo is fetched in parallel on page init, so we poll a few times if it
+       * hasn't arrived by the time this load handler runs. */
+      (function(){
+        if(window.__mlCountriesInit) return;
+        const _addCountriesLayer = () => {
+          if(!window.worldTopo || !window.topojson) return false;
+          try {
+            const fc = window.topojson.feature(window.worldTopo, window.worldTopo.objects.countries);
+            if(!map.getSource('countries-hover')){
+              /* v477: drop promoteId — it looks for properties.id, but topojson.feature()
+               * puts the country id at the top level of each Feature (f.id). MapLibre uses
+               * the top-level id natively as the queryable feature id, so we just need to
+               * make sure it's a NUMBER (feature-state requires numeric ids). Without this
+               * fix every country got null/string id and hover-highlight targeted them all
+               * as one feature — borders/fills rendered but hover never narrowed to one. */
+              fc.features.forEach(f => { if(f.id != null) f.id = +f.id; });
+              /* v479: drop antimeridian-crossing features. In the world-atlas-110m
+               * TopoJSON, three countries span the full 360° of longitude (Fiji=242,
+               * Russia=643, Antarctica=010) because their polygons aren't normalized
+               * across the date line. MapLibre renders the outline of these polygons by
+               * drawing straight horizontal segments between the wrap-around points,
+               * producing ~5 phantom horizontal teal lines across the entire map.
+               * Filtering them out kills those artifacts cleanly. Tradeoff: hover-
+               * highlight on Fiji/Russia/Antarctica is disabled — Russia is the only one
+               * that meaningfully matters (it has relays), but the relay dots still
+               * render normally and Russia is still searchable via the Relay Browser. */
+              const ANTIMERIDIAN_IDS = new Set([242, 643, 10]);
+              fc.features = fc.features.filter(f => !ANTIMERIDIAN_IDS.has(+f.id));
+              map.addSource('countries-hover', { type:'geojson', data:fc });
+            }
+            if(!map.getLayer('countries-hover-fill')){
+              const beforeId = map.getLayer('relay-glow') ? 'relay-glow'
+                : (map.getLayer('btc-nodes-layer') ? 'btc-nodes-layer'
+                : (map.getLayer('relay-points') ? 'relay-points' : undefined));
+              /* v476: persistent country shapes (Option A — matches the old D3 map where
+               * every country was always visible as a distinct shape with subtle fill +
+               * border, then brightened on hover). The base layer is a very faint teal
+               * tint (5% opacity) so the moody basemap art still shows through clearly;
+               * the hover state bumps to 22% teal for the active country. */
+              map.addLayer({ id:'countries-hover-fill', type:'fill', source:'countries-hover',
+                paint:{
+                  'fill-color':'#2dd4bf',
+                  'fill-opacity':['case',['boolean',['feature-state','hover'],false], 0.22, 0.04]
+                }
+              }, beforeId);
+              /* v480: always-on country borders were removed (they were colliding with
+               * country/city labels — borders sat on top of label text producing an
+               * overlap-clutter look). Now the line layer renders the border ONLY for the
+               * country with hover feature-state — opacity is 0 when not hovered, 0.9 when
+               * hovered. So at rest there are no extra borders; mousing over a country
+               * draws a clear teal outline just for that one. Hit-testing still works via
+               * the fill layer (which catches mousemove even at 4% base opacity).
+               * v476 history: tried always-on borders → label collisions. v479: tried
+               * filtering antimeridian countries → fixed phantom lines but borders still
+               * overlapped labels. v480: hover-only border solves both. */
+              map.addLayer({ id:'countries-hover-line', type:'line', source:'countries-hover',
+                paint:{
+                  'line-color':'#2dd4bf',
+                  'line-width':['case',['boolean',['feature-state','hover'],false], 1.4, 0],
+                  'line-opacity':['case',['boolean',['feature-state','hover'],false], 0.9, 0]
+                }
+              }, beforeId);
+            }
+            return true;
+          } catch(e){ console.warn('[maplibre] countries layer add failed:', e && e.message); return false; }
+        };
+
+        /* dedicated mini-tooltip so this doesn't clobber the existing relay-zone #tip */
+        let chTip = document.getElementById('ml-country-hover-tip');
+        if(!chTip){
+          chTip = document.createElement('div');
+          chTip.id = 'ml-country-hover-tip';
+          chTip.style.cssText = 'position:fixed;z-index:9998;pointer-events:none;display:none;'
+            + 'background:rgba(1,9,19,.95);border:1px solid rgba(45,212,191,.5);border-radius:6px;'
+            + 'padding:6px 10px;font-family:inherit;font-size:11px;color:#cbd5e1;'
+            + 'white-space:nowrap;box-shadow:0 4px 12px rgba(0,0,0,.4),0 0 14px rgba(45,212,191,.18);';
+          document.body.appendChild(chTip);
+        }
+
+        let _hoveredId = null;
+        const _setHover = (id) => {
+          if(_hoveredId !== null && _hoveredId !== id){
+            try { map.setFeatureState({source:'countries-hover', id:_hoveredId}, {hover:false}); } catch(_){}
+          }
+          if(id !== null && id !== _hoveredId){
+            try { map.setFeatureState({source:'countries-hover', id}, {hover:true}); } catch(_){}
+          }
+          _hoveredId = id;
+        };
+
+        /* helper: format a country's relay count if we have one (reuses countryRelayCache
+         * built by buildCountryCache; works whether or not it's been populated yet). */
+        const _relayCountFor = (id) => {
+          try {
+            if(window.countryRelayCache){
+              const nodes = window.countryRelayCache.get(+id) || [];
+              return nodes.reduce((s,d)=>s+(d.relayCount||0), 0);
+            }
+          } catch(_){}
+          return 0;
+        };
+
+        const _wireHover = () => {
+          map.on('mousemove','countries-hover-fill',(ev)=>{
+            if(!ev.features || !ev.features.length) return;
+            const f = ev.features[0];
+            const id = f.id;
+            _setHover(id);
+            map.getCanvas().style.cursor = 'pointer';
+            const name = (typeof _cn === 'function' && _cn(+id)) || '';
+            const flag = (typeof featToIso === 'function' && typeof isoToFlag === 'function')
+              ? isoToFlag(featToIso(f)) : '';
+            const count = _relayCountFor(id);
+            chTip.innerHTML = '<b style="color:#5eead4">' + flag + ' ' + (name||'—') + '</b>'
+              + (count>0 ? '<div style="color:#94a3b8;font-size:10px;margin-top:2px">' + count.toLocaleString() + ' relays</div>' : '');
+            chTip.style.display = 'block';
+            chTip.style.left = (ev.originalEvent.clientX + 14) + 'px';
+            chTip.style.top  = (ev.originalEvent.clientY + 14) + 'px';
+          });
+          map.on('mouseleave','countries-hover-fill',()=>{
+            _setHover(null);
+            chTip.style.display = 'none';
+            map.getCanvas().style.cursor = '';
+          });
+          /* click → reuse the existing selectCountry flow (Relay Browser focus, dim, etc.) */
+          map.on('click','countries-hover-fill',(ev)=>{
+            if(!ev.features || !ev.features.length) return;
+            const f = ev.features[0];
+            try {
+              if(typeof selectCountry === 'function'){
+                if(window.selectedCountryId === +f.id && typeof clearCountrySelection === 'function'){
+                  clearCountrySelection();
+                } else {
+                  selectCountry(+f.id, f);
+                }
+              }
+            } catch(_){}
+          });
+        };
+
+        /* v478: don't depend on the page's parallel fetch (which uses Promise.all with
+         * fetchData() — if fetchData hangs, worldTopo never lands either). Try existing
+         * window.worldTopo first; if not present, FETCH IT OURSELVES from TOPO_URL with
+         * a generous timeout. This makes the country layer resilient to whatever's
+         * holding up the page's main data fetch.
+         *
+         * On the user's machine (verified by console): worldTopo was still false after
+         * 10s of polling, so the v477 interval gave up and country hover was disabled.
+         * Self-fetching fixes that — we're no longer at the mercy of fetchData(). */
+        if(_addCountriesLayer()){ _wireHover(); window.__mlCountriesInit = true; return; }
+        const _selfFetchTopo = () => {
+          const url = (typeof TOPO_URL === 'string' && TOPO_URL) ? TOPO_URL : null;
+          if(!url){ console.warn('[maplibre] no TOPO_URL constant; country hover disabled'); return; }
+          fetch(url).then(r => { if(!r.ok) throw new Error('HTTP '+r.status); return r.json(); })
+            .then(j => {
+              if(!(j && j.objects && j.objects.countries)) throw new Error('topojson shape invalid');
+              if(!window.worldTopo) window.worldTopo = j; // share with the rest of the page too
+              if(_addCountriesLayer()){ _wireHover(); window.__mlCountriesInit = true; }
+              else console.warn('[maplibre] _addCountriesLayer failed even with topo present');
+            })
+            .catch(err => console.warn('[maplibre] self-fetch topo failed:', err && err.message));
+        };
+        /* Short poll first (1s) in case the page's fetch was just about to land —
+         * avoids racing it. After that, self-fetch. */
+        let tries = 0;
+        const iv = setInterval(()=>{
+          if(_addCountriesLayer()){ clearInterval(iv); _wireHover(); window.__mlCountriesInit = true; }
+          else if(++tries >= 2){ clearInterval(iv); _selfFetchTopo(); }
+        }, 500);
+      })();
+
       // v387: no clusters anymore — every relay is an individual ping. Click a relay
       // or hw-diamond -> open the REAL detail panel (same as D3 map).
       ['relay-points','hw-diamonds'].forEach(lyr => {
@@ -11395,6 +11678,21 @@ function initMapLibre(zones){
         const zStep = (d) => { try { map.stop(); } catch(_){} map.setZoom(Math.max(0, Math.min(map.getMaxZoom(), map.getZoom() + d))); };
         if (zi) zi.onclick = () => zStep(1);
         if (zo) zo.onclick = () => zStep(-1);
+        /* v467: the reset (↺) button was still wired to the dead D3 svg/zoom (it called
+         * svg.transition().call(zoom.transform, d3.zoomIdentity), which does nothing on the
+         * MapLibre map). Re-wire it to fly back to the SAME default view the map opens with
+         * (v465: center [-20,15] zoom 2.0) so "reset" actually returns to the southern world
+         * view showing Argentina/Zambia and all the signal hubs. */
+        const zr = document.getElementById('zr');
+        if (zr) zr.onclick = () => { try { map.stop(); } catch(_){} map.easeTo({ center:[3.383,16.02], zoom:2, bearing:0, pitch:0, duration:600 }); };
+        /* v468: the #zoom-level "100%" readout was updated only inside the dead D3 zoom
+         * handler, so on the MapLibre map it never changed (stuck at 100%). Hook MapLibre's
+         * zoom event to update it. The default load zoom (2.0) reads as 100%; each MapLibre
+         * zoom level doubles/halves the percentage so it tracks intuitively with +/-. */
+        const _zl = document.getElementById('zoom-level');
+        const _updateZl = () => { if(_zl){ try { _zl.textContent = Math.round(Math.pow(2, map.getZoom() - 2) * 100) + '%'; } catch(_){} } };
+        map.on('zoom', _updateZl);
+        _updateZl();
       } catch(_){}
 
       try { setStatus && setStatus(''); } catch(_){}
