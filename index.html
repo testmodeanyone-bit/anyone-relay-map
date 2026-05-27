@@ -8037,9 +8037,17 @@ input:focus-visible, textarea:focus-visible, select:focus-visible{
 </div>
 
 <div id="relay-legend" style="position:fixed;bottom:36px;left:calc(210px + (100vw - 210px) / 2);transform:translateX(-50%);display:flex;gap:16px;align-items:center;background:rgba(6,18,32,0.75);backdrop-filter:blur(8px);border:1px solid rgba(138,188,196,.15);border-radius:20px;padding:6px 16px;font-size:10px;font-family:Orbitron,sans-serif;color:rgba(200,235,245,.9);letter-spacing:.05em;z-index:50;pointer-events:none;">
-  <span style="display:flex;align-items:center;gap:5px"><span style="width:8px;height:8px;border-radius:50%;background:#ff6b35;display:inline-block;box-shadow:0 0 6px #ff6b35"></span><span data-i18n="exitLegend">EXIT</span></span>
-  <span style="display:flex;align-items:center;gap:5px"><span style="width:8px;height:8px;border-radius:50%;background:var(--an-purple,#a78bfa);display:inline-block;box-shadow:0 0 6px #a78bfa"></span><span data-i18n="guardLegend">GUARD</span></span>
-  <span style="display:flex;align-items:center;gap:5px"><span style="width:8px;height:8px;border-radius:50%;background:var(--an-teal,#2dd4bf);display:inline-block;box-shadow:0 0 6px #2dd4bf"></span><span data-i18n="middleLegend">MIDDLE</span></span>
+  <span class="legend-tier" style="display:flex;align-items:center;gap:5px"><span style="width:8px;height:8px;border-radius:50%;background:#ff6b35;display:inline-block;box-shadow:0 0 6px #ff6b35"></span><span data-i18n="exitLegend">EXIT</span></span>
+  <span class="legend-tier" style="display:flex;align-items:center;gap:5px"><span style="width:8px;height:8px;border-radius:50%;background:var(--an-purple,#a78bfa);display:inline-block;box-shadow:0 0 6px #a78bfa"></span><span data-i18n="guardLegend">GUARD</span></span>
+  <span class="legend-tier" style="display:flex;align-items:center;gap:5px"><span style="width:8px;height:8px;border-radius:50%;background:var(--an-teal,#2dd4bf);display:inline-block;box-shadow:0 0 6px #2dd4bf"></span><span data-i18n="middleLegend">MIDDLE</span></span>
+  <!-- v485: health-overlay legend swap. These three spans replace EXIT/GUARD/MIDDLE when
+       the Health overlay (ov-health checkbox) is on. Hidden by default; toggled by
+       _mlApplyHealthOverlay(). i18n keys are English-only for now — TODO add to language
+       dicts (the OCEAN_I18N-adjacent dicts have legendExit/legendGuard/legendMiddle;
+       legendHealthy/legendDegraded/legendCritical aren't translated yet). -->
+  <span class="legend-health" style="display:none;align-items:center;gap:5px"><span style="width:8px;height:8px;border-radius:50%;background:#34d399;display:inline-block;box-shadow:0 0 6px #34d399"></span><span data-i18n="legendHealthy">HEALTHY</span></span>
+  <span class="legend-health" style="display:none;align-items:center;gap:5px"><span style="width:8px;height:8px;border-radius:50%;background:#fbbf24;display:inline-block;box-shadow:0 0 6px #fbbf24"></span><span data-i18n="legendDegraded">DEGRADED</span></span>
+  <span class="legend-health" style="display:none;align-items:center;gap:5px"><span style="width:8px;height:8px;border-radius:50%;background:#ff4444;display:inline-block;box-shadow:0 0 6px #ff4444"></span><span data-i18n="legendCritical">CRITICAL</span></span>
   <span style="display:flex;align-items:center;gap:5px"><span style="width:9px;height:9px;background:var(--an-amber,#fbbf24);display:inline-block;box-shadow:0 0 6px #fbbf24;clip-path:polygon(50% 0%,100% 50%,50% 100%,0% 50%)"></span><span data-i18n="hwLegend">HW</span></span>
   <span id="legend-geo" style="display:flex;align-items:center;gap:5px"><span style="width:9px;height:9px;border-radius:50%;border:1.5px dashed var(--an-amber,#fbbf24);display:inline-block;background:transparent;box-sizing:border-box;"></span><span data-i18n="geoLegend">GEO+</span></span>
   <span id="legend-stable" style="display:flex;align-items:center;gap:5px"><span style="width:9px;height:9px;border-radius:2px;background:rgba(52,211,153,.25);border:1px solid var(--an-green,#34d399);display:inline-block;box-sizing:border-box;"></span><span data-i18n="stableLegend">STABLE</span></span>
@@ -10973,6 +10981,87 @@ function initMapLibre(zones){
           'text-size':['interpolate',['linear'],['zoom'],3,9,6,11,7,13], 'text-anchor':'top', 'text-offset':[0,0.4],
           'text-max-width':8, 'symbol-sort-key':['*',-1,['coalesce',['get','population_rank'],0]] },
         paint:{ 'text-color':'rgba(180,210,205,0.82)', 'text-halo-color':'rgba(2,11,18,0.9)', 'text-halo-width':1.1 }});
+
+      /* v483: OCEAN / SEA LABELS — ported from the old D3 drawOceanLabels.
+       * Protomaps doesn't label water bodies, so the open seas felt anonymous compared
+       * to the old map's atmosphere. This restores "PACIFIC OCEAN", "ATLANTIC OCEAN",
+       * "MEDITERRANEAN SEA", etc. as a MapLibre symbol layer sitting just above the
+       * country/city labels but below the relay dots, so dots still dominate.
+       *
+       * The 21 ocean entries match the original D3 data exactly: [lng, lat, name,
+       * font-size, letter-spacing, rotation]. Some seas (Red Sea, South China Sea,
+       * Norwegian Sea) carry a tuned rotation so the label sits along the sea's actual
+       * axis instead of horizontally. The Southern Ocean wraps the globe so it has
+       * two entries (Pacific side rotated -8°, Atlantic side rotated +8°) — same as
+       * the D3 map. Arctic Ocean similarly has two entries for two visible regions.
+       *
+       * i18n: uses the existing _oc() helper which reads from OCEAN_I18N (14 languages
+       * already built — ar, de, es, fr, hi, id, ja, ko, pt, ru, th, tr, vi, zh). Names
+       * are pre-translated at layer-build time. If user changes language mid-session,
+       * labels stay in the load-time language until next page load — minor edge case. */
+      (function _addOceanLabels(){
+        if(map.getLayer('ocean-labels')) return;
+        const _oceans = [
+          [-150,   0,  'PACIFIC OCEAN',     13, 6,   0],
+          [ -30,   0,  'ATLANTIC OCEAN',    12, 5,   0],
+          [  75, -25,  'INDIAN OCEAN',      12, 5,   0],
+          [ 162.5,-48, 'SOUTHERN OCEAN',    10, 4,  -8],
+          [ -40, -55,  'SOUTHERN OCEAN',    10, 4,   8],
+          [   0,  82,  'ARCTIC OCEAN',      10, 4,   0],
+          [  60,  72,  'ARCTIC OCEAN',       9, 3,  10],
+          [-170, -35,  'SOUTH PACIFIC',      9, 3,   0],
+          [ -57.9, 11, 'CARIBBEAN SEA',      8, 2,   0],
+          [  38,  15.5,'RED SEA',            7, 1,  35],
+          [  64,  18,  'ARABIAN SEA',        8, 2,   0],
+          [ 112.4, 9.3,'SOUTH CHINA SEA',    8, 2,  -5],
+          [  33.6,44.5,'BLACK SEA',          7, 1,   0],
+          [  18,  35,  'MEDITERRANEAN SEA',  7, 1,   0],
+          [   3,  56,  'NORTH SEA',          7, 1,   0],
+          [  19,  60,  'BALTIC SEA',         7, 1,   0],
+          [ -90,  24,  'GULF OF MEXICO',     7, 1,   0],
+          [  88,  15,  'BAY OF BENGAL',      7, 1,   0],
+          [  -3.1,67,  'NORWEGIAN SEA',      8, 2,   0],
+          [  20, -75,  'ANTARCTICA',        13, 5,   0]
+        ];
+        const features = _oceans.map(([lng, lat, name, fs, ls, rot]) => ({
+          type:'Feature',
+          geometry:{ type:'Point', coordinates:[lng, lat] },
+          properties:{
+            name: (typeof _oc === 'function' ? _oc(name) : name),
+            /* D3 font-size was a fixed pixel size at zoom 1 with no scaling. We expose
+             * the original size as a property; MapLibre's text-size uses it directly
+             * but scales it up slightly at higher zoom so labels stay legible. */
+            baseSize: fs,
+            letterSpacing: ls * 0.1,  // D3 px-spacing → MapLibre em-spacing (rough conversion)
+            rotation: rot
+          }
+        }));
+        map.addSource('ocean-labels', { type:'geojson', data:{ type:'FeatureCollection', features } });
+        map.addLayer({ id:'ocean-labels', type:'symbol', source:'ocean-labels',
+          layout:{
+            'text-field':['get','name'],
+            'text-font':['Open Sans Regular'],
+            /* per-feature size, gently zoom-scaled. The 0.9× / 1.4× factors keep labels
+             * subtle at world zoom and a touch larger when zoomed in. */
+            'text-size':['interpolate',['linear'],['zoom'],
+              1, ['*',['get','baseSize'], 0.9],
+              5, ['*',['get','baseSize'], 1.2],
+              8, ['*',['get','baseSize'], 1.4]],
+            'text-letter-spacing':['get','letterSpacing'],
+            'text-rotate':['get','rotation'],
+            'text-transform':'uppercase',
+            'text-allow-overlap':false,
+            'text-ignore-placement':false,
+            'text-anchor':'center'
+          },
+          paint:{
+            /* same soft blue-white as D3 map: subtle, atmospheric, never competes with relay dots */
+            'text-color':'rgba(180,220,255,0.45)',
+            'text-halo-color':'rgba(0,10,30,0.6)',
+            'text-halo-width':1.4
+          }
+        });
+      })();
 
       // cluster bubbles, sized + tinted by count (TorMap-style aggregation)
       /* v387: relay "pings" — no clusters. Two layers per relay: a soft glow halo
@@ -22362,7 +22451,123 @@ let healthOverlayOn = false;
 function toggleHealthOverlay(){
   healthOverlayOn = document.getElementById('ov-health').checked;
   _lastDrawHash = '';
-  drawNodes(relayData);
+  /* v484: MapLibre path. The original D3 logic (drawNodes) is dead under MapLibre,
+   * which is why this checkbox did nothing on the new map. Now we recolor the
+   * `relay-points` and `relay-glow` layers via setPaintProperty:
+   *   - OFF: revert to tier coloring (red/purple/teal based on exit/guard/middle)
+   *   - ON:  swap to health-derived coloring (green/amber/red/grey) sourced from
+   *          each relay's zone health score
+   *
+   * The zone health score uses getZoneHealthColor() — same scoring as the old D3
+   * map (uptime coverage, avg uptime days, avg bandwidth, relay count). We compute
+   * it per-zone once, then attach the resulting color as a `healthColor` property
+   * on each relay feature in that zone, rebuilding the relay source data.
+   *
+   * Empty-cache handling: getZoneHealthColor returns '#555' (grey) when no fingerprints
+   * resolve in _allUptimesCache. Since enrichAllViaAnyoneAPI runs async after page
+   * load, users who toggle health-overlay too early see a sea of grey instead of a
+   * misleading sea of red. The cache fills in within ~10-30s typically.
+   *
+   * The D3 drawNodes() call below stays as a no-op under MapLibre, just in case
+   * someone disables __mlActive — same defensive pattern as toggleHwOverlay (v391). */
+  try {
+    const m = window.__anyoneMapLibre;
+    if (m && m.getSource('relays')) {
+      _mlApplyHealthOverlay(m, healthOverlayOn);
+    }
+  } catch(e){ console.warn('[health overlay] apply failed:', e && e.message); }
+  if (typeof drawNodes === 'function') { try { drawNodes(relayData); } catch(_){} }
+}
+
+/* v484: rebuild the relay-source data and swap paint to health colors.
+ *
+ *   on=true:  features get a `healthColor` property; paint expression reads it
+ *   on=false: features have no healthColor; paint uses original tier match
+ *
+ * We rebuild via setData rather than feature-state because (a) we're already
+ * generating the source from `relayData` so an in-place rebuild is cheap, and
+ * (b) it avoids juggling per-feature ids that the relay source doesn't have. */
+function _mlApplyHealthOverlay(m, on){
+  const src = m.getSource('relays');
+  /* v484 fix: relayData is a module-scope `let`, NOT a window property — accessing
+   * window.relayData returned undefined and the function silently early-returned.
+   * Use the same `typeof` pattern as buildGeoJSON elsewhere in the file. */
+  const _relayData = (typeof relayData !== 'undefined') ? relayData : null;
+  if (!src || !_relayData) return;
+  /* Pre-compute zone colors once (some zones have many relays — avoid recomputing) */
+  const zoneColors = on ? _relayData.map(z => {
+    try { return getZoneHealthColor(z); } catch(_){ return '#555'; }
+  }) : null;
+  /* Rebuild the FeatureCollection — same logic as buildGeoJSON, but with an
+   * optional healthColor injected per feature when overlay is on. Keeps a
+   * single source of truth for relay feature properties. */
+  const _hw = (typeof hwFps !== 'undefined' && hwFps) ? hwFps : null;
+  const _ex = (typeof exitFps !== 'undefined' && exitFps) ? exitFps : null;
+  const _gu = (typeof guardFps !== 'undefined' && guardFps) ? guardFps : null;
+  const feats = [];
+  _relayData.forEach((z, zi) => {
+    const coords = z.relayCoords || [];
+    const fps    = z.fingerprints || [];
+    const e = z.exitCount||0, g = z.guardCount||0, hw = z.hwCount||0;
+    const bag = [];
+    for(let i=0;i<e;i++) bag.push('exit');
+    for(let i=0;i<g;i++) bag.push('guard');
+    while(bag.length < coords.length) bag.push('middle');
+    const zoneColor = zoneColors ? zoneColors[zi] : null;
+    coords.forEach((c, i) => {
+      if (!c || c.length < 2) return;
+      const fp = fps[i] || '';
+      const FP = fp.toUpperCase();
+      let tier = bag[i] || 'middle';
+      if (fp && (_ex || _gu)) {
+        if (_ex && _ex.has(FP)) tier = 'exit';
+        else if (_gu && _gu.has(FP)) tier = 'guard';
+        else tier = 'middle';
+      }
+      const isHw = (fp && _hw) ? (_hw.has(FP) ? 1 : 0) : (i < hw ? 1 : 0);
+      const props = { tier, hw:isHw, fp, lat:c[0], lng:c[1],
+        city: z.cityName || z.countryName || z.countryCode || '',
+        asn: z.asName || '' };
+      if (zoneColor) props.healthColor = zoneColor;
+      feats.push({ type:'Feature',
+        geometry:{ type:'Point', coordinates:[c[1], c[0]] },
+        properties: props });
+    });
+  });
+  src.setData({ type:'FeatureCollection', features:feats });
+  /* Swap circle-color expressions on both layers. The "case" check tests whether
+   * the feature has a healthColor property; if so use it, otherwise tier color. */
+  if (on) {
+    if (m.getLayer('relay-glow')) {
+      m.setPaintProperty('relay-glow','circle-color',
+        ['case', ['has','healthColor'], ['get','healthColor'],
+          ['match',['get','tier'],'exit','#ef4444','guard','#a78bfa','middle','#2dd4bf','#888']]);
+    }
+    if (m.getLayer('relay-points')) {
+      /* Use the same health color for the core dot too (no lighter "tier-bright"
+       * variant — the green/amber/red palette is clear enough without a paler tone). */
+      m.setPaintProperty('relay-points','circle-color',
+        ['case', ['has','healthColor'], ['get','healthColor'],
+          ['match',['get','tier'],'exit','#fca5a5','guard','#ddd6fe','middle','#99f6e4','#ccc']]);
+    }
+  } else {
+    /* restore original tier coloring */
+    if (m.getLayer('relay-glow')) {
+      m.setPaintProperty('relay-glow','circle-color',
+        ['match',['get','tier'],'exit','#ef4444','guard','#a78bfa','middle','#2dd4bf','#888']);
+    }
+    if (m.getLayer('relay-points')) {
+      m.setPaintProperty('relay-points','circle-color',
+        ['match',['get','tier'],'exit','#fca5a5','guard','#ddd6fe','middle','#99f6e4','#ccc']);
+    }
+  }
+  /* v485: legend swap so users understand what the dot colors mean.
+   * When overlay on:  EXIT/GUARD/MIDDLE → HEALTHY/DEGRADED/CRITICAL
+   * When overlay off: reverse. HW/GEO+/STABLE are orthogonal — always visible. */
+  try {
+    document.querySelectorAll('.legend-tier').forEach(el => { el.style.display = on ? 'none' : 'flex'; });
+    document.querySelectorAll('.legend-health').forEach(el => { el.style.display = on ? 'flex' : 'none'; });
+  } catch(_){}
 }
 function getZoneHealthColor(zone){
   const fps = zone.fingerprints || [];
