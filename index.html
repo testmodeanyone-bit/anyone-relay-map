@@ -7774,15 +7774,11 @@ input:focus-visible, textarea:focus-visible, select:focus-visible{
       </label>
     </div>
     <!-- v27: geo cluster toggle removed — badge auto-shows -->
-    <div class="sb-legend-row" id="ov-stable-row" style="font-size:10px;cursor:pointer;" onclick="toggleStableOverlay()">
-      <div style="width:10px;height:10px;border-radius:2px;background:rgba(52,211,153,.2);border:1px solid var(--an-green,#34d399);flex-shrink:0;"></div>
-      <span id="ov-stable-label">Stable</span>
-      <label class="toggle-sw amber" onclick="event.stopPropagation()">
-        <input type="checkbox" id="ov-stable" checked onchange="toggleStableOverlay()" aria-labelledby="ov-stable-label">
-        <span class="toggle-track"></span>
-        <span class="toggle-thumb"></span>
-      </label>
-    </div>
+    <!-- v486: ov-stable row removed. The toggle was a dead D3-only feature on the
+         MapLibre map (called drawNodes which no-ops under MapLibre) and visually
+         overlapped with the new health overlay (v484/v485). The STABLE badge in
+         the Relay Browser sidebar stays — stableOverlayOn defaults to true so
+         relay rows still surface the badge for high-uptime stake relays. -->
     <div class="sb-legend-row" style="font-size:10px;cursor:pointer;" onclick="toggleHealthOverlay()">
       <div style="width:10px;height:10px;border-radius:2px;background:linear-gradient(135deg,#00ff88,#fbbf24,#ff4444);flex-shrink:0;"></div>
       <span>Health</span>
@@ -8050,7 +8046,9 @@ input:focus-visible, textarea:focus-visible, select:focus-visible{
   <span class="legend-health" style="display:none;align-items:center;gap:5px"><span style="width:8px;height:8px;border-radius:50%;background:#ff4444;display:inline-block;box-shadow:0 0 6px #ff4444"></span><span data-i18n="legendCritical">CRITICAL</span></span>
   <span style="display:flex;align-items:center;gap:5px"><span style="width:9px;height:9px;background:var(--an-amber,#fbbf24);display:inline-block;box-shadow:0 0 6px #fbbf24;clip-path:polygon(50% 0%,100% 50%,50% 100%,0% 50%)"></span><span data-i18n="hwLegend">HW</span></span>
   <span id="legend-geo" style="display:flex;align-items:center;gap:5px"><span style="width:9px;height:9px;border-radius:50%;border:1.5px dashed var(--an-amber,#fbbf24);display:inline-block;background:transparent;box-sizing:border-box;"></span><span data-i18n="geoLegend">GEO+</span></span>
-  <span id="legend-stable" style="display:flex;align-items:center;gap:5px"><span style="width:9px;height:9px;border-radius:2px;background:rgba(52,211,153,.25);border:1px solid var(--an-green,#34d399);display:inline-block;box-sizing:border-box;"></span><span data-i18n="stableLegend">STABLE</span></span>
+  <!-- v486: legend-stable chip removed alongside the ov-stable sidebar checkbox.
+       The STABLE classification still exists in the Relay Browser per-relay badge;
+       only the at-rest map legend chip was misleading (no visual on the map matched it). -->
   <span id="legend-loading" style="display:flex;align-items:center;gap:5px">
     <span style="width:8px;height:8px;border-radius:50%;background:#00f5ff;display:inline-block;box-shadow:0 0 6px #00f5ff;animation:pulse-dot 1s ease-in-out infinite"></span>
     <span id="legend-loading-text" data-i18n="legendColoring">COLORING…</span>
@@ -11076,6 +11074,46 @@ function initMapLibre(zones){
           'circle-radius':['interpolate',['linear'],['zoom'],1,3.5,4,6,8,12,14,20],
           'circle-blur':1,
           'circle-opacity':['interpolate',['linear'],['zoom'],1,0.3,4,0.42,8,0.55,14,0.6] }});
+      /* v487: ISP CONCENTRATION RINGS — port of the old D3 ring-around-dot visual.
+       * Two layers sit between relay-glow and relay-points so the ring appears UNDER
+       * the crisp core dot but OVER the glow halo (matches D3 z-order: ring appended
+       * before core circle in the old drawNodes code path).
+       *
+       *   - HIGH    (10-20% network share): amber ring, radius = base+~14px equivalent
+       *   - CRITICAL ( >20% network share): red ring, radius = base+~18px equivalent
+       *
+       * Filtered by per-feature `asn` (the ISP name on each relay), matched against
+       * the global ispConcHigh / ispConcCritical arrays. Those arrays are populated
+       * by computeIspConcentration() which runs after the bandwidth/uptime enrichment
+       * — so on first paint these layers have empty filters (no rings rendered),
+       * and _mlApplyIspConcOverlay() rebuilds the filters once data exists.
+       *
+       * Initial visibility: 'none'. _mlApplyIspConcOverlay() flips to 'visible' when
+       * the ov-isp checkbox turns on AND there's at least one ISP in the concerning
+       * tier. circle-stroke-dasharray is not supported on circle layers in MapLibre,
+       * so the rings are solid strokes — slightly less "scanner-y" than the old
+       * map's dashed 4,2 pattern, but cleaner overall and the color/size + alpha
+       * fill convey the same "this relay's ISP is over-concentrated" signal. */
+      map.addLayer({ id:'isp-conc-ring-high', type:'circle', source:'relays',
+        filter:['all', ['==',['get','hw'],0], ['in', ['get','asn'], ['literal', []]]],
+        layout:{ visibility:'none' },
+        paint:{
+          'circle-color':'rgba(251,191,36,0.10)',
+          'circle-radius':['interpolate',['linear'],['zoom'],1,7,4,10,8,16,14,24],
+          'circle-stroke-color':'#fbbf24',
+          'circle-stroke-width':2,
+          'circle-stroke-opacity':0.95
+        }});
+      map.addLayer({ id:'isp-conc-ring-critical', type:'circle', source:'relays',
+        filter:['all', ['==',['get','hw'],0], ['in', ['get','asn'], ['literal', []]]],
+        layout:{ visibility:'none' },
+        paint:{
+          'circle-color':'rgba(239,68,68,0.18)',
+          'circle-radius':['interpolate',['linear'],['zoom'],1,9,4,13,8,20,14,30],
+          'circle-stroke-color':'#ef4444',
+          'circle-stroke-width':2,
+          'circle-stroke-opacity':0.95
+        }});
       // crisp core dot — v390: bigger + fully opaque sooner so relays read clearly
       map.addLayer({ id:'relay-points', type:'circle', source:'relays', filter:['==',['get','hw'],0],
         paint:{ 'circle-color':['match',['get','tier'],'exit','#fca5a5','guard','#ddd6fe','middle','#99f6e4','#ccc'],
@@ -22389,6 +22427,15 @@ function computeIspConcentration(){
     if(ispConcOn){
       _lastDrawHash = '';
       drawNodes(relayData);
+      /* v487: also rebuild the MapLibre ring filters with the freshly computed
+       * ispConcHigh/ispConcCritical arrays, so updates propagate while the
+       * overlay is on. Safe to call even if the layers don't exist yet. */
+      try {
+        const m = window.__anyoneMapLibre;
+        if (m && typeof _mlApplyIspConcOverlay === 'function') {
+          _mlApplyIspConcOverlay(m, true);
+        }
+      } catch(_){}
     }
   } else {
     badge?.classList.remove('visible');
@@ -22398,8 +22445,82 @@ function computeIspConcentration(){
 
 function toggleIspConc(){
   ispConcOn = document.getElementById('ov-isp').checked;
+  /* v487: drive the MapLibre ISP ring layers. The old D3 path (drawNodes) no-ops
+   * under MapLibre, which is why this checkbox did nothing on the new map. The
+   * helper reads the current ispConcHigh/ispConcCritical arrays, rebuilds the
+   * `asn` filter expressions, and flips layer visibility. computeIspConcentration()
+   * also calls the helper when overlay is on, so updates propagate. */
+  try {
+    const m = window.__anyoneMapLibre;
+    if (m && m.getLayer('isp-conc-ring-high')) {
+      _mlApplyIspConcOverlay(m, ispConcOn);
+    }
+  } catch(e){ console.warn('[isp-conc overlay] toggle failed:', e && e.message); }
   _lastDrawHash = '';
-  drawNodes(relayData);
+  if (typeof drawNodes === 'function') { try { drawNodes(relayData); } catch(_){} }
+}
+
+/* v487: rebuild filter expressions on the ISP ring layers and set visibility.
+ *   on=true:  visibility='visible', filter matches features whose asn is in the
+ *             over-concentrated arrays. If both arrays are empty (data not loaded
+ *             yet), the filters match nothing → no rings render (correct).
+ *   on=false: visibility='none' (filter doesn't need to change).
+ *
+ * v488 fix: the relay-points features were built from `z.asName` (zone-level)
+ * which is always null — zones aggregate many relays each on different ISPs,
+ * so they have no single asName. The actual per-relay ASN is on `allRelays[i].asName`.
+ * On overlay turn-ON we rebuild the source data with `asn` populated from the
+ * fingerprint→asName lookup built off allRelays. Other properties (tier, hw, fp,
+ * healthColor from v484, etc.) are preserved on each feature. */
+function _mlApplyIspConcOverlay(m, on){
+  const highList = (typeof ispConcHigh !== 'undefined' && ispConcHigh) ? ispConcHigh : [];
+  const critList = (typeof ispConcCritical !== 'undefined' && ispConcCritical) ? ispConcCritical : [];
+  try {
+    /* v488: enrich the relays source with per-feature asn. We do this every time
+     * the overlay turns on, because (a) allRelays may have grown since last call,
+     * and (b) it's cheap (~7000 features). Only run when on=true — when off, no
+     * point repaving the source. asn stays on features after toggle-off (harmless,
+     * lets toggling back on render instantly without another rebuild). */
+    if (on) {
+      const src = m.getSource('relays');
+      if (src && src._data && typeof allRelays !== 'undefined' && allRelays.length) {
+        /* Build fingerprint → asName lookup. Use uppercase keys to match the FP
+         * normalization done in buildGeoJSON. */
+        const fpToAsn = new Map();
+        for (let i = 0; i < allRelays.length; i++) {
+          const r = allRelays[i];
+          const fp = r.fp || r.fingerprint;
+          if (fp && r.asName) fpToAsn.set(fp.toUpperCase(), r.asName);
+        }
+        /* Mutate in-place — preserves all other feature properties (tier, hw,
+         * healthColor, city, etc.). Only fills asn where empty/missing so we
+         * don't clobber a previous correct value with a later empty lookup. */
+        const fc = src._data;
+        if (fc && fc.features) {
+          let enrichedCount = 0;
+          for (let i = 0; i < fc.features.length; i++) {
+            const f = fc.features[i];
+            const fp = f.properties && f.properties.fp;
+            if (fp) {
+              const asn = fpToAsn.get(fp.toUpperCase());
+              if (asn) { f.properties.asn = asn; enrichedCount++; }
+            }
+          }
+          src.setData(fc);
+        }
+      }
+    }
+    if (m.getLayer('isp-conc-ring-high')) {
+      m.setFilter('isp-conc-ring-high',
+        ['all', ['==',['get','hw'],0], ['in', ['get','asn'], ['literal', highList]]]);
+      m.setLayoutProperty('isp-conc-ring-high','visibility', on ? 'visible' : 'none');
+    }
+    if (m.getLayer('isp-conc-ring-critical')) {
+      m.setFilter('isp-conc-ring-critical',
+        ['all', ['==',['get','hw'],0], ['in', ['get','asn'], ['literal', critList]]]);
+      m.setLayoutProperty('isp-conc-ring-critical','visibility', on ? 'visible' : 'none');
+    }
+  } catch(e){ console.warn('[isp-conc overlay] apply failed:', e && e.message); }
 }
 
 function toggleHwOverlay(){
@@ -22438,7 +22559,14 @@ function updateGeoClusterBadge(){
 }
 
 function toggleStableOverlay(){
-  stableOverlayOn = document.getElementById('ov-stable').checked;
+  /* v486: the ov-stable checkbox + legend-stable chip were removed (dead D3 feature,
+   * overlapped with the v484 health overlay). If something still calls this — e.g.
+   * an old keyboard shortcut or a saved command-palette macro — fail soft: read the
+   * checkbox safely, no-op the legend chip lookup, and let the Relay Browser refresh
+   * pick up whatever stableOverlayOn currently is (defaults true → STABLE badges
+   * keep showing in the sidebar). */
+  const cb = document.getElementById('ov-stable');
+  if (cb) stableOverlayOn = cb.checked;
   const el = document.getElementById('legend-stable');
   if(el) el.style.display = stableOverlayOn ? '' : 'none';
   if(filteredRelays && filteredRelays.length > 0){
