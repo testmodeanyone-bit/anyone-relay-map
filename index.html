@@ -1492,6 +1492,12 @@ document.addEventListener('keydown', function(e){
   // Skip remaining shortcuts when in input fields
   if(isInput) return;
 
+  /* v461: single-letter shortcuts (R, S, H, C, M, etc.) must NOT fire when a browser
+   * modifier is held — otherwise Ctrl+Shift+R (hard refresh) triggered the "R" =
+   * toggle-Relay-Browser shortcut, flashing the panel open just before the reload.
+   * Same for Ctrl+R, Ctrl+S, etc. Escape above is intentionally allowed regardless. */
+  if(e.ctrlKey || e.metaKey || e.altKey) return;
+
   // ═══ +/= — Zoom in ═══
   if(e.key === '+' || e.key === '='){
     e.preventDefault();
