@@ -10472,9 +10472,8 @@ Issued: ${(/* @__PURE__ */ new Date()).toISOString()}
      * at the cost of an extra hop through the proxy. */
     if (url.pathname === "/api/relay-registry" && request.method === "GET") {
       try {
-        const UPSTREAM = "https://api.ec.anyone.tech/fingerprint-map";
-        const CACHE_KEY = "relay-registry-cache";
-        const CACHE_TTL = 300; // 5 minutes
+        const CACHE_KEY = REGISTRY_CACHE_KEY;
+        const CACHE_TTL = REGISTRY_CACHE_TTL; // 5-min serve-fresh window (eviction lifetime is longer; see buildAndCacheRegistry)
         
         // Try KV cache first
         if (env.FP_INDEX) {
@@ -10491,26 +10490,25 @@ Issued: ${(/* @__PURE__ */ new Date()).toISOString()}
           }
         }
         
-        // Fetch upstream
-        const upstream = await fetch(UPSTREAM, { signal: AbortSignal.timeout(10000) });
-        if (!upstream.ok) {
-          return cors(JSON.stringify({ error: "Upstream registry unavailable", status: upstream.status }), 502);
+        // Cache miss → fetch + enrich + cache via the shared builder (v56), so
+        // this path and the 15-min cron warmer can't drift.
+        let built;
+        try {
+          built = await buildAndCacheRegistry(env, ctx);
+        } catch (e) {
+          if (e.upstreamStatus) {
+            return cors(JSON.stringify({ error: "Upstream registry unavailable", status: e.upstreamStatus }), 502);
+          }
+          throw e; // non-upstream failure → outer catch returns 500
         }
-        const data_raw = await upstream.json();
-        // QUARANTINE FILTER (v54) — see CENTROID_BLOCKLIST_HIGH/MEDIUM (canonical, defined above)
-        const { filtered: data } = applyQuarantineFilter(data_raw);
-        const _enrichStart = Date.now();
-        const _enrichResult = await enrichFromCache(data, env);
-        const _enrichedCount = (_enrichResult && _enrichResult.count) || 0;
+        const { data, relayCount, mac, enrichResult: _enrichResult, enrichStart: _enrichStart } = built;
         const _enrichStats = (_enrichResult && _enrichResult.stats) || null;
         const _enrichEvents = (_enrichResult && _enrichResult.events) || [];
-        const relayCount = Object.keys(data).length;
         /* v55c+events: append a snapshot_built entry to the producer event log,
          * plus any per-correction events emitted by enrichFromCache. ctx.waitUntil
          * keeps this off the response hot path; appendEventLog swallows errors so
-         * the log can never break the snapshot. Only logs when the registry was
-         * actually refetched from upstream (i.e. on cache miss) — the cache-hit
-         * path returns earlier and doesn't run enrichFromCache. */
+         * the log can never break the snapshot. Only logs on the cache-miss path —
+         * the cache-hit path returns earlier and doesn't rebuild. */
         if (ctx && typeof ctx.waitUntil === 'function') {
           const snapshotEvent = {
             type: 'snapshot_built',
@@ -10521,28 +10519,6 @@ Issued: ${(/* @__PURE__ */ new Date()).toISOString()}
           };
           ctx.waitUntil(appendEventLog(env, snapshotEvent, ..._enrichEvents));
         }
-        
-        // Compute HMAC over the canonical relay data
-        let mac = null;
-        if (env.HMAC_SECRET) {
-          const canonical = JSON.stringify(data); // deterministic since keys are hex fingerprints
-          const key = await crypto.subtle.importKey(
-            "raw", new TextEncoder().encode(env.HMAC_SECRET),
-            { name: "HMAC", hash: "SHA-256" }, false, ["sign"]
-          );
-          const sig = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(canonical));
-          mac = Array.from(new Uint8Array(sig)).map(b => b.toString(16).padStart(2, "0")).join("").slice(0, 32);
-        }
-        
-        // Cache in KV
-        if (env.FP_INDEX) {
-          ctx.waitUntil(env.FP_INDEX.put(
-            CACHE_KEY,
-            JSON.stringify({ data, ts: Date.now(), mac }),
-            { expirationTtl: CACHE_TTL + 60 }
-          ).catch(() => {}));
-        }
-        
         return cors(JSON.stringify({
           relays: data,
           relayCount,
@@ -10663,6 +10639,12 @@ Issued: ${(/* @__PURE__ */ new Date()).toISOString()}
       ctx.waitUntil(env.FP_INDEX.put(lockKey, String(Date.now()), { expirationTtl: 60 }).catch(() => {}));
     }
     ctx.waitUntil(storeSnapshot(env));
+    /* v56: warm relay-registry-cache on the cron so the key never depends on
+     * organic /api/relay-registry traffic landing within the eviction window.
+     * Shares buildAndCacheRegistry with the route, so both write the same shape
+     * and the persisted record bridges the gap between 15-min ticks. Fire-and-
+     * forget: a warm failure must not affect storeSnapshot or the uptimes warm. */
+    ctx.waitUntil(buildAndCacheRegistry(env, ctx).catch(e => console.warn("[cron] registry warm failed:", e.message)));
     ctx.waitUntil((async () => {
       if (!env.FP_INDEX) {
         console.warn("[cron] no FP_INDEX binding \u2014 cannot warm uptimes cache");
@@ -10699,6 +10681,55 @@ Issued: ${(/* @__PURE__ */ new Date()).toISOString()}
     })());
   }
 };
+/* v56: shared registry fetch + enrich + cache, called by BOTH the
+ * /api/relay-registry route (cache-miss path) and the 15-min cron warmer, so the
+ * two cannot drift (this codebase has a history of drift bugs — see kv-schema S1).
+ * Fetches the upstream fingerprint-map, applies the quarantine filter, runs
+ * enrichFromCache (mutating `data` in place to upgrade quarantined relays from
+ * GEO_ENRICH), computes the HMAC, and writes relay-registry-cache to FP_INDEX.
+ *
+ * Eviction TTL note: the route still SERVES from cache only while younger than
+ * CACHE_TTL (5 min), but we persist the record for CACHE_PERSIST_TTL (longer than
+ * the 15-min cron interval) so the key never fully disappears between ticks. The
+ * old route wrote CACHE_TTL+60 (6 min), which left a ~9-min gap every cron cycle
+ * where readers like /api/_diag found nothing. Serve-freshness is unchanged; only
+ * the record's lifetime is extended.
+ *
+ * Throws on upstream failure (with .upstreamStatus set) so the route maps it to a
+ * 502 and the cron logs+swallows. Returns the pieces the route needs for its
+ * event log and response framing. */
+const REGISTRY_CACHE_KEY = "relay-registry-cache";
+const REGISTRY_CACHE_TTL = 300;            // serve-fresh window (route)
+const REGISTRY_PERSIST_TTL = 30 * 60;      // KV eviction lifetime (bridges 15-min cron)
+async function buildAndCacheRegistry(env, ctx) {
+  const UPSTREAM = "https://api.ec.anyone.tech/fingerprint-map";
+  const upstream = await fetch(UPSTREAM, { signal: AbortSignal.timeout(10000) });
+  if (!upstream.ok) { const e = new Error("upstream " + upstream.status); e.upstreamStatus = upstream.status; throw e; }
+  const data_raw = await upstream.json();
+  const { filtered: data } = applyQuarantineFilter(data_raw);
+  const enrichStart = Date.now();
+  const enrichResult = await enrichFromCache(data, env);
+  const relayCount = Object.keys(data).length;
+  let mac = null;
+  if (env.HMAC_SECRET) {
+    const canonical = JSON.stringify(data); // deterministic since keys are hex fingerprints
+    const key = await crypto.subtle.importKey(
+      "raw", new TextEncoder().encode(env.HMAC_SECRET),
+      { name: "HMAC", hash: "SHA-256" }, false, ["sign"]
+    );
+    const sig = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(canonical));
+    mac = Array.from(new Uint8Array(sig)).map(b => b.toString(16).padStart(2, "0")).join("").slice(0, 32);
+  }
+  if (env.FP_INDEX) {
+    const put = env.FP_INDEX.put(
+      REGISTRY_CACHE_KEY,
+      JSON.stringify({ data, ts: Date.now(), mac }),
+      { expirationTtl: REGISTRY_PERSIST_TTL }
+    ).catch(() => {});
+    if (ctx && typeof ctx.waitUntil === "function") ctx.waitUntil(put); else await put;
+  }
+  return { data, relayCount, mac, enrichResult, enrichStart };
+}
 async function buildAndStoreIndex(env) {
   const t0 = Date.now();
   /* v47: timeouts on every outbound fetch (matches buildAndStoreUptimes pattern). */
