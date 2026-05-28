@@ -1594,23 +1594,18 @@ document.addEventListener('keydown', function(e){
     return;
   }
 
-  // ═══ S — Toggle Signals ═══
-  if(e.key === 's' || e.key === 'S'){
-    if(typeof toggleSignals === 'function') toggleSignals();
-    return;
-  }
-  // ═══ H — Toggle Health panel ═══
-  if(e.key === 'h' || e.key === 'H'){
-    var hp = document.getElementById('health-panel');
-    if(hp) hp.classList.toggle('visible');
-    return;
-  }
-  // ═══ R — Toggle Relay Browser ═══
-  if(e.key === 'r' || e.key === 'R'){
-    var rp = document.getElementById('relay-panel');
-    if(rp) rp.style.display = rp.style.display === 'block' ? 'none' : 'block';
-    return;
-  }
+  /* v489: S, H, and R were REMOVED from this handler. They were ALSO handled by a
+   * second keydown listener (defined later, ~line 13432) that uses the proper
+   * toggleSignals() / openHealthPanel() / openRelayBrowser() functions plus
+   * preventDefault + showShortcutHint(). Having both listeners fire on the same
+   * key caused each toggle to run TWICE per press and cancel itself out:
+   *   - S pressed → toggleSignals() called twice → signals flicker on then off
+   *     (net: no visible change). Confirmed via instrumentation: 2 calls/press.
+   *   - R pressed → this handler flipped relay-panel display none→block, then the
+   *     other handler's openRelayBrowser() flipped it block→none (net: no change).
+   *   - H worked by luck (both did additive class ops) but was still double-handled.
+   * Fix: this older handler no longer claims S/H/R; the newer handler owns them.
+   * C, M, ?, and +/- remain here because no other listener handles them. */
   // ═══ C — Toggle AnyChat ═══
   if(e.key === 'c' || e.key === 'C'){
     if(typeof toggleAnyChat === 'function') toggleAnyChat();
