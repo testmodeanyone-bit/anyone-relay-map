@@ -23729,12 +23729,40 @@ function selectRelay(fp, lat, lon, fromMap){
         const cw = _card.offsetWidth || 300;
         const ch = _card.offsetHeight || 280;
         const pad = 12, gap = 16;
+        /* v460: the floating card was clamped to the viewport but not to the
+         * #country-banner, which is position:fixed across the top whenever a
+         * country is selected. A relay clicked high on the map placed the card
+         * under the banner (they overlap, banner z-index:500 < card). Measure the
+         * banner's live rect when it's visible and treat its bottom as the top
+         * floor; if the card's horizontal span still intersects the banner box,
+         * push the card below it. Measuring the rect keeps this correct on both
+         * the desktop (top:60px, centered) and narrow (top:52px, full-width)
+         * layouts, and is a no-op when no banner is shown (topFloor = pad). */
+        const banner = document.getElementById('country-banner');
+        let topFloor = pad;
+        let bRect = null;
+        if (banner && banner.classList.contains('visible')) {
+          const r = banner.getBoundingClientRect();
+          if (r.width && r.height) { bRect = r; topFloor = r.bottom + gap; }
+        }
         let left = a.x + gap;                 // prefer right of the dot
         if(left + cw > window.innerWidth - pad) left = a.x - cw - gap; // flip to left if off-screen
         if(left < pad) left = pad;
         let top = a.y - 20;                    // roughly align card top near the dot
         if(top + ch > window.innerHeight - pad) top = window.innerHeight - ch - pad;
-        if(top < pad) top = pad;
+        if(top < topFloor) top = topFloor;     // keep below the country banner (or pad)
+        /* If the clamped card still horizontally overlaps the banner box (banner
+         * spans a width that includes the card's left edge), force it below. */
+        if (bRect && top < bRect.bottom + gap &&
+            left < bRect.right && left + cw > bRect.left) {
+          top = bRect.bottom + gap;
+        }
+        /* If pushing below the banner runs off the bottom, fall back to docking
+         * the card to the viewport bottom — overlapping the map is fine, but the
+         * banner stays clear. */
+        if (top + ch > window.innerHeight - pad) {
+          top = Math.max(topFloor, window.innerHeight - ch - pad);
+        }
         _card.style.left = Math.round(left) + 'px';
         _card.style.top  = Math.round(top)  + 'px';
       };
