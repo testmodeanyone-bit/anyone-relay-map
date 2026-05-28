@@ -4062,7 +4062,6 @@ async function enrichFromCache(relays, env) {
       }));
     }
     let enriched = 0;
-    let approxCorrected = 0;
     for (const fp in relays) {
       const r = relays[fp];
       if (!r || !r.geoQuality || String(r.geoQuality).indexOf('quarantined') !== 0) continue;
@@ -4080,7 +4079,6 @@ async function enrichFromCache(relays, env) {
         if (typeof x.cc === 'string' && /^[A-Z]{2}$/.test(x.cc) && r.countryCode !== x.cc) {
           const fromCC = r.countryCode || null;
           r.countryCode = x.cc;
-          approxCorrected++;
           stats.correctedCountry++;
           stats.correctionTargets[x.cc] = (stats.correctionTargets[x.cc] || 0) + 1;
           if (events.length < EVENT_CAP) {
