@@ -4945,6 +4945,106 @@ var worker_source_default = {
       }
     }
     const _ROOM_IDS = /* @__PURE__ */ new Set(["operators-lounge"]);
+
+    /* v55c-diag-2: READ-ONLY producer self-describe endpoint. v55c-diag-1 looked
+     * in the wrong KV (SNAPSHOT_KV is for /api/exit-relays; the /api/relay-registry
+     * cache lives in FP_INDEX under 'relay-registry-cache'). This version reads
+     * the actual registry cache, then probes GEO_ENRICH using the same key shape
+     * (`geo:<UPPER_FP>`) enrichFromCache uses, so we can confirm whether the
+     * producer's GEO_ENRICH binding is pointing at the same namespace the
+     * enrichment worker writes to. Public read-only; no writes, no secrets. */
+    if (url.pathname === "/api/_diag" && request.method === "GET") {
+      try {
+        const VERSION_TAG = "v55c-diag-2";
+        const out = {
+          version: VERSION_TAG,
+          time: new Date().toISOString(),
+          producer_reads_country_only: true,   /* v55c marker — only true in this build */
+          bindings_present: {
+            GEO_ENRICH: !!(env && env.GEO_ENRICH),
+            FP_INDEX:   !!(env && env.FP_INDEX),
+            SNAPSHOT_KV:!!(env && env.SNAPSHOT_KV),
+          },
+        };
+        if (!env || !env.GEO_ENRICH) {
+          out.error = "GEO_ENRICH binding not present";
+          return cors(JSON.stringify(out, null, 2), 200);
+        }
+        /* The registry cache used by /api/relay-registry lives in FP_INDEX under
+         * 'relay-registry-cache' (see line ~10300). */
+        let cached = null;
+        try { cached = env.FP_INDEX ? await env.FP_INDEX.get("relay-registry-cache", { type: "json" }) : null; } catch (_) {}
+        if (!cached || !cached.data) {
+          out.error = "no registry-cache snapshot in FP_INDEX";
+          return cors(JSON.stringify(out, null, 2), 200);
+        }
+        const relays = cached.data;
+        out.cache_ts = cached.ts || null;
+        out.cache_age_sec = cached.ts ? Math.floor((Date.now() - cached.ts) / 1000) : null;
+        out.total_relays = Object.keys(relays).length;
+        const quarantined = [];
+        for (const fp in relays) {
+          const r = relays[fp];
+          if (r && r.geoQuality && String(r.geoQuality).indexOf("quarantined") === 0) quarantined.push(fp);
+        }
+        out.quarantined_count = quarantined.length;
+        /* Probe GEO_ENRICH using the exact key shape enrichFromCache uses. */
+        const records = {};
+        const BATCH = 40;
+        for (let i = 0; i < quarantined.length; i += BATCH) {
+          const slice = quarantined.slice(i, i + BATCH);
+          await Promise.all(slice.map(async (fp) => {
+            try { records[fp] = await env.GEO_ENRICH.get("geo:" + fp.toUpperCase(), { type: "json" }); }
+            catch (_) { records[fp] = null; }
+          }));
+        }
+        let kv_null = 0, kv_success = 0, kv_country_only = 0, kv_tombstone = 0, kv_other = 0;
+        let would_correct_country = 0, would_no_op = 0, would_upgrade_to_precise = 0;
+        const correction_targets = {};
+        const sample_country_only = [];
+        const sample_tombstone = [];
+        const sample_null = [];
+        const sample_other = [];
+        for (const fp of quarantined) {
+          const rec = records[fp];
+          const r = relays[fp];
+          if (!rec) {
+            kv_null++;
+            if (sample_null.length < 3) sample_null.push(fp.slice(0, 8));
+            continue;
+          }
+          if (rec.failed === true) {
+            kv_tombstone++;
+            if (sample_tombstone.length < 3) sample_tombstone.push({ fp: fp.slice(0, 8), reason: rec.reason, failCount: rec.failCount });
+            continue;
+          }
+          if (Array.isArray(rec.c)) { kv_success++; would_upgrade_to_precise++; continue; }
+          if (rec.countryOnly === true) {
+            kv_country_only++;
+            const isValidCC = typeof rec.cc === "string" && /^[A-Z]{2}$/.test(rec.cc);
+            if (isValidCC && r && r.countryCode !== rec.cc) {
+              would_correct_country++;
+              correction_targets[rec.cc] = (correction_targets[rec.cc] || 0) + 1;
+            } else {
+              would_no_op++;
+            }
+            if (sample_country_only.length < 5) {
+              sample_country_only.push({ fp: fp.slice(0, 8), kv_cc: rec.cc, registry_cc: r ? r.countryCode : null });
+            }
+            continue;
+          }
+          kv_other++;
+          if (sample_other.length < 3) sample_other.push({ fp: fp.slice(0, 8), keys: Object.keys(rec).slice(0, 8) });
+        }
+        out.kv_summary = { kv_null, kv_success, kv_country_only, kv_tombstone, kv_other };
+        out.dry_run_v55c_apply = { would_upgrade_to_precise, would_correct_country, would_no_op, correction_targets };
+        out.samples = { country_only: sample_country_only, tombstone: sample_tombstone, null_lookup: sample_null, other: sample_other };
+        return cors(JSON.stringify(out, null, 2), 200);
+      } catch (e) {
+        return cors(JSON.stringify({ error: "diag failed: " + (e && e.message), version: "v55c-diag-2" }, null, 2), 500);
+      }
+    }
+
     if (url.pathname === "/api/total-staked" && request.method === "GET") {
       if (env.FP_INDEX) {
         try {
