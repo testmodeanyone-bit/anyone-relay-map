@@ -14528,11 +14528,20 @@ async function getReader(env) {
   return p;
 }
 function proxyFetch(env, path) {
-  const url = `${env.SELF_PROXY}${path}`;
   if (env.PROXY && typeof env.PROXY.fetch === "function") {
-    return env.PROXY.fetch(new Request(url));
+    return env.PROXY.fetch(new Request(`${env.SELF_PROXY}${path}`));
   }
-  return fetch(url);
+  /* No service binding. On the same Cloudflare zone a public-hostname fetch
+   * hits error 1042 ("Worker tried to fetch from another Worker on the same
+   * zone via a public hostname") and surfaces as a silent registry failure that
+   * makes enrichment a no-op with no louder signal than a log line. Refuse it by
+   * default so a missing PROXY binding is a visible error, not an invisible
+   * outage. If enrichment is ever deployed on a DIFFERENT zone (where the public
+   * fetch genuinely works), set ALLOW_PUBLIC_PROXY_FETCH="1" to opt back in. */
+  if (env.ALLOW_PUBLIC_PROXY_FETCH === "1") {
+    return fetch(`${env.SELF_PROXY}${path}`);
+  }
+  throw new Error("proxyFetch: PROXY service binding missing; refusing same-zone public-hostname fallback (set ALLOW_PUBLIC_PROXY_FETCH=1 to allow it for a cross-zone deploy)");
 }
 
 /* ── Public consensus source (replaces the wallet/forceip IP path) ──────────
@@ -14745,7 +14754,15 @@ function _failBackoffMs(failCount) {
 
 async function runSlice(env, sliceSize, force) {
   const reader = await getReader(env);
-  const regResp = await proxyFetch(env, `/api/relay-registry`);
+  let regResp;
+  try {
+    regResp = await proxyFetch(env, `/api/relay-registry`);
+  } catch (e) {
+    /* proxyFetch throws when the PROXY service binding is missing (see its
+     * comment). Surface it as the same { error } shape a bad status uses, so it
+     * shows up in /status and logs instead of crashing the handler. */
+    return { error: `registry proxyFetch failed: ${e.message}` };
+  }
   if (!regResp.ok) return { error: `registry ${regResp.status}` };
   const reg = await regResp.json();
   const relays = reg.relays || {};
