@@ -23729,40 +23729,59 @@ function selectRelay(fp, lat, lon, fromMap){
         const cw = _card.offsetWidth || 300;
         const ch = _card.offsetHeight || 280;
         const pad = 12, gap = 16;
-        /* v460: the floating card was clamped to the viewport but not to the
-         * #country-banner, which is position:fixed across the top whenever a
-         * country is selected. A relay clicked high on the map placed the card
-         * under the banner (they overlap, banner z-index:500 < card). Measure the
-         * banner's live rect when it's visible and treat its bottom as the top
-         * floor; if the card's horizontal span still intersects the banner box,
-         * push the card below it. Measuring the rect keeps this correct on both
-         * the desktop (top:60px, centered) and narrow (top:52px, full-width)
-         * layouts, and is a no-op when no banner is shown (topFloor = pad). */
+        /* v461: keep the floating card clear of any fixed UI panels it could
+         * overlap — the #country-banner (fixed across the top when a country is
+         * selected) and #relay-panel (the Relay Browser, fixed on the left when
+         * open). Both have a lower z-index than the card so it renders on top of
+         * them, but visually covering them is the bug. Collect the live rects of
+         * whichever are currently visible, then position the card and, if it still
+         * intersects one, nudge it clear: push DOWN past a top panel (banner) and
+         * push RIGHT past a left panel (browser). Measuring rects keeps this
+         * correct across the desktop/narrow layouts and is a no-op when nothing is
+         * open. */
+        const obstacles = [];
         const banner = document.getElementById('country-banner');
-        let topFloor = pad;
-        let bRect = null;
         if (banner && banner.classList.contains('visible')) {
           const r = banner.getBoundingClientRect();
-          if (r.width && r.height) { bRect = r; topFloor = r.bottom + gap; }
+          if (r.width && r.height) obstacles.push(r);
         }
+        const panel = document.getElementById('relay-panel');
+        if (panel && getComputedStyle(panel).display !== 'none') {
+          const r = panel.getBoundingClientRect();
+          if (r.width && r.height) obstacles.push(r);
+        }
+        const intersects = (l, t) => obstacles.find(o =>
+          l < o.right && l + cw > o.left && t < o.bottom && t + ch > o.top);
         let left = a.x + gap;                 // prefer right of the dot
         if(left + cw > window.innerWidth - pad) left = a.x - cw - gap; // flip to left if off-screen
         if(left < pad) left = pad;
         let top = a.y - 20;                    // roughly align card top near the dot
         if(top + ch > window.innerHeight - pad) top = window.innerHeight - ch - pad;
-        if(top < topFloor) top = topFloor;     // keep below the country banner (or pad)
-        /* If the clamped card still horizontally overlaps the banner box (banner
-         * spans a width that includes the card's left edge), force it below. */
-        if (bRect && top < bRect.bottom + gap &&
-            left < bRect.right && left + cw > bRect.left) {
-          top = bRect.bottom + gap;
+        if(top < pad) top = pad;
+        /* Resolve overlaps. Try, in order: push right of the obstacle, then push
+         * below it, then (last resort) clamp into the largest free gap. Re-check
+         * after each move since moving off one panel could touch another. */
+        for (let i = 0; i < obstacles.length + 1; i++) {
+          const hit = intersects(left, top);
+          if (!hit) break;
+          const rightOf = hit.right + gap;
+          const belowOf = hit.bottom + gap;
+          if (rightOf + cw <= window.innerWidth - pad) {
+            left = rightOf;                    // slide right of a left-side panel
+          } else if (belowOf + ch <= window.innerHeight - pad) {
+            top = belowOf; left = Math.max(pad, Math.min(left, window.innerWidth - cw - pad)); // drop below a top panel
+          } else {
+            // No clean side; dock to the right edge and top, accept minimal overlap of map only.
+            left = Math.max(pad, window.innerWidth - cw - pad);
+            top = pad;
+            break;
+          }
         }
-        /* If pushing below the banner runs off the bottom, fall back to docking
-         * the card to the viewport bottom — overlapping the map is fine, but the
-         * banner stays clear. */
-        if (top + ch > window.innerHeight - pad) {
-          top = Math.max(topFloor, window.innerHeight - ch - pad);
-        }
+        // Final viewport clamp.
+        if (left + cw > window.innerWidth - pad) left = window.innerWidth - cw - pad;
+        if (left < pad) left = pad;
+        if (top + ch > window.innerHeight - pad) top = Math.max(pad, window.innerHeight - ch - pad);
+        if (top < pad) top = pad;
         _card.style.left = Math.round(left) + 'px';
         _card.style.top  = Math.round(top)  + 'px';
       };
