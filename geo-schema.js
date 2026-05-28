@@ -13,18 +13,35 @@
  * is self-contained (no imports), exports minimal names, and is meant to be
  * inlined into BOTH workers at build time AND require()'d by the CI guard.
  *
- * TWO RECORD VARIANTS under the geo:<fp> key (discriminated by `failed`):
+ * THREE RECORD VARIANTS under the geo:<fp> key:
  *
  *   SUCCESS   { c:[lat,lng], cc, city, hexId, builtAt }
- *             — MaxMind resolved this fp's IP to a usable location.
+ *             — MaxMind resolved this fp's IP to a usable PRECISE location.
  *             enrichFromCache consumes c (required), and cc/city/hexId
  *             (each optional — applied only when truthy).
  *
+ *   COUNTRY_ONLY { countryOnly:true, cc, builtAt }            (schema 1.1.0+)
+ *             — MaxMind resolved this fp's IP to a confident COUNTRY but not a
+ *             precise-enough location (accuracy radius worse than the worker's
+ *             MAX_ACCURACY_RADIUS_KM gate). We deliberately carry NO coordinate:
+ *             reporting the FACT (this IP is in country cc) without inventing a
+ *             precise point. The producer's enrichFromCache reads this and sets
+ *             countryCode + approxLocation:true while KEEPING geoQuality
+ *             quarantined, so the map plots an explicitly-approximate country
+ *             centroid (and can still upgrade to SUCCESS later). This makes the
+ *             approximate country MaxMind-per-IP-accurate rather than inferred
+ *             from the producer's static centroid blocklist — correcting relays
+ *             whose upstream country-centroid was wrong (e.g. EU hosting IPs
+ *             that landed on the US centroid upstream).
+ *             Discriminated by `countryOnly===true`; like a tombstone it has no
+ *             `c`, so the producer's legacy Array.isArray(rec.c) filter ignores
+ *             it unless explicitly taught to read it (which v55c does).
+ *
  *   TOMBSTONE { failed:true, reason, failCount, builtAt }
- *             — lookup failed (noIp/noGeo). Written so the slice backs the fp
- *             off (exponential backoff) instead of re-grinding it every run.
- *             The producer's reader IGNORES tombstones automatically because
- *             they have no `c` (its `Array.isArray(rec.c)` filter drops them).
+ *             — lookup failed (noIp/noGeo, no usable country either). Written so
+ *             the slice backs the fp off (exponential backoff) instead of
+ *             re-grinding it every run. The producer's reader IGNORES tombstones
+ *             automatically because they have no `c`.
  *
  * Design philosophy (same as kv-schema.js): strict on writes, permissive on
  * reads. The enrichment worker should refuse to WRITE a record that doesn't
@@ -43,7 +60,7 @@
  * ============================================================================
  */
 
-const GEO_SCHEMA_VERSION = '1.0.0';
+const GEO_SCHEMA_VERSION = '1.1.0';
 
 /* The KV key prefix. Actual keys are `geo:<UPPERCASE_FINGERPRINT>`.
  * The reserved cursor key `geo:_cursor` is NOT a geo record and is excluded
@@ -105,12 +122,42 @@ const GEO_TOMBSTONE = {
   }
 };
 
-/* Decide which variant an object is, WITHOUT validating it. A record with a
- * truthy `failed` is a tombstone; otherwise it's treated as a (possibly
- * malformed) success record. Returns 'tombstone' | 'success'. This mirrors how
- * the producer's reader discriminates (tombstones lack `c`). */
+/* Country-only-record contract (schema 1.1.0+). MaxMind gave a confident
+ * COUNTRY but not a precise location. Carries the country code and NO
+ * coordinate — the producer centroids it for display. Discriminated by
+ * `countryOnly===true`. NOTE: this variant is intentionally NOT compared by
+ * check-geo-schema-sync.js (which only diffs SUCCESS + TOMBSTONE); cross-copy
+ * consistency for it is enforced by GEO_SCHEMA_VERSION + this shared file being
+ * inlined verbatim. */
+const GEO_COUNTRY_ONLY = {
+  schemaVersion: GEO_SCHEMA_VERSION,
+  variant: 'country_only',
+  fields: {
+    /* Discriminator. Strict-true so a stray countryOnly:false can't misroute. */
+    countryOnly: { type: 'boolean', required: true, default: true, sanity: (v) => v === true },
+    /* ISO 3166-1 alpha-2 from MaxMind country.iso_code. Required + sanity:
+     * exactly two A-Z letters, so an empty/garbage cc can't produce a
+     * country-less approximate record (which would be useless to the producer). */
+    cc: { type: 'string', required: true, default: '', sanity: (v) => /^[A-Z]{2}$/.test(v) },
+    builtAt: {
+      type: 'number',
+      required: true,
+      default: null,
+      sanity: (v) => v > 1704067200000 && v < Date.now() + 31536000000
+    }
+  }
+};
+
+/* Decide which variant an object is, WITHOUT validating it. Order matters:
+ *   - truthy `failed`        -> tombstone
+ *   - truthy `countryOnly`   -> country_only   (schema 1.1.0+)
+ *   - otherwise              -> success (possibly malformed)
+ * This mirrors how the producer's reader discriminates (tombstones and
+ * country_only records both lack `c`; success records have it). Returns
+ * 'tombstone' | 'country_only' | 'success'. */
 function classify(obj) {
   if (obj && typeof obj === 'object' && obj.failed === true) return 'tombstone';
+  if (obj && typeof obj === 'object' && obj.countryOnly === true) return 'country_only';
   return 'success';
 }
 
@@ -182,7 +229,9 @@ function validateVariant(obj, schema, opts) {
  */
 function validate(obj, opts) {
   const variant = classify(obj);
-  const schema = variant === 'tombstone' ? GEO_TOMBSTONE : GEO_SUCCESS;
+  const schema = variant === 'tombstone' ? GEO_TOMBSTONE
+               : variant === 'country_only' ? GEO_COUNTRY_ONLY
+               : GEO_SUCCESS;
   const res = validateVariant(obj, schema, opts);
   res.variant = variant;
   return res;
@@ -217,6 +266,7 @@ if (typeof module !== 'undefined' && module.exports) {
     GEO_CURSOR_KEY,
     GEO_SUCCESS,
     GEO_TOMBSTONE,
+    GEO_COUNTRY_ONLY,
     classify,
     validate,
     extractSuccess
