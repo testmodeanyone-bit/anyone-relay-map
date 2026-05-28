@@ -11278,27 +11278,65 @@ function initMapLibre(zones){
           try {
             if (typeof ranked === 'undefined' || !ranked || ranked.length < 4) return {type:'FeatureCollection',features:feats};
             const total = ranked.reduce((s,d)=>s+(d.relayCount||0),0) || 1;
-            const hubs = ranked.slice(0,18).filter(z=>z && z.geo);    // top hubs
-            const reach = ranked.slice(18,55).filter(z=>z && z.geo);  // secondary
+            /* v463: SIGNALS GLOBAL SPREAD. The arcs are a cosmetic visualization of
+             * the relay network's geographic footprint (not per-circuit traffic —
+             * onion routing deliberately doesn't expose that). The old version only
+             * used the top 18 hubs + zones 18-55, so arcs clustered in NA/EU and the
+             * rest of the world stayed dark. This widens the pools and adds a
+             * per-sector coverage pass so EVERY populated region of the globe lights
+             * up if it has any relays at all, while keeping the dense-region backbone
+             * so busy areas still look busiest. Strength still scales with relay
+             * count (drives color/brightness), so big hubs read brighter than small
+             * outposts — the globe just stops being empty. */
+            const withGeo = ranked.filter(z=>z && z.geo);
+            const hubs  = withGeo.slice(0, 30);     // widened from 18
+            const reach = withGeo.slice(30, 160);   // widened from 18-55
             const seen = new Set();
             const addArc = (z1,z2,strength) => {
+              if(!z1||!z2||!z1.geo||!z2.geo) return;
               const key = z1.geo.join(',')+'|'+z2.geo.join(',');
-              if (seen.has(key)) return; seen.add(key);
+              const keyR = z2.geo.join(',')+'|'+z1.geo.join(',');
+              if (seen.has(key) || seen.has(keyR)) return; seen.add(key);
               const a=[z1.geo[1],z1.geo[0]], b=[z2.geo[1],z2.geo[0]];
               const dx=a[0]-b[0], dy=a[1]-b[1];
-              if (Math.sqrt(dx*dx+dy*dy) < 4) return; // skip very short links
+              if (Math.sqrt(dx*dx+dy*dy) < 2.5) return; // shorter cull so regional links show
               feats.push({ type:'Feature',
                 properties:{ strength: strength },
                 geometry:{ type:'LineString', coordinates: arcCoords(a,b) } });
             };
-            // hub-to-hub (sparse — every 3rd pair, "medium" density ~40 arcs)
-            for(let i=0;i<hubs.length;i++){ for(let j=i+3;j<hubs.length;j+=3){
+            // 1) hub-to-hub backbone (denser than before: every 2nd pair)
+            for(let i=0;i<hubs.length;i++){ for(let j=i+2;j<hubs.length;j+=2){
               addArc(hubs[i],hubs[j], ((hubs[i].relayCount+hubs[j].relayCount)/total)); } }
-            // a few hub-to-reach spokes from the top 6 hubs
-            hubs.slice(0,6).forEach((hub,hi)=>{
-              const peer = reach[(hi*5)%Math.max(1,reach.length)];
+            // 2) hub-to-reach spokes — spread spokes across MANY hubs, not just 6
+            hubs.forEach((hub,hi)=>{
+              const peer = reach[(hi*7)%Math.max(1,reach.length)];
               if (peer) addArc(hub,peer, ((hub.relayCount+(peer.relayCount||0))/total/2));
             });
+            // 3) GLOBAL COVERAGE PASS: bucket every geo-bearing zone into coarse
+            // lon/lat sectors (~40deg lon x ~30deg lat). For each occupied sector,
+            // connect its strongest zone to the nearest top hub, so every inhabited
+            // region of the map emits at least one arc — Africa, S.America, S.Asia,
+            // Oceania included — regardless of how few relays it has.
+            const sectors = new Map();
+            for(const z of withGeo){
+              const lat=z.geo[0], lon=z.geo[1];
+              if(typeof lat!=='number' || typeof lon!=='number') continue;
+              const sx=Math.floor((lon+180)/40), sy=Math.floor((lat+90)/30);
+              const skey=sx+':'+sy;
+              const cur=sectors.get(skey);
+              if(!cur || (z.relayCount||0)>(cur.relayCount||0)) sectors.set(skey, z);
+            }
+            const topHubs = hubs.slice(0,8);
+            for(const z of sectors.values()){
+              // nearest top hub by squared distance
+              let best=null, bestD=Infinity;
+              for(const h of topHubs){
+                const dx=z.geo[1]-h.geo[1], dy=z.geo[0]-h.geo[0];
+                const d=dx*dx+dy*dy;
+                if(d>0 && d<bestD){ bestD=d; best=h; }
+              }
+              if(best) addArc(z, best, Math.max(0.015, (z.relayCount||1)/total));
+            }
           } catch(_){}
           return {type:'FeatureCollection',features:feats};
         };
@@ -11412,10 +11450,17 @@ function initMapLibre(zones){
         };
         const pickW = pool => { const total=pool.reduce((s,z)=>s+(z.relayCount||1),0); let r=Math.random()*total;
           for(const z of pool){ r-=(z.relayCount||1); if(r<=0) return z; } return pool[0]; };
+        /* v463: uniform (un-weighted) pick — gives small/remote zones the same odds
+         * as big hubs, so packets regularly fire to/from under-represented regions. */
+        const pickU = pool => pool.length ? pool[Math.floor(Math.random()*pool.length)] : null;
+        /* Spread pick: ~45% of the time pick uniformly (global reach), otherwise
+         * weight by relay count (keeps hubs busiest). Purely cosmetic spread — does
+         * not claim real routing. */
+        const pickS = pool => (Math.random() < 0.45 ? pickU(pool) : pickW(pool)) || pickW(pool);
         const fireCircuit = () => {
           if(!started) return;
           if(!pools || poolAge < Date.now()-30000){ pools = buildPools(); poolAge = Date.now(); }
-          const g=pickW(pools.guard), m=pickW(pools.middle), e=pickW(pools.exit);
+          const g=pickS(pools.guard), m=pickS(pools.middle), e=pickS(pools.exit);
           if(!g||!m||!e) return;
           fireHop(g, m, '#a78bfa');                                   // guard → middle (purple)
           setTimeout(()=>{ if(started) fireHop(m, e, '#ff8a3d'); }, 380 + Math.random()*260);  // middle → exit (orange)
@@ -23715,6 +23760,17 @@ function selectRelay(fp, lat, lon, fromMap){
    * document.body while floating, and restore it into the panel for inline use. We
    * remember the original anchor so it goes back to the right spot. */
   if(fromMap){
+    /* v462: clicking a relay dot on the map shows the standalone floating card
+     * and should NOT leave the Relay Browser open behind it. Close the browser
+     * panel the same way its own X button does (hide + persist rb_open=0) so the
+     * card is the only thing showing. Note: this re-parents _card to <body> just
+     * below, so hiding #relay-panel never hides the card. The country banner is
+     * left untouched — only the browser list panel is closed. */
+    var _rbPanel = document.getElementById('relay-panel');
+    if(_rbPanel && _rbPanel.style.display !== 'none'){
+      _rbPanel.style.display = 'none';
+      try { localStorage.setItem('rb_open','0'); } catch(_){}
+    }
     if(_card){
       if(!window.__rdHome){ window.__rdHome = { parent: _card.parentElement, next: _card.nextElementSibling }; }
       if(_card.parentElement !== document.body){ document.body.appendChild(_card); }
