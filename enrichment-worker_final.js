@@ -14704,7 +14704,7 @@ function _failBackoffMs(failCount) {
   return Math.min(ms, FAIL_MAX_MS);
 }
 
-async function runSlice(env, sliceSize) {
+async function runSlice(env, sliceSize, force) {
   const reader = await getReader(env);
   const regResp = await proxyFetch(env, `/api/relay-registry`);
   if (!regResp.ok) return { error: `registry ${regResp.status}` };
@@ -14725,10 +14725,18 @@ async function runSlice(env, sliceSize) {
     }
     if (cached) {
       if (cached.failed) {
-        /* Tombstone present — honor exponential backoff before retrying. */
-        const wait = _failBackoffMs(cached.failCount);
-        if (cached.builtAt && now - cached.builtAt < wait) { skippedBackoff++; continue; }
-        /* Backoff elapsed: eligible for retry; carry failCount forward. */
+        /* Tombstone present — honor exponential backoff before retrying.
+         * v56: `force` bypasses backoff. The consensus IP-mirror went live AFTER
+         * many of these relays had already accumulated long backoff windows from
+         * failing (noIp) when no mirror existed. Their IPs are available now, but
+         * the doubling backoff (up to 30d) means the cron only retries ~1/run.
+         * A forced drain retries them all once so they enrich immediately; any
+         * that still genuinely fail simply re-tombstone and resume normal backoff. */
+        if (!force) {
+          const wait = _failBackoffMs(cached.failCount);
+          if (cached.builtAt && now - cached.builtAt < wait) { skippedBackoff++; continue; }
+        }
+        /* Backoff elapsed (or forced): eligible for retry; carry failCount forward. */
         priorFail[fp] = cached.failCount | 0;
       } else if (cached.builtAt && now - cached.builtAt <= STALE_MS) {
         /* Fresh success record — nothing to do. */
@@ -15058,9 +15066,15 @@ var enrichment_worker_default = {
       if (!auth) {
         return new Response("unauthorized: /run requires a valid token (?token= or Authorization: Bearer)", { status: 401 });
       }
-      const n = Math.min(parseInt(url.searchParams.get("n") || "50", 10), 200);
-      const result = await runSlice(env, n);
-      return Response.json(result);
+      /* v56: ?force=1 bypasses the exponential backoff so a one-shot drain can
+       * retry every tombstoned relay now that the consensus IP-mirror is healthy.
+       * Forced runs allow a larger slice (cap 300) so the whole ~251 backlog
+       * clears in a single pass; normal runs keep the 200 cap. */
+      const force = /^(1|true|yes)$/i.test(url.searchParams.get("force") || "");
+      const cap = force ? 300 : 200;
+      const n = Math.min(parseInt(url.searchParams.get("n") || (force ? "300" : "50"), 10), cap);
+      const result = await runSlice(env, n, force);
+      return Response.json(Object.assign({ forced: force }, result));
     }
     if (url.pathname === "/audit") {
       /* READ-ONLY declared-vs-IP country audit. Same token gate as /run (it
