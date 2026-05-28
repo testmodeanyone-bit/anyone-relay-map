@@ -3845,11 +3845,18 @@ const AUDIT_FORCE_QUARANTINE = new Set([
   '03A9FFF09DBF84B37412A556849FE8A978E6CF10'
 ]);
 
+// v55b: each HIGH entry carries the authoritative country (cc + country name).
+// A centroid hit IS a country-level result — a relay sitting exactly on the
+// Liechtenstein centroid is, by the upstream geolocator's own determination, a
+// Liechtenstein relay; the only thing untrusted is the *precise* position, not
+// the country. applyQuarantineFilter() preserves these on quarantine (while
+// still nulling the fake precise coordinates) so the map can plot an explicitly
+// approximate country-centroid pin instead of dropping the relay entirely.
 const CENTROID_BLOCKLIST_HIGH = [
-  { lat: 37.7684, lng: -97.5634, label: 'US centroid (Lebanon, KS)' },  // verified_count 311
-  { lat: 46.9803, lng:   9.5512, label: 'Liechtenstein centroid' },     // verified_count 252
-  { lat: 42.5240, lng:   1.6166, label: 'Andorra centroid' },           // verified_count 251
-  { lat: 44.0385, lng:  12.2915, label: 'San Marino centroid' },        // verified_count 252
+  { lat: 37.7684, lng: -97.5634, label: 'US centroid (Lebanon, KS)', cc: 'US', country: 'United States' },  // verified_count 311
+  { lat: 46.9803, lng:   9.5512, label: 'Liechtenstein centroid', cc: 'LI', country: 'Liechtenstein' },     // verified_count 252
+  { lat: 42.5240, lng:   1.6166, label: 'Andorra centroid', cc: 'AD', country: 'Andorra' },                 // verified_count 251
+  { lat: 44.0385, lng:  12.2915, label: 'San Marino centroid', cc: 'SM', country: 'San Marino' },           // verified_count 252
 ];
 
 const CENTROID_BLOCKLIST_MEDIUM = [
@@ -3925,6 +3932,19 @@ function applyQuarantineFilter(relays) {
       hexId: null, coordinates: null, countryCode: null, countryName: null,
       cityName: null, regionName: null,
     };
+    /* v55b: country-preserving quarantine. A HIGH centroid hit is, by the upstream
+     * geolocator's own determination, a confident COUNTRY-level placement whose only
+     * defect is fake precise coordinates (it returned the country's geographic
+     * centre). We still null the fake precise location (hexId/coordinates/city/
+     * region) so the map never shows a misleading street-level pin, but we KEEP the
+     * country (sourced from the authoritative blocklist entry, not the relay's own
+     * possibly-stale field) and stamp approxLocation:true. The map plots these at a
+     * country centroid with explicit "approximate" styling instead of dropping them.
+     * geoQuality stays 'quarantined_centroid_high' so enrichFromCache() keeps trying
+     * to upgrade them to a precise IP-derived location on later runs. */
+    const QUARANTINED_FIELDS_KEEP_COUNTRY = {
+      hexId: null, coordinates: null, cityName: null, regionName: null,
+    };
 
     for (const fp in relays) {
       stats.totalRelays++;
@@ -3946,8 +3966,10 @@ function applyQuarantineFilter(relays) {
       }
 
       const highHit = _qHitsBlocklist(r.coordinates, CENTROID_BLOCKLIST_HIGH);
+      let highHitEntry = null;
       if (highHit) {
         geoQuality = 'quarantined_centroid_high';
+        highHitEntry = highHit;  // carries authoritative cc/country for this centroid
       } else if (r.coordinates && Array.isArray(r.coordinates) && r.coordinates.length >= 2) {
         const k = r.coordinates[0].toFixed(4) + ',' + r.coordinates[1].toFixed(4);
         const clusterSize = clusterIdx.get(k) || 0;
@@ -3961,7 +3983,23 @@ function applyQuarantineFilter(relays) {
         }
       }
 
-      if (geoQuality === 'quarantined_centroid_high' || geoQuality === 'quarantined_centroid_medium') {
+      if (geoQuality === 'quarantined_centroid_high') {
+        /* v55b: preserve authoritative country from the blocklist entry, null only
+         * the fake precise location, flag for approximate-centroid rendering. */
+        const keep = { geoQuality, approxLocation: true };
+        if (highHitEntry && highHitEntry.cc) {
+          keep.countryCode = highHitEntry.cc;
+          keep.countryName = highHitEntry.country || r.countryName || null;
+        } else {
+          keep.countryCode = null; keep.countryName = null;
+        }
+        filtered[fp] = Object.assign({}, r, QUARANTINED_FIELDS_KEEP_COUNTRY, keep);
+        stats[geoQuality]++;
+      } else if (geoQuality === 'quarantined_centroid_medium') {
+        /* MEDIUM = large no-city clusters (DE/UK/RO). The country centroid here is a
+         * genuine catch-all for many relays with no supplemental data; preserving a
+         * single country would be lower-confidence than HIGH, so keep prior behavior
+         * (fully nulled) until/unless we revisit. */
         filtered[fp] = Object.assign({}, r, QUARANTINED_FIELDS, { geoQuality });
         stats[geoQuality]++;
       } else if (geoQuality === 'flagged_cluster_no_supplemental') {
@@ -4000,16 +4038,35 @@ async function enrichFromCache(relays, env) {
       await Promise.all(slice.map(async (fp) => {
         try {
           const rec = await env.GEO_ENRICH.get('geo:' + fp.toUpperCase(), { type: 'json' });
-          if (rec && Array.isArray(rec.c)) table[fp] = rec;
+          /* v55c: keep two kinds of usable record — a precise SUCCESS (has c) or a
+           * country_only record (MaxMind country, no precise coord). Tombstones
+           * (failed:true) and anything else are ignored. */
+          if (rec && (Array.isArray(rec.c) || rec.countryOnly === true)) table[fp] = rec;
         } catch (_) {}
       }));
     }
     let enriched = 0;
+    let approxCorrected = 0;
     for (const fp in relays) {
       const r = relays[fp];
       if (!r || !r.geoQuality || String(r.geoQuality).indexOf('quarantined') !== 0) continue;
       const x = table[fp];
-      if (!x || !Array.isArray(x.c) || x.c.length !== 2) continue;
+      if (!x) continue;
+      /* v55c: country_only record — MaxMind resolved a confident COUNTRY but not a
+       * precise location. Apply the country (more accurate than the static centroid
+       * blocklist's guess) and mark approximate, but DO NOT set coordinates, DO NOT
+       * flip to enriched_ip, and DO NOT clear approxLocation: the relay stays an
+       * explicitly-approximate country-centroid pin, and geoQuality stays
+       * quarantined so a future run can still upgrade it to a precise SUCCESS. */
+      if (!Array.isArray(x.c) && x.countryOnly === true) {
+        if (typeof x.cc === 'string' && /^[A-Z]{2}$/.test(x.cc) && r.countryCode !== x.cc) {
+          r.countryCode = x.cc;
+          approxCorrected++;
+        }
+        r.approxLocation = true;
+        continue;
+      }
+      if (!Array.isArray(x.c) || x.c.length !== 2) continue;
       const lat = x.c[0], lng = x.c[1];
       if (typeof lat !== 'number' || typeof lng !== 'number') continue;
       if (!isFinite(lat) || !isFinite(lng)) continue;
@@ -4017,6 +4074,10 @@ async function enrichFromCache(relays, env) {
       if (lat === 0 && lng === 0) continue;
       r.coordinates = [lat, lng];
       r.geoQuality = 'enriched_ip';
+      /* v55b: this relay now has a precise location — clear the approximate-centroid
+       * flag that the country-preserving quarantine may have set, so the map stops
+       * rendering it as an approximate pin. */
+      if (r.approxLocation) delete r.approxLocation;
       if (x.cc) r.countryCode = x.cc;
       if (x.city) r.cityName = x.city;
       if (x.hexId) r.hexId = x.hexId;
