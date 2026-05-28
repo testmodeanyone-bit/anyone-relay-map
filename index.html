@@ -23683,6 +23683,18 @@ function closeRelayDetail(){
     var u = new URL(window.location.href);
     if(u.searchParams.has('fp')){ u.searchParams.delete('fp'); history.replaceState(null,'',u.toString()); }
   } catch(_){}
+  /* v493: also reset the maplibre map to the world-default view on close, so the
+   * user doesn't have to manually hit the reset-zoom button after exploring a
+   * relay. Matches the #zr reset button's exact target values (line ~11897) so
+   * close-detail and reset-button feel like the same action. Wrapped in try so
+   * the card always closes cleanly even if maplibre is unavailable. */
+  try {
+    var __m = window.__anyoneMapLibre;
+    if (__m && typeof __m.easeTo === 'function') {
+      try { __m.stop(); } catch(_){}
+      __m.easeTo({ center:[3.383, 16.02], zoom:2, bearing:0, pitch:0, duration:600 });
+    }
+  } catch(_){}
 }
 
 function selectRelay(fp, lat, lon, fromMap){
