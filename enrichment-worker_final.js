@@ -14843,8 +14843,14 @@ async function runSlice(env, sliceSize, force) {
          * re-grinding every run. */
         noGeo++; await writeFail(fp, "noGeo"); continue;
       }
-      await env.GEO_ENRICH.put(`geo:${fp}`, JSON.stringify(rec));
-      countryOnly++;
+      /* Write is fire-and-forget on error (matches writeFail): a transient KV
+       * write failure must not throw out of the todo loop and skip the
+       * geo:_cursor update below. Only count it as a success once the put
+       * resolves; on failure the fp simply isn't counted and is retried next run. */
+      try {
+        await env.GEO_ENRICH.put(`geo:${fp}`, JSON.stringify(rec));
+        countryOnly++;
+      } catch (_) {}
       continue;
     }
     const rec = { c: geo.c, cc: geo.cc, city: geo.city, hexId: geo.hexId, builtAt: now };
@@ -14858,8 +14864,13 @@ async function runSlice(env, sliceSize, force) {
       noGeo++;
       continue;
     }
-    await env.GEO_ENRICH.put(`geo:${fp}`, JSON.stringify(rec));
-    ok++;
+    /* Fire-and-forget on write error, same as the country_only and tombstone
+     * paths: a transient KV failure must not throw out of the loop and skip the
+     * geo:_cursor update below. Count as ok only once the put resolves. */
+    try {
+      await env.GEO_ENRICH.put(`geo:${fp}`, JSON.stringify(rec));
+      ok++;
+    } catch (_) {}
   }
   await env.GEO_ENRICH.put("geo:_cursor", JSON.stringify({
     lastRunAt: now,
