@@ -105,7 +105,7 @@ const _geoSchema = (function() {
  * ============================================================================
  */
 
-const GEO_SCHEMA_VERSION = '1.0.0';
+const GEO_SCHEMA_VERSION = '1.1.0';
 
 /* The KV key prefix. Actual keys are `geo:<UPPERCASE_FINGERPRINT>`.
  * The reserved cursor key `geo:_cursor` is NOT a geo record and is excluded
@@ -167,12 +167,39 @@ const GEO_TOMBSTONE = {
   }
 };
 
+/* Country-only-record contract (schema 1.1.0+). MaxMind gave a confident
+ * COUNTRY but not a precise location. Carries the country code and NO
+ * coordinate — the producer centroids it for display. Discriminated by
+ * `countryOnly===true`. NOTE: this variant is intentionally NOT compared by
+ * check-geo-schema-sync.js (which only diffs SUCCESS + TOMBSTONE); cross-copy
+ * consistency for it is enforced by GEO_SCHEMA_VERSION + this shared file being
+ * inlined verbatim. */
+const GEO_COUNTRY_ONLY = {
+  schemaVersion: GEO_SCHEMA_VERSION,
+  variant: 'country_only',
+  fields: {
+    /* Discriminator. Strict-true so a stray countryOnly:false can't misroute. */
+    countryOnly: { type: 'boolean', required: true, default: true, sanity: (v) => v === true },
+    /* ISO 3166-1 alpha-2 from MaxMind country.iso_code. Required + sanity:
+     * exactly two A-Z letters, so an empty/garbage cc can't produce a
+     * country-less approximate record (which would be useless to the producer). */
+    cc: { type: 'string', required: true, default: '', sanity: (v) => /^[A-Z]{2}$/.test(v) },
+    builtAt: {
+      type: 'number',
+      required: true,
+      default: null,
+      sanity: (v) => v > 1704067200000 && v < Date.now() + 31536000000
+    }
+  }
+};
+
 /* Decide which variant an object is, WITHOUT validating it. A record with a
  * truthy `failed` is a tombstone; otherwise it's treated as a (possibly
  * malformed) success record. Returns 'tombstone' | 'success'. This mirrors how
  * the producer's reader discriminates (tombstones lack `c`). */
 function classify(obj) {
   if (obj && typeof obj === 'object' && obj.failed === true) return 'tombstone';
+  if (obj && typeof obj === 'object' && obj.countryOnly === true) return 'country_only';
   return 'success';
 }
 
@@ -244,7 +271,9 @@ function validateVariant(obj, schema, opts) {
  */
 function validate(obj, opts) {
   const variant = classify(obj);
-  const schema = variant === 'tombstone' ? GEO_TOMBSTONE : GEO_SUCCESS;
+  const schema = variant === 'tombstone' ? GEO_TOMBSTONE
+               : variant === 'country_only' ? GEO_COUNTRY_ONLY
+               : GEO_SUCCESS;
   const res = validateVariant(obj, schema, opts);
   res.variant = variant;
   return res;
@@ -274,7 +303,7 @@ function extractSuccess(obj) {
 
   return {
     GEO_SCHEMA_VERSION, GEO_KEY_PREFIX, GEO_CURSOR_KEY,
-    GEO_SUCCESS, GEO_TOMBSTONE, classify, validate, extractSuccess
+    GEO_SUCCESS, GEO_TOMBSTONE, GEO_COUNTRY_ONLY, classify, validate, extractSuccess
   };
 })();
 const _geoValidate = _geoSchema.validate;
@@ -14435,17 +14464,27 @@ function lookupGeo(reader, ip) {
     return null;
   }
   if (!rec || !rec.location) return null;
+  /* v55c: salvage a confident COUNTRY when the precise lookup will fail the
+   * accuracy/supplemental gates below. MaxMind frequently resolves hosting/
+   * datacenter IPs to a correct country with a wide accuracy radius (>gate).
+   * Rather than discard that as noGeo, we return a country-only marker so the
+   * producer can place an explicitly-approximate country centroid sourced from
+   * MaxMind per-IP — more accurate than the static centroid blocklist. Only
+   * when iso_code is a real 2-letter code; otherwise fall through to null. */
+  const isoCC = rec.country && typeof rec.country.iso_code === "string" && /^[A-Z]{2}$/.test(rec.country.iso_code)
+    ? rec.country.iso_code : null;
+  const countryMarker = () => isoCC ? { countryOnly: true, cc: isoCC } : null;
   const { latitude: lat, longitude: lng, accuracy_radius: acc } = rec.location;
   const goodAcc = typeof acc === "number" && acc <= MAX_ACCURACY_RADIUS_KM;
   if (goodAcc) {
     if (!structurallyValidCoord(lat, lng)) return null;
   } else {
-    if (!validGeoCoord(lat, lng)) return null;
+    if (!validGeoCoord(lat, lng)) return countryMarker();
     const hasCity = !!(rec.city && rec.city.names && rec.city.names.en);
     const hasSubdiv = !!(rec.subdivisions && rec.subdivisions.length);
-    if (!hasCity && !hasSubdiv) return null;
+    if (!hasCity && !hasSubdiv) return countryMarker();
   }
-  if (typeof acc === "number" && acc > MAX_ACCURACY_RADIUS_KM) return null;
+  if (typeof acc === "number" && acc > MAX_ACCURACY_RADIUS_KM) return countryMarker();
   let hexId = null;
   try {
     hexId = __h3_latLngToCell(lat, lng, 4);
@@ -14754,7 +14793,7 @@ async function runSlice(env, sliceSize, force) {
   } catch (e) {
     return { error: `consensus fetch failed: ${e.message}` };
   }
-  let ok = 0, noIp = 0, noGeo = 0;
+  let ok = 0, noIp = 0, noGeo = 0, countryOnly = 0;
   /* Helper: record a failure tombstone so this fp is backed off rather than
    * retried every run. Increments failCount from any prior tombstone. Failures
    * are fire-and-forget on write errors — a missed tombstone just means the
@@ -14778,6 +14817,25 @@ async function runSlice(env, sliceSize, force) {
     if (!ip) { noIp++; await writeFail(fp, "noIp"); continue; }
     const geo = lookupGeo(reader, ip);
     if (!geo) { noGeo++; await writeFail(fp, "noGeo"); continue; }
+    /* v55c: country-only marker — MaxMind gave a confident country but not a
+     * precise-enough location. Write the country_only variant (no coordinate)
+     * so the producer sets countryCode + approxLocation:true and centroids it,
+     * MaxMind-per-IP-accurate rather than from the static centroid blocklist.
+     * NOT a tombstone: we want enrichFromCache to read and apply it, and we want
+     * a future run to still be able to upgrade it to a precise SUCCESS. */
+    if (geo.countryOnly === true) {
+      const rec = { countryOnly: true, cc: geo.cc, builtAt: now };
+      const v = _geoValidate(rec, { mode: "strict", context: "write" });
+      if (!v.ok) {
+        console.warn(`geo-schema reject (country_only ${fp}): ${v.errors.join("; ")}`);
+        /* Fall back to a tombstone so the fp at least backs off rather than
+         * re-grinding every run. */
+        noGeo++; await writeFail(fp, "noGeo"); continue;
+      }
+      await env.GEO_ENRICH.put(`geo:${fp}`, JSON.stringify(rec));
+      countryOnly++;
+      continue;
+    }
     const rec = { c: geo.c, cc: geo.cc, city: geo.city, hexId: geo.hexId, builtAt: now };
     /* Validate against the inlined geo-schema before writing (S2). On failure,
      * skip this fp (don't count it as ok) — it'll be retried next run. Better to
@@ -14798,13 +14856,14 @@ async function runSlice(env, sliceSize, force) {
     processedThisRun: todo.length,
     consensusRelays: Object.keys(ipMap).length,
     ok,
+    countryOnly,
     noIp,
     noGeo,
     skippedFresh,
     skippedBackoff,
     source: "consensus"
   }));
-  return { quarantinedTotal: quarantined.length, processed: todo.length, consensusRelays: Object.keys(ipMap).length, ok, noIp, noGeo, skippedFresh, skippedBackoff };
+  return { quarantinedTotal: quarantined.length, processed: todo.length, consensusRelays: Object.keys(ipMap).length, ok, countryOnly, noIp, noGeo, skippedFresh, skippedBackoff };
 }
 
 /* ── auditMismatches: READ-ONLY declared-vs-IP country audit ────────────────
