@@ -14777,12 +14777,23 @@ async function runSlice(env, sliceSize, force) {
         }
         /* Backoff elapsed (or forced): eligible for retry; carry failCount forward. */
         priorFail[fp] = cached.failCount | 0;
-      } else if (cached.builtAt && now - cached.builtAt <= STALE_MS) {
-        /* Fresh success record — nothing to do. */
+      } else if (cached.countryOnly === true) {
+        /* v55d: country_only record (approximate, country known). Under force we
+         * re-evaluate it (MaxMind may now place it precisely, or its country may
+         * have changed); otherwise treat it like a fresh result and skip while
+         * fresh. Without this, a forced country_only drain could never refresh or
+         * upgrade these records — they'd fall to the success-skip below. */
+        if (!force && cached.builtAt && now - cached.builtAt <= STALE_MS) { skippedFresh++; continue; }
+        /* forced, or stale → fall through and re-evaluate. */
+      } else if (Array.isArray(cached.c) && cached.builtAt && now - cached.builtAt <= STALE_MS) {
+        /* Fresh PRECISE success record (has real coords) — nothing to do, even
+         * under force: re-doing good precise work wastes lookups and can only
+         * regress a confident pin. (Tombstones and country_only records ARE
+         * reprocessed under force, above — that's the point of a forced drain.) */
         skippedFresh++;
         continue;
       }
-      /* else: stale success → fall through and re-enrich. */
+      /* else: stale success, or forced non-precise → fall through and re-enrich. */
     }
     todo.push(fp);
     if (todo.length >= sliceSize) break;
