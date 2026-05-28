@@ -8262,17 +8262,81 @@ async function fetchData(){
 }
 
 let _cachedExitRelaysData = null;
+
+/* v491: country-centroid lookup ([lat, lng]) for APPROXIMATE-LOCATION relays.
+ * The producer (anyclip-proxy v55b) preserves the country for relays it quarantined
+ * as country-centroid hits (precise position unknown but country known) and nulls
+ * their coordinates. parseFingerprintMap plots those at the centroid below, tagged
+ * approx:true for distinct "approximate" rendering. The four HIGH-tier quarantine
+ * countries (US, LI, AD, SM) are the ones currently in play; the rest are included
+ * so this keeps working if the producer's centroid blocklist grows. US uses a
+ * lower-48 display point (the literal geographic centroid sits in Kansas, which is
+ * fine, but lower-48 reads better as a single national marker). */
+const COUNTRY_CENTROIDS = {
+  US: [39.50, -98.35], LI: [47.17, 9.53], AD: [42.55, 1.58], SM: [43.93, 12.46],
+  LU: [49.77, 6.05], DE: [51.13, 9.39], GB: [54.00, -2.00], RO: [46.07, 25.02],
+  FR: [46.60, 2.30], ES: [40.20, -3.70], IT: [42.80, 12.50], NL: [52.20, 5.50],
+  CH: [46.80, 8.20], AT: [47.60, 14.10], BE: [50.60, 4.60], SE: [62.00, 15.00],
+  NO: [62.00, 10.00], FI: [64.00, 26.00], DK: [56.00, 10.00], PL: [52.10, 19.40],
+  CZ: [49.80, 15.50], CA: [56.00, -96.00], AU: [-25.00, 134.00], JP: [36.00, 138.00],
+  RU: [61.50, 105.00], CN: [35.00, 103.00], IN: [22.00, 79.00], BR: [-10.00, -52.00],
+  SG: [1.35, 103.82], HK: [22.30, 114.20], IE: [53.00, -8.00], PT: [39.50, -8.00],
+  UA: [49.00, 32.00], TR: [39.00, 35.00], ZA: [-29.00, 24.00], MX: [23.00, -102.00],
+};
+
 /* ── Parse fingerprint-map into grouped hex zones ── */
 function parseFingerprintMap(raw){
   const hexMap = new Map();
   let _quarantinedCount = 0;
+  let _approxCount = 0;
   Object.entries(raw).forEach(([fingerprint, relay])=>{
-    const hex = relay.hexId;
-    if(!hex){ if(relay && relay.geoQuality && relay.geoQuality.indexOf('quarantined_') === 0) _quarantinedCount++; return; }
+    let hex = relay.hexId;
+    let approxGeo = null;   // v491: [lat,lng] country-centroid for approx-located relays
+    /* v490: relays with a valid lat/lon but an EMPTY hexId were being silently
+     * dropped here, so they never appeared as dots on the map. This hit ~64 relays
+     * concentrated in micro-states (San Marino, Liechtenstein, Andorra) where the
+     * upstream geo pipeline produced coordinates but failed to assign a hex-grid
+     * cell. A real user reported missing relays ("many exits don't exist on the
+     * map") — this was the cause.
+     *
+     * Fix: when hexId is missing but coordinates are valid, synthesize a fallback
+     * zone key from the rounded coordinates. Rounding to 2 decimals (~1.1 km)
+     * groups relays at the same location into one zone, exactly like a real hex
+     * cell would. Only relays with NO usable coordinates fall through to the
+     * approx/quarantine handling below. */
+    if(!hex){
+      const c = relay.coordinates;
+      const hasCoords = c && c.length >= 2 && c[0] != null && c[1] != null
+        && !(c[0] === 0 && c[1] === 0) && !isNaN(c[0]) && !isNaN(c[1]);
+      if(hasCoords){
+        hex = 'synth_' + (+c[0]).toFixed(2) + '_' + (+c[1]).toFixed(2);
+      } else if(relay && relay.approxLocation && relay.countryCode && COUNTRY_CENTROIDS[relay.countryCode]){
+        /* v491: APPROXIMATE-LOCATION relays. The producer (anyclip-proxy v55b) now
+         * preserves the country for relays it quarantined as country-centroid hits
+         * (precise position unknown, but country known). Rather than drop them, we
+         * plot them at the country's centroid, clustered one zone per country, and
+         * tag the zone approx:true so rendering can mark them visually distinct
+         * (hollow dashed ring) and honest about the imprecision. enrichFromCache
+         * upstream may later upgrade them to a precise location on a future refresh.
+         * Coordinates are nulled by the producer, so we use our centroid table. */
+        approxGeo = COUNTRY_CENTROIDS[relay.countryCode];
+        hex = 'approx_' + relay.countryCode;
+        _approxCount++;
+      } else {
+        if(relay && relay.geoQuality && relay.geoQuality.indexOf('quarantined_') === 0) _quarantinedCount++;
+        return;
+      }
+    }
+    /* v491: resolve the coordinate this relay contributes — real coords when present,
+     * else the synthesized country centroid for approx relays. Used for both the
+     * zone's display geo and the per-relay relayCoords entry. */
+    const relCoord = (relay.coordinates && relay.coordinates.length>=2 && relay.coordinates[0]!=null)
+      ? [relay.coordinates[0], relay.coordinates[1]]
+      : approxGeo;
     if(!hexMap.has(hex)){
       hexMap.set(hex, {
         index: hex,
-        geo: [relay.coordinates[0], relay.coordinates[1]],
+        geo: relCoord ? [relCoord[0], relCoord[1]] : [0,0],   /* v491: null-safe (approx relays have null coords) */
         relayCount: 0,
         fingerprints: [],
         relayCoords: [],   /* v362: per-relay [lat,lng] parallel to fingerprints — enables zoom-aware decluster subdivision (render-only). Harmless if unused. */
@@ -8283,16 +8347,18 @@ function parseFingerprintMap(raw){
         isps: {},
         topIsps: [],
         bwMibs: 0,
+        approx: !!approxGeo,   /* v491: flags a country-centroid (approximate) zone for distinct rendering */
       });
     }
     const zone = hexMap.get(hex);
     zone.relayCount++;
     zone.fingerprints.push(fingerprint);
-    if(relay.coordinates && relay.coordinates.length>=2) zone.relayCoords.push([relay.coordinates[0], relay.coordinates[1]]);  /* v362: parallel to fingerprints */
+    if(relCoord) zone.relayCoords.push([relCoord[0], relCoord[1]]);  /* v362/v491: real coord, or country centroid for approx relays */
     const isp = relay.asName || 'Unknown';
     zone.isps[isp] = (zone.isps[isp]||0)+1;
   });
   window._quarantinedCount = _quarantinedCount;
+  window._approxCount = _approxCount;   /* v491: relays plotted at approximate country-centroid */
   try { sessionStorage.setItem('_qCount', String(_quarantinedCount)); } catch(_){}
   hexMap.forEach(zone=>{
     zone.topIsps = Object.entries(zone.isps)
@@ -10836,6 +10902,7 @@ function initMapLibre(zones){
           properties:{ tier: tier, hw: isHw,
             fp: fp,   // v375: per-relay fingerprint → enables click-to-detail
             lat: c[0], lng: c[1],
+            approx: z.approx ? 1 : 0,   /* v491: 1 = plotted at country centroid (approximate location) → distinct hollow-ring styling */
             city: z.cityName || z.countryName || z.countryCode || '', asn: z.asName || '' } });
       });
     });
@@ -11110,12 +11177,26 @@ function initMapLibre(zones){
           'circle-stroke-opacity':0.95
         }});
       // crisp core dot — v390: bigger + fully opaque sooner so relays read clearly
-      map.addLayer({ id:'relay-points', type:'circle', source:'relays', filter:['==',['get','hw'],0],
+      map.addLayer({ id:'relay-points', type:'circle', source:'relays', filter:['all',['==',['get','hw'],0],['!=',['get','approx'],1]],
         paint:{ 'circle-color':['match',['get','tier'],'exit','#fca5a5','guard','#ddd6fe','middle','#99f6e4','#ccc'],
           'circle-radius':['interpolate',['linear'],['zoom'],1,1.6,4,2.4,8,3.6,14,5.5],
           'circle-stroke-width':['interpolate',['linear'],['zoom'],1,0,6,0.5,12,1],
           'circle-stroke-color':'rgba(255,255,255,0.5)',
           'circle-opacity':['interpolate',['linear'],['zoom'],1,0.85,4,0.95,8,1,14,1] }});
+
+      /* v491: APPROXIMATE-LOCATION relays (country-centroid pins). These are relays the
+       * producer quarantined as country-centroid hits — country known, precise position
+       * unknown — which we plot at the country centroid. Rendered as a distinct HOLLOW
+       * ring (transparent fill, colored stroke, slightly larger) so they read clearly as
+       * "somewhere in this country, exact spot unknown" rather than masquerading as precise
+       * pings. Tier color is preserved so exit/guard/middle is still legible. Placed right
+       * after relay-points so it sits at the same depth as the solid dots. */
+      map.addLayer({ id:'relay-points-approx', type:'circle', source:'relays', filter:['all',['==',['get','hw'],0],['==',['get','approx'],1]],
+        paint:{ 'circle-color':'rgba(0,0,0,0)',
+          'circle-radius':['interpolate',['linear'],['zoom'],1,2.4,4,3.4,8,5,14,7.5],
+          'circle-stroke-width':['interpolate',['linear'],['zoom'],1,1,6,1.4,12,2],
+          'circle-stroke-color':['match',['get','tier'],'exit','#fca5a5','guard','#ddd6fe','middle','#99f6e4','#ccc'],
+          'circle-stroke-opacity':['interpolate',['linear'],['zoom'],1,0.65,8,0.8,14,0.9] }});
 
       /* v389: PULSING radar pings. We animate the GLOW layer's radius + opacity with a
        * single global sine wave (a "breathing" pulse) so the network looks alive. This
@@ -11726,7 +11807,7 @@ function initMapLibre(zones){
 
       // v387: no clusters anymore — every relay is an individual ping. Click a relay
       // or hw-diamond -> open the REAL detail panel (same as D3 map).
-      ['relay-points','hw-diamonds'].forEach(lyr => {
+      ['relay-points','relay-points-approx','hw-diamonds'].forEach(lyr => {
         map.on('click', lyr, (ev)=>{ const p=ev.features[0].properties;
           const fp = p.fp, coords = ev.features[0].geometry.coordinates;
           if (fp && typeof selectRelay === 'function') {
@@ -11740,7 +11821,7 @@ function initMapLibre(zones){
           new maplibregl.Popup({offset:8}).setLngLat(coords)
             .setHTML('<b>'+(p.city||'Unknown')+'</b><br>'+p.tier+(p.hw==1?' · hardware':'')+(p.asn?'<br>'+p.asn:'')).addTo(map); });
       });
-      ['relay-points','hw-diamonds'].forEach(l=>{ map.on('mouseenter',l,()=>map.getCanvas().style.cursor='pointer'); map.on('mouseleave',l,()=>map.getCanvas().style.cursor=''); });
+      ['relay-points','relay-points-approx','hw-diamonds'].forEach(l=>{ map.on('mouseenter',l,()=>map.getCanvas().style.cursor='pointer'); map.on('mouseleave',l,()=>map.getCanvas().style.cursor=''); });
 
       /* v376: tier filtering. Mirrors the Relay Browser filter (Exit/Guard/Middle/HW)
        * onto the map: matching relays stay bright, non-matching dim to near-invisible.
