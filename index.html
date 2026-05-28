@@ -2501,9 +2501,14 @@ html,body{width:100%;height:100%;background:var(--bg);font-family:'Rajdhani',san
 /* ── HEADER — slim, logo + clock + action buttons only ── */
 #hdr{
   position:fixed;top:0;left:0;right:0;z-index:400;height:52px;
-  background:rgba(1,7,14,0.88);border-bottom:1px solid var(--border);
+  /* v492: translucent floating-glass chrome — opacity dropped from 0.88 to 0.30
+   * so the map clearly shows through; bumped blur 16->24px and added
+   * saturate(125%) to keep text readable against the busier visible map. Border
+   * softened to rgba(0,245,255,0.08) so the panel feels like it floats rather
+   * than being bolted to a hard cyan rule. */
+  background:rgba(1,7,14,0.30);border-bottom:1px solid rgba(0,245,255,0.08);
   display:flex;align-items:center;justify-content:space-between;padding:0 16px 0 6px;
-  backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);
+  backdrop-filter:blur(24px) saturate(125%);-webkit-backdrop-filter:blur(24px) saturate(125%);
 }
 .logo{display:flex;align-items:center;gap:10px;}
 .logo-box{
@@ -2688,10 +2693,11 @@ body.light .sl{color:#7ecfdf;}
 ══════════════════════════════════════════ */
 #sidebar{
   position:fixed;top:52px;left:0;bottom:0;width:210px;z-index:300;
-  background:rgba(1,6,16,0.85);border-right:1px solid var(--border);
+  /* v492: translucent floating-glass chrome — see #hdr above for rationale. */
+  background:rgba(1,6,16,0.30);border-right:1px solid rgba(0,245,255,0.06);
   display:flex;flex-direction:column;overflow:hidden;
   transition:width .25s cubic-bezier(.4,0,.2,1);
-  backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);
+  backdrop-filter:blur(24px) saturate(125%);-webkit-backdrop-filter:blur(24px) saturate(125%);
 }
 #sidebar.collapsed{ width:0 !important;padding:0 !important;border-right:none !important;background:transparent !important;backdrop-filter:none !important;-webkit-backdrop-filter:none !important;overflow:visible !important; }
 #sidebar.collapsed .sb-content{ opacity:0; pointer-events:none; }
@@ -2880,9 +2886,10 @@ body.light .clabel{ fill:rgba(180,220,235,0.9); stroke:rgba(5,15,30,0.8); }
 #ticker{
   position:fixed;bottom:0;left:210px;right:0;height:28px;z-index:300;
   transition:left .25s cubic-bezier(.4,0,.2,1);
-  background:rgba(1,5,11,.85);border-top:1px solid var(--border);
+  /* v492: translucent floating-glass chrome — see #hdr above for rationale. */
+  background:rgba(1,5,11,0.30);border-top:1px solid rgba(0,245,255,0.06);
   display:flex;align-items:center;overflow:hidden;
-  backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);
+  backdrop-filter:blur(24px) saturate(125%);-webkit-backdrop-filter:blur(24px) saturate(125%);
 }
 /* v229: was width:48px (fixed) — too narrow for translations like "EN DIRECT" or "ЗАГРУЗКА". */
 /* Use min-width + horizontal padding so the badge auto-expands to fit any language. */
