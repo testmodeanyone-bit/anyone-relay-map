@@ -4023,14 +4023,30 @@ function applyQuarantineFilter(relays) {
  * filter and BEFORE the HMAC, so the signed/cached payload includes the fix. Reads
  * only KV (no MMDB, no external fetch, no IP). Batched gets stay under subrequest caps. */
 async function enrichFromCache(relays, env) {
+  /* v55c+events: returns { count, stats, events } instead of just `enriched`.
+   * `count` preserves the legacy meaning (relays upgraded to precise enriched_ip).
+   * `stats` summarizes what enrichFromCache saw and did this pass — used by the
+   * /api/_events log to record snapshot_built events. `events` is a bounded list
+   * of per-correction details (country flips, precise upgrades) — used by the
+   * log to record per-relay events. The error path returns the same shape with
+   * zero counts so callers don't have to null-check. */
+  const stats = {
+    quarantined: 0, hadKvRecord: 0,
+    countryOnlyRecords: 0, preciseRecords: 0,
+    enrichedPrecise: 0, correctedCountry: 0, noOpCountry: 0,
+    correctionTargets: {},   /* cc -> count of corrections to that country */
+  };
+  const events = [];   /* bounded; see EVENT_CAP */
+  const EVENT_CAP = 50; /* per-pass cap so a pathological pass can't blow memory */
   try {
-    if (!env || !env.GEO_ENRICH || !relays) return 0;
+    if (!env || !env.GEO_ENRICH || !relays) return { count: 0, stats, events };
     const need = [];
     for (const fp in relays) {
       const r = relays[fp];
       if (r && r.geoQuality && String(r.geoQuality).indexOf('quarantined') === 0) need.push(fp);
     }
-    if (!need.length) return 0;
+    stats.quarantined = need.length;
+    if (!need.length) return { count: 0, stats, events };
     const table = {};
     const BATCH = 40;
     for (let i = 0; i < need.length; i += BATCH) {
@@ -4052,6 +4068,7 @@ async function enrichFromCache(relays, env) {
       if (!r || !r.geoQuality || String(r.geoQuality).indexOf('quarantined') !== 0) continue;
       const x = table[fp];
       if (!x) continue;
+      stats.hadKvRecord++;
       /* v55c: country_only record — MaxMind resolved a confident COUNTRY but not a
        * precise location. Apply the country (more accurate than the static centroid
        * blocklist's guess) and mark approximate, but DO NOT set coordinates, DO NOT
@@ -4059,9 +4076,18 @@ async function enrichFromCache(relays, env) {
        * explicitly-approximate country-centroid pin, and geoQuality stays
        * quarantined so a future run can still upgrade it to a precise SUCCESS. */
       if (!Array.isArray(x.c) && x.countryOnly === true) {
+        stats.countryOnlyRecords++;
         if (typeof x.cc === 'string' && /^[A-Z]{2}$/.test(x.cc) && r.countryCode !== x.cc) {
+          const fromCC = r.countryCode || null;
           r.countryCode = x.cc;
           approxCorrected++;
+          stats.correctedCountry++;
+          stats.correctionTargets[x.cc] = (stats.correctionTargets[x.cc] || 0) + 1;
+          if (events.length < EVENT_CAP) {
+            events.push({ type: 'country_corrected', fp: fp.toUpperCase(), from: fromCC, to: x.cc, source: 'country_only' });
+          }
+        } else {
+          stats.noOpCountry++;
         }
         r.approxLocation = true;
         continue;
@@ -4072,6 +4098,9 @@ async function enrichFromCache(relays, env) {
       if (!isFinite(lat) || !isFinite(lng)) continue;
       if (lat < -90 || lat > 90 || lng < -180 || lng > 180) continue;
       if (lat === 0 && lng === 0) continue;
+      stats.preciseRecords++;
+      const fromCC = r.countryCode || null;
+      const wasApprox = !!r.approxLocation;
       r.coordinates = [lat, lng];
       r.geoQuality = 'enriched_ip';
       /* v55b: this relay now has a precise location — clear the approximate-centroid
@@ -4082,9 +4111,87 @@ async function enrichFromCache(relays, env) {
       if (x.city) r.cityName = x.city;
       if (x.hexId) r.hexId = x.hexId;
       enriched++;
+      stats.enrichedPrecise++;
+      if (events.length < EVENT_CAP) {
+        events.push({ type: 'enriched_precise', fp: fp.toUpperCase(), from: fromCC, to: x.cc || null, wasApprox });
+      }
     }
-    return enriched;
-  } catch (_) { return 0; }
+    return { count: enriched, stats, events };
+  } catch (e) {
+    return { count: 0, stats, events, error: String(e && e.message || e) };
+  }
+}
+
+/* v55c+events: ring-buffered event log for the producer. Stores the last N
+ * entries in FP_INDEX under a single key. Used by /api/_events to surface
+ * what enrichFromCache (and friends) actually did, so future debugging
+ * doesn't require live diagnostic endpoints.
+ *
+ * Design choices and their tradeoffs:
+ *
+ *  - SINGLE KEY (`producer:eventlog`) instead of per-event keys. Cloudflare KV
+ *    list-with-prefix is paginated and eventually consistent; one read + one
+ *    write per pass is simpler and bounds the cost.
+ *  - RING BUFFER (cap 200 entries). At ~once per 5-minute snapshot rebuild
+ *    plus the occasional per-correction entry, 200 is roughly 16 hours of
+ *    history — enough to investigate "what happened overnight" without being
+ *    a real archive.
+ *  - LAST-WRITE-WINS on concurrent updates. Two simultaneous snapshot rebuilds
+ *    could lose one's entries. Acceptable for diagnostics.
+ *  - FIRE-AND-FORGET via ctx.waitUntil. The producer must never block its
+ *    response on logging; if KV is slow or down, the log silently misses an
+ *    entry and the request still returns normally.
+ *  - SWALLOW ALL ERRORS. The log can never break the producer. If something
+ *    goes wrong it just doesn't log.
+ *  - SIZE GUARD on the serialized log (~256 KB cap). KV value limit is 25 MB
+ *    so this is paranoid, but it protects us if a pathological event payload
+ *    ever balloons. If the cap is hit, we evict more aggressively.
+ *
+ * Schema of a log entry: { ts, type, ...data }. Types currently emitted:
+ *   snapshot_built     — every cache rebuild that invoked enrichFromCache
+ *   country_corrected  — per-relay country flip via country_only record
+ *   enriched_precise   — per-relay upgrade to precise location
+ *   error              — caught failure inside the enrichment pipeline
+ * New event types can be added by callers; the log doesn't enforce a schema. */
+const EVENT_LOG_KEY = 'producer:eventlog';
+const EVENT_LOG_CAP = 200;
+const EVENT_LOG_BYTES_CAP = 256 * 1024;
+
+async function _readEventLog(env) {
+  if (!env || !env.FP_INDEX) return [];
+  try {
+    const arr = await env.FP_INDEX.get(EVENT_LOG_KEY, { type: 'json' });
+    return Array.isArray(arr) ? arr : [];
+  } catch (_) { return []; }
+}
+
+async function _writeEventLog(env, entries) {
+  if (!env || !env.FP_INDEX) return;
+  /* Trim to cap, oldest first (entries[0] is oldest, so slice from the end). */
+  let trimmed = entries.length > EVENT_LOG_CAP ? entries.slice(-EVENT_LOG_CAP) : entries;
+  let body = JSON.stringify(trimmed);
+  /* Defensive: if the serialized form is still too large (an event payload
+   * blew up), aggressively halve until it fits. Better to lose history than
+   * exceed the KV value limit. */
+  while (body.length > EVENT_LOG_BYTES_CAP && trimmed.length > 10) {
+    trimmed = trimmed.slice(Math.floor(trimmed.length / 2));
+    body = JSON.stringify(trimmed);
+  }
+  try { await env.FP_INDEX.put(EVENT_LOG_KEY, body); } catch (_) {}
+}
+
+/* Append one or more events to the log. Each event gets a `ts` (ms) stamp.
+ * Fire-and-forget — caller should wrap in ctx.waitUntil() to keep the
+ * response hot path unblocked, but it also works without ctx (will just
+ * await inline). Errors are swallowed: the log can never break the worker. */
+async function appendEventLog(env, ...newEntries) {
+  if (!newEntries.length) return;
+  const now = Date.now();
+  const stamped = newEntries.filter(Boolean).map((e) => Object.assign({ ts: now }, e));
+  try {
+    const existing = await _readEventLog(env);
+    await _writeEventLog(env, existing.concat(stamped));
+  } catch (_) {}
 }
 
 async function sha256Hex(input) {
@@ -5042,6 +5149,70 @@ var worker_source_default = {
         return cors(JSON.stringify(out, null, 2), 200);
       } catch (e) {
         return cors(JSON.stringify({ error: "diag failed: " + (e && e.message), version: "v55c-diag-2" }, null, 2), 500);
+      }
+    }
+
+    /* v55c+events: READ-ONLY event log viewer. Returns the producer's ring-
+     * buffered event log (last 200 entries by default) so we can answer "what
+     * has the snapshot been doing?" without live diagnostic instrumentation.
+     * Public — exposes only operational counts, country codes, and full hex
+     * fingerprints (already public in the registry); no secrets, no IPs.
+     *   ?type=country_corrected,snapshot_built  — comma-separated whitelist
+     *   ?limit=N (default 100, cap 500)         — most recent N entries
+     *   ?since=<ms>                             — only entries with ts >= ms
+     *   ?format=csv                             — flat CSV instead of JSON
+     * The CSV form is for quick spreadsheet inspection; columns are
+     * ts (ISO), type, then a stable subset of the most common fields. */
+    if (url.pathname === "/api/_events" && request.method === "GET") {
+      try {
+        const log = await _readEventLog(env);
+        let entries = log;
+        const typeParam = (url.searchParams.get("type") || "").trim();
+        if (typeParam) {
+          const allow = new Set(typeParam.split(",").map((s) => s.trim()).filter(Boolean));
+          entries = entries.filter((e) => allow.has(e && e.type));
+        }
+        const sinceMs = parseInt(url.searchParams.get("since") || "0", 10);
+        if (sinceMs > 0) entries = entries.filter((e) => e && typeof e.ts === "number" && e.ts >= sinceMs);
+        const limit = Math.min(parseInt(url.searchParams.get("limit") || "100", 10) || 100, 500);
+        /* Return most recent first, capped to limit. */
+        entries = entries.slice(-limit).reverse();
+        const fmt = (url.searchParams.get("format") || "").toLowerCase();
+        if (fmt === "csv") {
+          /* Stable flat columns. Unknown event fields are dropped from the CSV
+           * (use JSON for the full record). */
+          const cols = ["ts", "type", "fp", "from", "to", "durationMs", "relayCount", "quarantined", "enrichedPrecise", "correctedCountry", "source", "error"];
+          const esc = (v) => {
+            if (v === undefined || v === null) return "";
+            const s = typeof v === "object" ? JSON.stringify(v) : String(v);
+            return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+          };
+          const lines = [cols.join(",")];
+          for (const e of entries) {
+            const row = cols.map((c) => {
+              if (c === "ts") return new Date(e.ts || 0).toISOString();
+              if (c === "durationMs") return e.durationMs;
+              /* stats fields surface as top-level columns */
+              if (e.stats && (c in e.stats)) return e.stats[c];
+              return e[c];
+            }).map(esc);
+            lines.push(row.join(","));
+          }
+          const body = lines.join("\n");
+          return new Response(body, {
+            status: 200,
+            headers: { "Content-Type": "text/csv; charset=utf-8", "Access-Control-Allow-Origin": "*" }
+          });
+        }
+        return cors(JSON.stringify({
+          version: "v55c-events-1",
+          total_in_log: log.length,
+          returned: entries.length,
+          filters: { type: typeParam || null, sinceMs: sinceMs || null, limit },
+          entries,
+        }, null, 2), 200);
+      } catch (e) {
+        return cors(JSON.stringify({ error: "events read failed: " + (e && e.message) }, null, 2), 500);
       }
     }
 
@@ -10330,8 +10501,28 @@ Issued: ${(/* @__PURE__ */ new Date()).toISOString()}
         const data_raw = await upstream.json();
         // QUARANTINE FILTER (v54) — see CENTROID_BLOCKLIST_HIGH/MEDIUM (canonical, defined above)
         const { filtered: data } = applyQuarantineFilter(data_raw);
-        const _enrichedCount = await enrichFromCache(data, env);
+        const _enrichStart = Date.now();
+        const _enrichResult = await enrichFromCache(data, env);
+        const _enrichedCount = (_enrichResult && _enrichResult.count) || 0;
+        const _enrichStats = (_enrichResult && _enrichResult.stats) || null;
+        const _enrichEvents = (_enrichResult && _enrichResult.events) || [];
         const relayCount = Object.keys(data).length;
+        /* v55c+events: append a snapshot_built entry to the producer event log,
+         * plus any per-correction events emitted by enrichFromCache. ctx.waitUntil
+         * keeps this off the response hot path; appendEventLog swallows errors so
+         * the log can never break the snapshot. Only logs when the registry was
+         * actually refetched from upstream (i.e. on cache miss) — the cache-hit
+         * path returns earlier and doesn't run enrichFromCache. */
+        if (ctx && typeof ctx.waitUntil === 'function') {
+          const snapshotEvent = {
+            type: 'snapshot_built',
+            durationMs: Date.now() - _enrichStart,
+            relayCount,
+            stats: _enrichStats,
+            error: _enrichResult && _enrichResult.error || undefined,
+          };
+          ctx.waitUntil(appendEventLog(env, snapshotEvent, ..._enrichEvents));
+        }
         
         // Compute HMAC over the canonical relay data
         let mac = null;
