@@ -6428,25 +6428,7 @@ body.explore-mode #anyclip-bubble{display:none !important}
   animation:stSpin .8s linear infinite;
 }
 @keyframes stSpin{to{transform:rotate(360deg)}}
-.state-error{
-  display:flex;align-items:center;gap:6px;
-  color:var(--an-red,#f87171);font-size:11px;
-}
-.state-error-icon::before{content:'⚠';margin-right:2px}
-.state-retry{
-  background:rgba(248,113,113,.1);border:1px solid rgba(248,113,113,.3);
-  color:var(--an-red,#f87171);font-size:10px;padding:4px 10px;border-radius:12px;
-  cursor:pointer;margin-left:6px;min-height:28px;
-}
-.state-retry:hover{background:rgba(248,113,113,.2)}
-/* Contextual error expanded view */
-.state-error b{color:var(--an-red,#f87171);font-size:11px}
-.state-error .state-retry{margin-left:0;margin-top:4px}
-
-.state-empty{
-  color:var(--an-text-dim,#94a3b8);font-size:12px;
-  text-align:center;padding:16px;opacity:.7;
-}
+/* v516: removed dead .state-error/.state-error-icon/.state-retry/.state-empty CSS — orphaned when v515 removed showError()/showEmpty()/_errorMessages (their only users). .state-loading/stSpin left in place (separate concern). */
 /* ═══ ACCESSIBILITY: 44pt Minimum Touch Targets (Apple HIG) ═══ */
 button, [role="button"], .sb-btn, .sb-stat[onclick] {
   min-height: 44px;
