@@ -11278,16 +11278,18 @@ function initMapLibre(zones){
           try {
             if (typeof ranked === 'undefined' || !ranked || ranked.length < 4) return {type:'FeatureCollection',features:feats};
             const total = ranked.reduce((s,d)=>s+(d.relayCount||0),0) || 1;
-            /* v465 (restored v463): SIGNALS GLOBAL SPREAD lines. Cosmetic
-             * visualization of the relay network's geographic footprint (NOT
-             * per-circuit traffic — onion routing doesn't expose that). Widens the
-             * hub/reach pools and adds a per-sector coverage pass so every populated
-             * region of the globe emits arcs, not just the NA/EU cluster. Strength
-             * scales with relay count, so dense hubs read brightest. Drawn alongside
-             * the moving packet bubbles. */
+            /* v467: port of the old D3 map's buildConnectionWeb() — the full
+             * "Connection Web" the user wants back (the yellow strong-link bundle
+             * incl. the long USA<->South Africa arc). Structure matches the D3
+             * version exactly: top 20 zones are hubs (all pairs connected, skipping
+             * near-neighbours), plus 12 of those hubs each link to 3 random "reach"
+             * zones (ranked 20-60). Each arc carries a `strength` (combined relay
+             * share) which the existing signal-arcs-flow paint expression colors —
+             * colors are UNCHANGED from the current MapLibre styling per request.
+             * Cosmetic visualization of relay geography, not per-circuit traffic. */
             const withGeo = ranked.filter(z=>z && z.geo);
-            const hubs  = withGeo.slice(0, 30);
-            const reach = withGeo.slice(30, 160);
+            const hubs  = withGeo.slice(0, 20);   // top 20 hub zones (was D3's slice(0,20))
+            const reach = withGeo.slice(20, 60);  // reach zones (D3's slice(20,60))
             const seen = new Set();
             const addArc = (z1,z2,strength) => {
               if(!z1||!z2||!z1.geo||!z2.geo) return;
@@ -11296,41 +11298,24 @@ function initMapLibre(zones){
               if (seen.has(key) || seen.has(keyR)) return; seen.add(key);
               const a=[z1.geo[1],z1.geo[0]], b=[z2.geo[1],z2.geo[0]];
               const dx=a[0]-b[0], dy=a[1]-b[1];
-              if (Math.sqrt(dx*dx+dy*dy) < 2.5) return;
+              if (Math.sqrt(dx*dx+dy*dy) < 1.5) return; // skip near-neighbours (D3 used geoDist<0.15)
               feats.push({ type:'Feature',
                 properties:{ strength: strength },
                 geometry:{ type:'LineString', coordinates: arcCoords(a,b) } });
             };
-            // 1) hub-to-hub backbone (every 2nd pair)
-            for(let i=0;i<hubs.length;i++){ for(let j=i+2;j<hubs.length;j+=2){
-              addArc(hubs[i],hubs[j], ((hubs[i].relayCount+hubs[j].relayCount)/total)); } }
-            // 2) hub-to-reach spokes across many hubs
-            hubs.forEach((hub,hi)=>{
-              const peer = reach[(hi*7)%Math.max(1,reach.length)];
-              if (peer) addArc(hub,peer, ((hub.relayCount+(peer.relayCount||0))/total/2));
-            });
-            // 3) GLOBAL COVERAGE PASS: bucket geo zones into coarse lon/lat sectors;
-            // connect each occupied sector's strongest zone to the nearest top hub
-            // so Africa, S.America, S.Asia, Oceania all emit at least one arc.
-            const sectors = new Map();
-            for(const z of withGeo){
-              const lat=z.geo[0], lon=z.geo[1];
-              if(typeof lat!=='number' || typeof lon!=='number') continue;
-              const sx=Math.floor((lon+180)/40), sy=Math.floor((lat+90)/30);
-              const skey=sx+':'+sy;
-              const cur=sectors.get(skey);
-              if(!cur || (z.relayCount||0)>(cur.relayCount||0)) sectors.set(skey, z);
-            }
-            const topHubs = hubs.slice(0,8);
-            for(const z of sectors.values()){
-              let best=null, bestD=Infinity;
-              for(const h of topHubs){
-                const dx=z.geo[1]-h.geo[1], dy=z.geo[0]-h.geo[0];
-                const d=dx*dx+dy*dy;
-                if(d>0 && d<bestD){ bestD=d; best=h; }
+            // 1) hub-to-hub: ALL pairs (D3 parity — this is the dense backbone incl. long arcs)
+            for(let i=0;i<hubs.length;i++){
+              for(let j=i+1;j<hubs.length;j++){
+                addArc(hubs[i],hubs[j], ((hubs[i].relayCount||0)+(hubs[j].relayCount||0))/total);
               }
-              if(best) addArc(z, best, Math.max(0.015, (z.relayCount||1)/total));
             }
+            // 2) hub-to-reach spokes: first 12 hubs each to 3 random reach zones (D3 parity)
+            hubs.slice(0,12).forEach(hub=>{
+              const picks = [...reach].sort(()=>Math.random()-0.5).slice(0,3);
+              picks.forEach(peer=>{
+                addArc(hub, peer, ((hub.relayCount||0)+(peer.relayCount||0))/total/2);
+              });
+            });
           } catch(_){}
           return {type:'FeatureCollection',features:feats};
         };
