@@ -6417,18 +6417,7 @@ body.explore-mode #anyclip-bubble{display:none !important}
   font-size:12px;color:var(--an-red,#f87171);display:none;
 }
 .ac-no-wallet a{color:var(--an-teal-text,#5eead4);text-decoration:underline}
-/* ═══ LOADING / ERROR / EMPTY STATES ═══ */
-.state-loading{
-  display:inline-flex;align-items:center;gap:6px;
-  color:var(--an-teal-text,#5eead4);font-size:11px;opacity:.7;
-}
-.state-loading::before{
-  content:'';width:12px;height:12px;border:2px solid rgba(94,234,212,.2);
-  border-top-color:var(--an-teal-text,#5eead4);border-radius:50%;
-  animation:stSpin .8s linear infinite;
-}
-@keyframes stSpin{to{transform:rotate(360deg)}}
-/* v516: removed dead .state-error/.state-error-icon/.state-retry/.state-empty CSS — orphaned when v515 removed showError()/showEmpty()/_errorMessages (their only users). .state-loading/stSpin left in place (separate concern). */
+/* v515-v517 cleanup: the entire "LOADING / ERROR / EMPTY STATES" CSS+JS scaffold was dead (never wired up) and has been removed — showError()/showEmpty()/_errorMessages (v515), .state-error/.state-retry/.state-empty (v516), and .state-loading/stSpin (v517). No live code referenced any of it. */
 /* ═══ ACCESSIBILITY: 44pt Minimum Touch Targets (Apple HIG) ═══ */
 button, [role="button"], .sb-btn, .sb-stat[onclick] {
   min-height: 44px;
