@@ -12656,6 +12656,33 @@ function toggleSidebar(){
   const rp = document.getElementById('relay-panel');
   if(rp) rp.style.left = collapsed ? '0px' : '210px';
   localStorage.setItem('sb_collapsed', collapsed ? '1' : '0');
+
+  /* v513: keep the MapLibre canvas in sync with #map-wrap WHILE it animates.
+   * #map-wrap has `transition: left .25s`, but this function never resized the
+   * map — so the GL canvas lagged the moving container and the newly-exposed
+   * strip flashed the dark GL clear-color until some unrelated event happened to
+   * trigger a resize (hence the intermittent "map goes dark for a second").
+   * Drive map.resize() every frame across the transition (+ a small buffer) so
+   * the canvas tracks the container continuously, then one final settle resize.
+   * Guarded so rapid re-toggles cancel the prior loop instead of stacking. */
+  try {
+    const map = window.__anyoneMapLibre;
+    if(map && typeof map.resize === 'function'){
+      if(window.__sbResizeRAF) cancelAnimationFrame(window.__sbResizeRAF);
+      const start = performance.now();
+      const DURATION = 300; // 250ms transition + ~50ms buffer
+      const pump = () => {
+        map.resize();
+        if(performance.now() - start < DURATION){
+          window.__sbResizeRAF = requestAnimationFrame(pump);
+        } else {
+          window.__sbResizeRAF = null;
+          map.resize(); // final settle
+        }
+      };
+      window.__sbResizeRAF = requestAnimationFrame(pump);
+    }
+  } catch(_){ /* never let a resize hiccup break the toggle */ }
 }
 
 /* ══════════════════════════════════════════
