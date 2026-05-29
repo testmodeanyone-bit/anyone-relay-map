@@ -44,45 +44,7 @@
 
 <script>
 // ═══ LOADING / ERROR / EMPTY STATES ═══
-function showError(elId, msg, retryFn){
-  var el = document.getElementById(elId);
-  if(!el) return;
-  var retry = retryFn ? '<button class="state-retry" onclick="' + retryFn + '">Retry</button>' : '';
-  el.innerHTML = '<span class="state-error"><span class="state-error-icon"></span>' + (msg || 'Failed to load') + retry + '</span>';
-}
-// Contextual error messages per data type
-var _errorMessages = {
-  health: {
-    title: 'Health data unavailable',
-    detail: 'The network health service is temporarily unreachable. Health scores, geographic spread, and ISP diversity data will refresh automatically when the service recovers.',
-    hint: 'This usually resolves within a few minutes.'
-  },
-  relays: {
-    title: 'Relay data unavailable',
-    detail: 'Could not fetch the latest relay information. The relay count, bandwidth, and zone data may be stale.',
-    hint: 'The map will update automatically when data is available.'
-  },
-  staking: {
-    title: 'Staking data unavailable',
-    detail: 'Could not reach the staking service. Total staked amount and APY will appear when the service responds.',
-    hint: 'Your staking position is not affected.'
-  },
-  chat: {
-    title: 'Chat connection lost',
-    detail: 'The Operators Lounge is temporarily unreachable. Your messages are safe — they are archived on IPFS.',
-    hint: 'Reconnecting automatically...'
-  },
-  network: {
-    title: 'Network error',
-    detail: 'Your connection to the Anyone Protocol services was interrupted.',
-    hint: 'Check your internet connection and try again.'
-  }
-};
-function showEmpty(elId, msg){
-  var el = document.getElementById(elId);
-  if(!el) return;
-  el.innerHTML = '<span class="state-empty">' + (msg || 'No data available') + '</span>';
-}
+/* v515: removed dead showError(), _errorMessages, and showEmpty() — defined but never called (an early error-UI scaffold that was never wired up). Verified zero references across index.html and all worker files; the state-error/state-empty/state-retry CSS they used is now also unused (separate cleanup). */
 // ═══ SAFE FETCH WITH ERROR STATES ═══
 // Show empty state if chat has no messages after loading
 function acCheckEmptyState(){
