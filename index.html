@@ -24624,6 +24624,17 @@ async function init(){
     updateHealthButton();
     syncSidebarStats();
     setTimeout(checkNetworkAlerts, 3000);
+    /* v521: kick off the full-network uptime enrichment EARLY, in parallel with
+     * fetchUptimeAndGeoData's slow wallet loop. Previously enrichAllViaAnyoneAPI()
+     * (which fetches /api/all-uptimes — the ~5,800-relay uptime set that covers the
+     * ~2,500 relays base data misses) was only called at the END of
+     * fetchUptimeAndGeoData, after fetching exit-relays + looping 30 wallets in
+     * batches with retries — so those relays sat empty for many seconds on initial
+     * load. The all-uptimes fetch doesn't depend on any of that, so start it now.
+     * Safe: enrichAllViaAnyoneAPI dedups via _enrichInflight (the original late
+     * call at the tail of fetchUptimeAndGeoData becomes a no-op dedup hit) and
+     * bails if allRelays isn't populated yet (it is, by this point in init). */
+    enrichAllViaAnyoneAPI();
     fetchUptimeAndGeoData();
     setTimeout(fetchGrowthData, 1500);
     document.addEventListener('visibilitychange', ()=>{
