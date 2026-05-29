@@ -3045,34 +3045,7 @@ body.light #status{color:#7ecfdf;}
 /* ══════════════════════════════════════════
    COMMAND PALETTE — Ctrl+K / Cmd+K
 ══════════════════════════════════════════ */
-#cmd-overlay{position:fixed;inset:0;z-index:950;background:rgba(0,0,0,.55);display:none;align-items:flex-start;justify-content:center;padding-top:min(18vh,140px);backdrop-filter:blur(3px);-webkit-backdrop-filter:blur(3px);}
-#cmd-overlay.open{display:flex;}
-#cmd-box{width:min(520px,92vw);background:rgba(2,14,24,.96);border:1px solid rgba(0,245,255,.25);border-radius:12px;overflow:hidden;box-shadow:0 20px 60px rgba(0,0,0,.6),0 0 40px rgba(0,245,255,.06);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);animation:cmdIn .15s cubic-bezier(.4,0,.2,1);}
-@keyframes cmdIn{from{opacity:0;transform:translateY(-8px) scale(.98);}to{opacity:1;transform:none;}}
-#cmd-input{width:100%;padding:14px 18px;border:none;background:transparent;color:#fff;font-family:'Share Tech Mono',monospace;font-size:14px;letter-spacing:.5px;outline:none;border-bottom:1px solid rgba(0,245,255,.1);}
-#cmd-input::placeholder{color:rgba(138,188,196,.35);}
-#cmd-results{max-height:340px;overflow-y:auto;scrollbar-width:thin;scrollbar-color:rgba(0,245,255,.15) transparent;}
-.cmd-group{padding:6px 0;}
-.cmd-group-title{font-family:'Orbitron',sans-serif;font-size:8px;font-weight:700;color:rgba(0,245,255,.5);letter-spacing:2px;padding:6px 18px 4px;text-transform:uppercase;}
-.cmd-item{display:flex;align-items:center;gap:10px;padding:8px 18px;cursor:pointer;transition:background .1s;}
-.cmd-item:hover,.cmd-item.active{background:rgba(0,245,255,.08);}
-.cmd-item-icon{width:22px;height:22px;border-radius:6px;display:flex;align-items:center;justify-content:center;font-size:12px;flex-shrink:0;}
-.cmd-item-icon.relay{background:rgba(0,245,255,.1);color:#00f5ff;}
-.cmd-item-icon.country{background:rgba(255,107,53,.1);color:#ff6b35;}
-.cmd-item-icon.isp{background:rgba(167,139,250,.1);color:var(--an-purple,#a78bfa);}
-.cmd-item-icon.panel{background:rgba(0,255,136,.1);color:var(--an-green,#00ff88);}
-.cmd-item-text{flex:1;min-width:0;}
-.cmd-item-name{font-size:12px;color:#e0f4ff;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
-.cmd-item-sub{font-size:10px;color:rgba(138,188,196,.65);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
-.cmd-item-badge{font-size:9px;color:rgba(0,245,255,.5);font-family:'Share Tech Mono',monospace;flex-shrink:0;}
-.cmd-hint{padding:8px 18px;font-size:10px;color:rgba(138,188,196,.55);font-family:'Share Tech Mono',monospace;border-top:1px solid rgba(0,245,255,.06);display:flex;justify-content:space-between;}
-.cmd-hint kbd{background:rgba(0,245,255,.08);border:1px solid rgba(0,245,255,.15);border-radius:3px;padding:1px 5px;font-size:9px;color:rgba(0,245,255,.5);}
-body.light #cmd-box{background:rgba(245,248,252,.96);border-color:rgba(0,100,160,.2);box-shadow:0 20px 60px rgba(0,0,0,.15);}
-body.light #cmd-input{color:#0a2540;}
-body.light #cmd-input::placeholder{color:rgba(10,37,64,.3);}
-body.light .cmd-item:hover,body.light .cmd-item.active{background:rgba(0,100,160,.06);}
-body.light .cmd-item-name{color:#0a2540;}
-body.light .cmd-group-title{color:rgba(0,100,160,.5);}
+/* v512: legacy #cmd-overlay palette CSS removed — superseded by #cmdk-* (the active Cmd/Ctrl+K palette). The unrelated AnyChat .ac-cmd-item popup is a different feature. */
 
 /* ══════════════════════════════════════════
    ANYCHAT — OP MESSENGER STYLE
@@ -8083,17 +8056,7 @@ input:focus-visible, textarea:focus-visible, select:focus-visible{
   <div class="ttbar"><div class="ttfill" id="ttfill"></div></div>
 </div>
 
-<!-- COMMAND PALETTE -->
-<div id="cmd-overlay" onclick="if(event.target===this)closeCmdPalette()">
-  <div id="cmd-box">
-    <input id="cmd-input" type="text" placeholder="Search relays, countries, ISPs, or jump to panel..." autocomplete="off" spellcheck="false">
-    <div id="cmd-results"></div>
-    <div class="cmd-hint">
-      <span><kbd>↑↓</kbd> navigate <kbd>↵</kbd> select <kbd>esc</kbd> close</span>
-      <span><kbd>Ctrl</kbd>+<kbd>K</kbd></span>
-    </div>
-  </div>
-</div>
+<!-- v512: legacy #cmd-overlay command palette removed (superseded by #cmdk-* palette). -->
 
 
 <script>
@@ -8655,184 +8618,14 @@ function animateNum(el, target, opts = {}){
 
 /* ══════════════════════════════════════════
    COMMAND PALETTE — Ctrl+K / Cmd+K
+   v512: legacy #cmd-overlay palette JS REMOVED (was a duplicate of the
+   #cmdk-* palette and caused the double-open bug; v511 disabled its
+   hotkey, v512 deletes it). Removed: _cmdActive, CMD_PANELS,
+   openCmdPalette/closeCmdPalette/renderCmdResults/executeCmdResult/
+   highlightCmdItem, its keydown handler, and the #cmd-input listener.
+   The active palette is #cmdk-* (search "cmdk"); AnyChat acPickCmd is
+   a separate, unrelated feature and is untouched.
 ══════════════════════════════════════════ */
-let _cmdActive = -1;
-const CMD_PANELS = [
-  {name:'Relay Browser', key:'relay_browser', icon:'panel', action:()=>{document.getElementById('relay-panel').style.display!=='none'?null:document.querySelector('.sb-btn[onclick*="toggleRelayPanel"]')?.click()||toggleRelayPanel?.()}},
-  {name:'Signals', key:'signals', icon:'panel', action:()=>toggleSignals()},
-  {name:'Network Health', key:'health', icon:'panel', action:()=>openHealthPanel()},
-  {name:'Domains', key:'domains', icon:'panel', action:()=>toggleDomainPanel()},
-  {name:'Alerts', key:'alerts', icon:'panel', action:()=>{const p=document.getElementById('alerts-panel');if(p)p.style.display=p.style.display==='none'?'block':'none';}},
-  {name:'Feedback', key:'feedback', icon:'panel', action:()=>{FB.open=!FB.open;const p=document.getElementById('feedback-panel');if(p)p.classList.toggle('open',FB.open);}},
-  {name:'Light / Dark Mode', key:'theme', icon:'panel', action:()=>toggleTheme()},
-  {name:'Refresh Data', key:'refresh', icon:'panel', action:()=>refresh()},
-];
-
-function openCmdPalette(){
-  const overlay = document.getElementById('cmd-overlay');
-  overlay.classList.add('open');
-  const input = document.getElementById('cmd-input');
-  input.value = '';
-  input.focus();
-  _cmdActive = -1;
-  renderCmdResults('');
-}
-function closeCmdPalette(){
-  document.getElementById('cmd-overlay').classList.remove('open');
-}
-function renderCmdResults(query){
-  const el = document.getElementById('cmd-results');
-  const q = query.toLowerCase().trim();
-  let html = '';
-  const results = [];
-
-  const panelMatches = CMD_PANELS.filter(p => !q || p.name.toLowerCase().includes(q) || p.key.includes(q));
-  if(panelMatches.length > 0){
-    html += '<div class="cmd-group"><div class="cmd-group-title">Panels</div>';
-    panelMatches.forEach((p,i) => {
-      results.push({type:'panel', data:p});
-      html += `<div class="cmd-item" data-idx="${results.length-1}"><div class="cmd-item-icon panel">⬡</div><div class="cmd-item-text"><div class="cmd-item-name">${p.name}</div></div></div>`;
-    });
-    html += '</div>';
-  }
-
-  if(q.length >= 1 && allRelays && allRelays.length){
-    const countryMap = {};
-    allRelays.forEach(r => {
-      const cc = r.countryCode || '';
-      const cn = r.countryName || '';
-      if(!cc) return;
-      if(!countryMap[cc]) countryMap[cc] = {code:cc, name:cn, count:0};
-      countryMap[cc].count++;
-    });
-    const countries = Object.values(countryMap).filter(c =>
-      c.name.toLowerCase().includes(q) || c.code.toLowerCase().includes(q)
-    ).sort((a,b) => b.count - a.count).slice(0, 6);
-    if(countries.length){
-      html += '<div class="cmd-group"><div class="cmd-group-title">Countries</div>';
-      countries.forEach(c => {
-        const flag = isoToFlag(c.code);
-        results.push({type:'country', data:c});
-        html += `<div class="cmd-item" data-idx="${results.length-1}"><div class="cmd-item-icon country">${flag}</div><div class="cmd-item-text"><div class="cmd-item-name">${c.name}</div><div class="cmd-item-sub">${c.code}</div></div><div class="cmd-item-badge">${c.count.toLocaleString()} relays</div></div>`;
-      });
-      html += '</div>';
-    }
-  }
-
-  if(q.length >= 2 && allRelays && allRelays.length){
-    const ispMap = {};
-    allRelays.forEach(r => {
-      const isp = r.asName || '';
-      if(!isp) return;
-      if(!ispMap[isp]) ispMap[isp] = {name:isp, count:0};
-      ispMap[isp].count++;
-    });
-    const isps = Object.values(ispMap).filter(i => i.name.toLowerCase().includes(q)).sort((a,b) => b.count - a.count).slice(0, 5);
-    if(isps.length){
-      html += '<div class="cmd-group"><div class="cmd-group-title">ISPs</div>';
-      isps.forEach(i => {
-        results.push({type:'isp', data:i});
-        html += `<div class="cmd-item" data-idx="${results.length-1}"><div class="cmd-item-icon isp">◈</div><div class="cmd-item-text"><div class="cmd-item-name">${i.name}</div></div><div class="cmd-item-badge">${i.count.toLocaleString()} relays</div></div>`;
-      });
-      html += '</div>';
-    }
-  }
-
-  if(q.length >= 2 && allRelays && allRelays.length){
-    const relayMatches = allRelays.filter(r => {
-      const nick = (r.nickname || '').toLowerCase();
-      const fp = (r.fp || '').toLowerCase();
-      const city = (r.cityName || '').toLowerCase();
-      return nick.includes(q) || fp.startsWith(q) || city.includes(q);
-    }).slice(0, 8);
-    if(relayMatches.length){
-      html += '<div class="cmd-group"><div class="cmd-group-title">Relays</div>';
-      relayMatches.forEach(r => {
-        const flag = isoToFlag(r.countryCode || '');
-        const nick = r.nickname || r.fp.slice(0,12) + '…';
-        const loc = [r.cityName, r.countryName].filter(Boolean).join(', ') || r.countryCode || '';
-        results.push({type:'relay', data:r});
-        html += `<div class="cmd-item" data-idx="${results.length-1}"><div class="cmd-item-icon relay">${flag||'⬡'}</div><div class="cmd-item-text"><div class="cmd-item-name">${_aoEscHtml(nick)}</div><div class="cmd-item-sub">${_aoEscHtml(loc)} · ${_aoEscHtml(r.asName||'')}</div></div><div class="cmd-item-badge">${r.fp.slice(0,8)}…</div></div>`;
-      });
-      html += '</div>';
-    }
-  }
-
-  if(!html) html = '<div style="padding:20px 18px;font-size:11px;color:rgba(138,188,196,.55);text-align:center;">No results found</div>';
-  el.innerHTML = html;
-  window._cmdResults = results;
-
-  el.querySelectorAll('.cmd-item').forEach(item => {
-    item.addEventListener('click', () => {
-      const idx = parseInt(item.dataset.idx);
-      executeCmdResult(idx);
-    });
-  });
-}
-
-function executeCmdResult(idx){
-  const results = window._cmdResults || [];
-  const r = results[idx];
-  if(!r) return;
-  closeCmdPalette();
-  if(r.type === 'panel') r.data.action();
-  else if(r.type === 'country'){
-    if(typeof filterRelays === 'function') filterRelays('all');
-    const searchEl = document.getElementById('relay-search');
-    if(searchEl){ searchEl.value = r.data.name; searchEl.dispatchEvent(new Event('input')); }
-  }
-  else if(r.type === 'isp'){
-    const searchEl = document.getElementById('relay-search');
-    if(searchEl){ searchEl.value = r.data.name; searchEl.dispatchEvent(new Event('input')); }
-  }
-  else if(r.type === 'relay'){
-    selectRelay(r.data.fp, r.data.lat, r.data.lon);
-  }
-}
-
-document.addEventListener('keydown', e => {
-  /* v511: DISABLED this legacy palette's Cmd/Ctrl+K binding. There are two
-   * separate command-palette systems in this app: this older one (#cmd-overlay,
-   * "PANELS" group) and a newer one (#cmdk-overlay, RECENT/NETWORK/BROWSE groups,
-   * recents + Bitcoin toggle + role=dialog a11y, wired ~line 798). BOTH listened
-   * for Cmd/Ctrl+K, so a single press opened BOTH overlays — the user saw one,
-   * and the second surfaced after acting on/closing the first. We keep the newer
-   * cmdk palette and stop this one from claiming the hotkey. The handler below
-   * still manages this overlay's keys IF it's somehow opened by other means, but
-   * it no longer opens on Cmd+K. (Full removal of the legacy palette can come
-   * later; this is the minimal, safe fix to stop the double-open.) */
-  const overlay = document.getElementById('cmd-overlay');
-  if(!overlay || !overlay.classList.contains('open')) return;
-
-  if(e.key === 'Escape'){ closeCmdPalette(); e.preventDefault(); return; }
-
-  const results = window._cmdResults || [];
-  if(e.key === 'ArrowDown'){
-    e.preventDefault();
-    _cmdActive = Math.min(_cmdActive + 1, results.length - 1);
-    highlightCmdItem();
-  } else if(e.key === 'ArrowUp'){
-    e.preventDefault();
-    _cmdActive = Math.max(_cmdActive - 1, 0);
-    highlightCmdItem();
-  } else if(e.key === 'Enter' && _cmdActive >= 0){
-    e.preventDefault();
-    executeCmdResult(_cmdActive);
-  }
-});
-
-function highlightCmdItem(){
-  document.querySelectorAll('#cmd-results .cmd-item').forEach((el,i) => {
-    const idx = parseInt(el.dataset.idx);
-    el.classList.toggle('active', idx === _cmdActive);
-    if(idx === _cmdActive) el.scrollIntoView({block:'nearest'});
-  });
-}
-
-document.getElementById('cmd-input')?.addEventListener('input', function(){
-  _cmdActive = -1;
-  renderCmdResults(this.value);
-});
 
 function applyStats(data, isLive=true){
   const total=data.reduce((s,d)=>s+d.relayCount,0);
