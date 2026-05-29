@@ -28622,13 +28622,14 @@ body.light #geo-info-side-panel .hw-tip-section {
 
 <!-- Character markup -->
 <div id="anyclip">
-  <div id="anyclip-bubble">
+  <div id="anyclip-bubble" role="region" aria-label="AnyClip AI Assistant">
     <div class="ac-name">AnyClip · AI Assistant</div>
-    <div id="ac-msg"></div>
-    <div id="ac-chips"></div>
+    <div id="ac-msg" aria-hidden="true"></div>
+    <div id="ac-sr-live" aria-live="polite" aria-atomic="true" style="position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;border:0;"></div>
+    <div id="ac-chips" aria-label="Suggested questions"></div>
     <div id="ac-bubble-input-row">
-      <input id="ac-input" placeholder="How can I help?" data-i18n-placeholder="acInputPlaceholder" autocomplete="off"/>
-      <button id="ac-send">➤</button>
+      <input id="ac-input" placeholder="How can I help?" data-i18n-placeholder="acInputPlaceholder" autocomplete="off" aria-label="Ask AnyClip a question"/>
+      <button id="ac-send" aria-label="Send message">➤</button>
     </div>
   </div>
 
@@ -29517,6 +29518,16 @@ Q: Where to get help? A: t.me/anyoneprotocol | docs.anyone.io | Ask AnyClip in t
       if(_typewriteFinalizeActive === finalize) _typewriteFinalizeActive = null;
       if(_typewriteTimer && !superseded){ clearTimeout(_typewriteTimer); _typewriteTimer = null; }
       try { cursor.remove(); } catch(_){}
+      /* v475 (a11y): #ac-msg is the visual typewriter and is aria-hidden (it
+       * rewrites its full textContent every tick, which would make a live
+       * region re-announce dozens of times). Instead, when the animation
+       * finishes naturally, set the COMPLETE text into the visually-hidden
+       * #ac-sr-live region once so screen readers announce the final reply
+       * (or greeting/error) a single time. Skipped on supersession so we don't
+       * announce text that was abandoned mid-stream. */
+      if(!superseded){
+        try { var _sr = document.getElementById('ac-sr-live'); if(_sr) _sr.textContent = text; } catch(_){}
+      }
       if(done){ try { done(); } catch(_){} }
     }
     _typewriteFinalizeActive = finalize;
@@ -29780,7 +29791,13 @@ IMPORTANT: The user's preferred language is ${activeLang.name}. You MUST respond
        * now sees res.status and the parsed body, not just a string. */
       const chatBody = {
         model:'claude-haiku-4-5-20251001',
-        max_tokens:300,
+        /* v474: raised from 300 -> 600. At 300 (~225 words) longer answers were
+         * cut off mid-sentence; 600 (~450 words) gives complete replies with
+         * headroom while staying tight on cost. The system prompt still asks for
+         * concise answers, so typical replies stay short — this only lifts the
+         * ceiling. The v472 faster typewriter renders a 600-token reply in a few
+         * seconds, so the extra length doesn't drag. */
+        max_tokens:600,
         system: buildSystem() + buildMemoryContext() + langInstruction,
         messages: history
       };
