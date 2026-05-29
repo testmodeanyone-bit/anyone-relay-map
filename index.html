@@ -823,13 +823,7 @@ function switchToOperatorMode(){
   applyAppMode('operator');
 }
 
-function switchToExploreMode(){
-  applyAppMode('explore');
-}
-
-function toggleAppMode(){
-  applyAppMode(_appMode === 'explore' ? 'operator' : 'explore');
-}
+/* v518: removed dead wrappers switchToExploreMode() and toggleAppMode() — defined but never called (no JS refs, no DOM/onclick refs, not in worker files). The live app-mode feature uses applyAppMode() directly; switchToOperatorMode() (powers the "Enter Operator Mode" button) is kept. */
 
 function updateExploreCard(){
   // Pull live stats from sidebar into explore card
@@ -23192,7 +23186,15 @@ function buildRelayList(raw){
       asName:      r.asName       || '',
       hexId:       r.hexId        || '',
       bwMibs:      r.bw > 0 ? r.bw / 1024 : (hexBwMap[r.hexId] || prev.bwMibs || 0),
-      uptimeSecs:  r.up || prev.uptimeSecs || 0,
+      /* v519: uptime fallback chain. Was `r.up || prev.uptimeSecs || 0`, which
+       * reset uptime to 0 whenever a refresh rebuilt allRelays while prevEnrich
+       * lacked this relay (rebuild racing between enrichment cycles) AND the base
+       * raw had no r.up — causing the intermittent "uptime appears, then it's
+       * gone" flicker until the next enrichAllViaAnyoneAPI() pass (60s+) re-filled
+       * it. window._allUptimesCache holds the authoritative full-network uptimes
+       * already in memory (keyed by UPPERCASE fp); consult it before giving up to
+       * 0. Mirrors the existing detail-card fallback (~line 23688). */
+      uptimeSecs:  r.up || prev.uptimeSecs || ((window._allUptimesCache && window._allUptimesCache[fp.toUpperCase()] || {}).up) || 0,
       nickname:    r.n  || prev.nickname   || '',
       bwKBs:       prev.bwKBs     || 0,
       cw:          prev.cw        || 0,
