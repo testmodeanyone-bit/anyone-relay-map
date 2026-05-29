@@ -25423,8 +25423,15 @@ if('serviceWorker' in navigator){
 .ac-chip:hover{ background:rgba(45,212,191,.1);border-color:rgba(45,212,191,.4); }
 
 /* Input row */
-#ac-input-row{
-  display:flex;gap:6px;margin-top:2px;
+#ac-input-row,
+#ac-bubble-input-row{
+  /* v470: the AnyClip AI widget's input row markup is #ac-bubble-input-row
+   * (see #anyclip-bubble), but this flex rule only targeted #ac-input-row, so
+   * the row was never a flex container: #ac-input's `flex:1` was inert (input
+   * collapsed to the default narrow width) and the 36x36 #ac-send button sat
+   * misplaced in block flow. Match both IDs and center items so the input
+   * expands to fill the row and the send button sits inline beside it. */
+  display:flex;gap:6px;margin-top:2px;align-items:center;
 }
 #ac-input{
   flex:1;background:rgba(0,245,255,.06);
