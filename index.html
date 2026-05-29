@@ -8791,15 +8791,18 @@ function executeCmdResult(idx){
 }
 
 document.addEventListener('keydown', e => {
-  if((e.ctrlKey || e.metaKey) && e.key === 'k'){
-    e.preventDefault();
-    const overlay = document.getElementById('cmd-overlay');
-    if(overlay.classList.contains('open')) closeCmdPalette();
-    else openCmdPalette();
-    return;
-  }
+  /* v511: DISABLED this legacy palette's Cmd/Ctrl+K binding. There are two
+   * separate command-palette systems in this app: this older one (#cmd-overlay,
+   * "PANELS" group) and a newer one (#cmdk-overlay, RECENT/NETWORK/BROWSE groups,
+   * recents + Bitcoin toggle + role=dialog a11y, wired ~line 798). BOTH listened
+   * for Cmd/Ctrl+K, so a single press opened BOTH overlays — the user saw one,
+   * and the second surfaced after acting on/closing the first. We keep the newer
+   * cmdk palette and stop this one from claiming the hotkey. The handler below
+   * still manages this overlay's keys IF it's somehow opened by other means, but
+   * it no longer opens on Cmd+K. (Full removal of the legacy palette can come
+   * later; this is the minimal, safe fix to stop the double-open.) */
   const overlay = document.getElementById('cmd-overlay');
-  if(!overlay.classList.contains('open')) return;
+  if(!overlay || !overlay.classList.contains('open')) return;
 
   if(e.key === 'Escape'){ closeCmdPalette(); e.preventDefault(); return; }
 
