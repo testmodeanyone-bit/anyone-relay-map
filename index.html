@@ -11332,17 +11332,27 @@ function initMapLibre(zones){
         const ensureLayers = () => {
           if (map.getSource('signal-arcs')) return;
           map.addSource('signal-arcs', { type:'geojson', data:{type:'FeatureCollection',features:[]} });
+          /* v469: insert the arc layers BENEATH the relay dots. Previously the arc
+           * web (esp. the dense purple high-strength links) painted ON TOP of the
+           * Exit/Guard/Middle dots, washing out their colors whenever Signals was
+           * on — the relay colors looked "wrong". MapLibre paints in insert order,
+           * so we add the arcs with beforeId='relay-glow' (the lowest relay-dot
+           * layer) so dots always render crisp in front and the arcs sweep behind
+           * them. Colors/opacity of the arcs are unchanged. HW diamonds already sat
+           * above everything and are unaffected. */
+          const _arcBefore = map.getLayer('relay-glow') ? 'relay-glow'
+                           : (map.getLayer('relay-points') ? 'relay-points' : undefined);
           // soft glow underlay
           map.addLayer({ id:'signal-arcs-glow', type:'line', source:'signal-arcs',
             layout:{ 'line-cap':'round', 'line-join':'round' },
             paint:{ 'line-color':'#5eead4', 'line-width':['interpolate',['linear'],['zoom'],1,1.2,5,2.2,10,3.5],
-              'line-opacity':0.12, 'line-blur':3 }});
+              'line-opacity':0.12, 'line-blur':3 }}, _arcBefore);
           // bright flowing dashed overlay
           map.addLayer({ id:'signal-arcs-flow', type:'line', source:'signal-arcs',
             layout:{ 'line-cap':'round', 'line-join':'round' },
             paint:{ 'line-color':['interpolate',['linear'],['get','strength'],0,'#2dd4bf',0.02,'#5eead4',0.08,'#a78bfa'],
               'line-width':['interpolate',['linear'],['zoom'],1,0.8,5,1.4,10,2.2],
-              'line-opacity':0.85, 'line-dasharray':[0,4,3] }});
+              'line-opacity':0.85, 'line-dasharray':[0,4,3] }}, _arcBefore);
           /* v455: moving-packet layers — reproduces the old map's "circuits firing
            * between relays". A point source holds the in-flight packet dots; each is a
            * glowing circle whose coordinate we advance along an arc each frame. Two
