@@ -1624,6 +1624,11 @@ document.addEventListener('keydown', function(e){
     tip.id = 'kb-shortcuts-tip';
     tip.style.cssText = 'position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);z-index:200000;background:rgba(2,11,18,.95);border:1.5px solid rgba(94,234,212,.3);border-radius:16px;padding:24px 32px;color:var(--an-text,#e4e4e9);font-family:system-ui;font-size:14px;min-width:280px;backdrop-filter:blur(12px);';
     tip.innerHTML = '<div style="color:var(--an-teal-text,#5eead4);font-weight:700;font-size:16px;margin-bottom:12px">⌨ Keyboard Shortcuts</div>'
+      /* v509: the description labels had no explicit color and inherited
+       * --an-text, which resolves to a dim value in this theme — the text was
+       * almost unreadable (dark gray on dark blue). Force the labels to white
+       * via a scoped style so they read clearly; keys stay teal. */
+      + '<style>#kb-shortcuts-tip span{color:#ffffff;font-weight:600;}</style>'
       + '<div style="display:grid;grid-template-columns:60px 1fr;gap:6px 12px;">'
       + '<kbd style="color:var(--an-teal,#2dd4bf);font-family:monospace">Esc</kbd><span>Close panel</span>'
       + '<kbd style="color:var(--an-teal,#2dd4bf);font-family:monospace">+ / -</kbd><span>Zoom in / out</span>'
@@ -1634,7 +1639,7 @@ document.addEventListener('keydown', function(e){
       + '<kbd style="color:var(--an-teal,#2dd4bf);font-family:monospace">M</kbd><span>Light/Dark mode</span>'
       + '<kbd style="color:var(--an-teal,#2dd4bf);font-family:monospace">?</kbd><span>This help</span>'
       + '</div>'
-      + '<div style="color:var(--an-text-dim,#94a3b8);font-size:11px;margin-top:12px;text-align:center">Press ? or Esc to close</div>';
+      + '<div style="color:#cbd5e1;font-size:11px;margin-top:12px;text-align:center">Press ? or Esc to close</div>';
     tip.onclick = function(){ tip.remove(); };
     document.body.appendChild(tip);
     return;
