@@ -11273,14 +11273,67 @@ function initMapLibre(zones){
             pts.push([x,y]); }
           return pts;
         };
-        /* v464: arc LINES are no longer drawn (the user wants only moving packet
-         * bubbles, not a web of lines). The packet bubbles compute their own arc
-         * geometry per-circuit in fireHop()/arcCoords(), so they do NOT depend on
-         * this function. We keep buildArcGeo returning an empty FeatureCollection
-         * so the (hidden) signal-arcs source stays valid and any future re-enable
-         * of the lines is a one-line change in start(). The old v463 global-spread
-         * line-builder was removed — it only produced geometry nothing rendered. */
-        const buildArcGeo = () => ({ type:'FeatureCollection', features:[] });
+        const buildArcGeo = () => {
+          const feats=[];
+          try {
+            if (typeof ranked === 'undefined' || !ranked || ranked.length < 4) return {type:'FeatureCollection',features:feats};
+            const total = ranked.reduce((s,d)=>s+(d.relayCount||0),0) || 1;
+            /* v465 (restored v463): SIGNALS GLOBAL SPREAD lines. Cosmetic
+             * visualization of the relay network's geographic footprint (NOT
+             * per-circuit traffic — onion routing doesn't expose that). Widens the
+             * hub/reach pools and adds a per-sector coverage pass so every populated
+             * region of the globe emits arcs, not just the NA/EU cluster. Strength
+             * scales with relay count, so dense hubs read brightest. Drawn alongside
+             * the moving packet bubbles. */
+            const withGeo = ranked.filter(z=>z && z.geo);
+            const hubs  = withGeo.slice(0, 30);
+            const reach = withGeo.slice(30, 160);
+            const seen = new Set();
+            const addArc = (z1,z2,strength) => {
+              if(!z1||!z2||!z1.geo||!z2.geo) return;
+              const key = z1.geo.join(',')+'|'+z2.geo.join(',');
+              const keyR = z2.geo.join(',')+'|'+z1.geo.join(',');
+              if (seen.has(key) || seen.has(keyR)) return; seen.add(key);
+              const a=[z1.geo[1],z1.geo[0]], b=[z2.geo[1],z2.geo[0]];
+              const dx=a[0]-b[0], dy=a[1]-b[1];
+              if (Math.sqrt(dx*dx+dy*dy) < 2.5) return;
+              feats.push({ type:'Feature',
+                properties:{ strength: strength },
+                geometry:{ type:'LineString', coordinates: arcCoords(a,b) } });
+            };
+            // 1) hub-to-hub backbone (every 2nd pair)
+            for(let i=0;i<hubs.length;i++){ for(let j=i+2;j<hubs.length;j+=2){
+              addArc(hubs[i],hubs[j], ((hubs[i].relayCount+hubs[j].relayCount)/total)); } }
+            // 2) hub-to-reach spokes across many hubs
+            hubs.forEach((hub,hi)=>{
+              const peer = reach[(hi*7)%Math.max(1,reach.length)];
+              if (peer) addArc(hub,peer, ((hub.relayCount+(peer.relayCount||0))/total/2));
+            });
+            // 3) GLOBAL COVERAGE PASS: bucket geo zones into coarse lon/lat sectors;
+            // connect each occupied sector's strongest zone to the nearest top hub
+            // so Africa, S.America, S.Asia, Oceania all emit at least one arc.
+            const sectors = new Map();
+            for(const z of withGeo){
+              const lat=z.geo[0], lon=z.geo[1];
+              if(typeof lat!=='number' || typeof lon!=='number') continue;
+              const sx=Math.floor((lon+180)/40), sy=Math.floor((lat+90)/30);
+              const skey=sx+':'+sy;
+              const cur=sectors.get(skey);
+              if(!cur || (z.relayCount||0)>(cur.relayCount||0)) sectors.set(skey, z);
+            }
+            const topHubs = hubs.slice(0,8);
+            for(const z of sectors.values()){
+              let best=null, bestD=Infinity;
+              for(const h of topHubs){
+                const dx=z.geo[1]-h.geo[1], dy=z.geo[0]-h.geo[0];
+                const d=dx*dx+dy*dy;
+                if(d>0 && d<bestD){ bestD=d; best=h; }
+              }
+              if(best) addArc(z, best, Math.max(0.015, (z.relayCount||1)/total));
+            }
+          } catch(_){}
+          return {type:'FeatureCollection',features:feats};
+        };
 
         let started=false;
         const ensureLayers = () => {
@@ -11421,19 +11474,14 @@ function initMapLibre(zones){
           start(){
             try {
               ensureLayers();
-              /* v464: show ONLY the moving packet bubbles, not the arc lines. The
-               * glowing/dashed arc lines (signal-arcs-glow / -flow) cluttered the
-               * whole map with overlapping curves; the user wants to see packets
-               * being transferred as bubbles, not a web of lines. Keep the arc
-               * layers hidden — the packets still travel along arc geometry computed
-               * per-circuit in fireHop(), so the bubbles move correctly without the
-               * static lines being drawn. The dash-animation timer is skipped too
-               * since there are no visible lines to march. */
-              map.setLayoutProperty('signal-arcs-glow','visibility','none');
-              map.setLayoutProperty('signal-arcs-flow','visibility','none');
+              /* v465: arc lines restored (global-spread) AND moving packet bubbles. */
+              map.getSource('signal-arcs').setData(buildArcGeo());
+              map.setLayoutProperty('signal-arcs-glow','visibility','visible');
+              map.setLayoutProperty('signal-arcs-flow','visibility','visible');
               map.setLayoutProperty('signal-packets-halo','visibility','visible');
               map.setLayoutProperty('signal-packets-core','visibility','visible');
               started=true;
+              if(!timer && !document.hidden) timer = setInterval(stepDash, 70);
               if(!document.hidden) startFiring();
             } catch(_){}
           },
@@ -11447,7 +11495,7 @@ function initMapLibre(zones){
               if(map.getLayer('signal-packets-core')) map.setLayoutProperty('signal-packets-core','visibility','none');
             } catch(_){}
           },
-          rebuild(){ try { pools=null; } catch(_){} }
+          rebuild(){ try { if(started && map.getSource('signal-arcs')) map.getSource('signal-arcs').setData(buildArcGeo()); pools=null; } catch(_){} }
         };
         // pause animation + firing when the tab is hidden, resume when visible
         document.addEventListener('visibilitychange', () => {
@@ -11456,9 +11504,7 @@ function initMapLibre(zones){
             if(fireTimer){ clearTimeout(fireTimer); fireTimer=null; }
             if(pktRaf){ cancelAnimationFrame(pktRaf); pktRaf=null; }
           } else if(started){
-            /* v464: arc lines are hidden, so the dash-march timer is not restarted
-             * (it only animated the now-invisible signal-arcs-flow layer). Just
-             * resume the packet firing. */
+            if(!timer) timer = setInterval(stepDash, 70);
             startFiring();
           }
         });
