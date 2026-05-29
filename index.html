@@ -23201,6 +23201,26 @@ function buildRelayList(raw){
     };
   });
   window.allRelays = allRelays;  /* v247 (Bug #1): keep window mirror in sync after reassignment */
+  /* v520: re-apply the full all-uptimes dataset after every rebuild. The 3-min
+   * refresh() -> buildRelayList() rebuilds allRelays, but enrichAllViaAnyoneAPI()
+   * (which carries the authoritative ~5,800-relay uptime set) only fires once and
+   * isn't re-run on rebuild — so relays whose uptime came ONLY from that dataset
+   * (not base r.up, not prevEnrich) reverted to 0, showing empty on the map even
+   * though their uptime is known. A live trace found ~2,500 such relays. The v519
+   * inline fallback helped but didn't fully cover them (cache-timing dependent).
+   * This explicit pass folds the cached uptimes back in after each rebuild.
+   * Additive only: sets uptime from the authoritative cache, never clears it. */
+  try {
+    const _upCache = window._allUptimesCache;
+    if(_upCache){
+      for(const r of allRelays){
+        if((r.uptimeSecs || 0) === 0){
+          const d = _upCache[r.fp.toUpperCase()];
+          if(d && d.up > 0) r.uptimeSecs = d.up;
+        }
+      }
+    }
+  } catch(_){ /* never let uptime re-apply break the rebuild */ }
   filteredRelays = allRelays;
   updateRelayStats(allRelays);
   /* v325 Patch 2c: 5th init-time renderRelayList missed in earlier sweeps. */
