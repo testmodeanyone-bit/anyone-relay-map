@@ -8414,7 +8414,15 @@ async function fetchFlagIndex(){
     const fpCount = Object.keys(data.index || {}).length;
     if(fpCount === 0 && _fpRetryCount < 6){
       _fpRetryCount++;
-      const delay = Math.min(15000 * _fpRetryCount, 60000);
+      /* v468: HW diamonds (and exit/guard flags) only render once fp-index
+       * returns a non-empty index. When the producer's registry cache has a gap,
+       * fp-index comes back empty and we retry. The old backoff was 15s * n, so
+       * the FIRST retry alone made users stare at a flagless map for 15 seconds.
+       * Make the first retry fast (~2.5s) since a cold cache usually warms within
+       * a second or two, then escalate (7.5s, 15s, 30s, ...) for persistent
+       * emptiness so we don't hammer the endpoint. Caps at 60s. */
+      const schedule = [2500, 7500, 15000, 30000, 45000, 60000];
+      const delay = schedule[Math.min(_fpRetryCount - 1, schedule.length - 1)];
       if(_ll) _ll.style.display = 'none';
       setTimeout(fetchFlagIndex, delay);
       return;
