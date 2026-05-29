@@ -1554,6 +1554,13 @@ document.addEventListener('keydown', function(e){
   // ═══ ESCAPE — close the topmost open panel ═══
   if(e.key === 'Escape'){
     e.preventDefault();
+    /* v510: the keyboard-shortcuts panel (#kb-shortcuts-tip, z-index 200000)
+     * is the topmost, most transient overlay and literally says "Press ? or
+     * Esc to close" — but Esc never actually removed it (it wasn't in this
+     * list, and the panel's own handler only wired ? and click). Close it
+     * first so the label isn't lying. */
+    var kbTip = document.getElementById('kb-shortcuts-tip');
+    if(kbTip){ kbTip.remove(); return; }
     // v459: a floating relay detail card (from a map-dot click) is the most transient
     // overlay — close it first if open.
     var rd = document.getElementById('relay-detail');
