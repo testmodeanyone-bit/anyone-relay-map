@@ -29489,24 +29489,46 @@ Q: Where to get help? A: t.me/anyoneprotocol | docs.anyone.io | Ask AnyClip in t
   /* still typing), two ticks would race and overwrite msgEl with interleaved */
   /* characters. Track the active timer + a generation counter so any in-flight */
   /* tick from a previous call no-ops itself. */
-  let _typewriteTimer = null, _typewriteGen = 0;
+  let _typewriteTimer = null, _typewriteGen = 0, _typewriteFinalizeActive = null;
   function typewrite(text, done){
+    /* v471 (Bug 1 fix): the PREVIOUS version returned silently when superseded
+     * (myGen !== _typewriteGen), so an in-flight call's cursor was orphaned and
+     * its done() never fired. Because done() for a reply is restoreInput(), a
+     * greeting/relang/second typewrite starting mid-reply left the input
+     * PERMANENTLY disabled with a stuck cursor — widget unusable until reload.
+     *
+     * The interruption happens HERE, where a new call clears the old timer:
+     * after that, the old call's tick never runs again, so any guard inside
+     * tick can't help. So we finalize the previous in-flight call explicitly,
+     * right now, before starting the new one. _typewriteFinalizeActive holds
+     * the current call's finalizer; the next call invokes it first, guaranteeing
+     * the superseded call's cleanup + done() always run exactly once. */
+    if(_typewriteFinalizeActive){ try { _typewriteFinalizeActive(true); } catch(_){} _typewriteFinalizeActive = null; }
     if(_typewriteTimer){ clearTimeout(_typewriteTimer); _typewriteTimer = null; }
     const myGen = ++_typewriteGen;
     msgEl.innerHTML = '';
     let i = 0;
     const cursor = document.createElement('span');
     cursor.className = 'ac-cursor';
+    let finished = false;
+    function finalize(superseded){
+      if(finished) return;
+      finished = true;
+      if(_typewriteFinalizeActive === finalize) _typewriteFinalizeActive = null;
+      if(_typewriteTimer && !superseded){ clearTimeout(_typewriteTimer); _typewriteTimer = null; }
+      try { cursor.remove(); } catch(_){}
+      if(done){ try { done(); } catch(_){} }
+    }
+    _typewriteFinalizeActive = finalize;
     function tick(){
-      if(myGen !== _typewriteGen) return; /* superseded */
+      if(myGen !== _typewriteGen){ finalize(true); return; } /* belt-and-suspenders */
       if(i < text.length){
         msgEl.textContent = text.slice(0,++i);
         msgEl.appendChild(cursor);
         _typewriteTimer = setTimeout(tick, 18 + Math.random()*14);
       } else {
-        cursor.remove();
         _typewriteTimer = null;
-        if(done) done();
+        finalize(false);
       }
     }
     tick();
