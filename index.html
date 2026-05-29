@@ -29520,12 +29520,21 @@ Q: Where to get help? A: t.me/anyoneprotocol | docs.anyone.io | Ask AnyClip in t
       if(done){ try { done(); } catch(_){} }
     }
     _typewriteFinalizeActive = finalize;
+    /* v472 (Bug 2 fix): the old loop revealed ONE character per tick at
+     * 18-32ms, so a 300-char reply took ~5-10s and a long one 15-30s+ — far
+     * too slow, and the input stays disabled the whole time. Reveal a small
+     * CHUNK per tick and shorten the delay: this keeps the visible "typing"
+     * feel (cursor still trails, text still streams in) but roughly triples
+     * the speed and stops long answers from dragging. STEP chars every ~16-26ms
+     * => ~3x faster, near-constant pacing regardless of length. */
+    const STEP = 3;
     function tick(){
       if(myGen !== _typewriteGen){ finalize(true); return; } /* belt-and-suspenders */
       if(i < text.length){
-        msgEl.textContent = text.slice(0,++i);
+        i = Math.min(i + STEP, text.length);
+        msgEl.textContent = text.slice(0, i);
         msgEl.appendChild(cursor);
-        _typewriteTimer = setTimeout(tick, 18 + Math.random()*14);
+        _typewriteTimer = setTimeout(tick, 16 + Math.random()*10);
       } else {
         _typewriteTimer = null;
         finalize(false);
@@ -29905,7 +29914,18 @@ IMPORTANT: The user's preferred language is ${activeLang.name}. You MUST respond
     if(q) ask(q);
   };
   input.addEventListener('keydown', e=>{
-    if(e.key==='Enter'){ const q=input.value.trim(); if(q) ask(q); }
+    /* v473 (Bug 3 fix): only treat Enter as "send" when the user is NOT mid-IME
+     * composition. CJK users (the widget supports zh/ja/ko) press Enter to
+     * confirm a candidate from the IME popup while composing a word — the old
+     * handler fired ask() on that Enter, submitting a half-composed message and
+     * making the widget unusable for those languages. e.isComposing is the
+     * standard signal; keyCode === 229 is the legacy fallback some browsers set
+     * during composition. Also preventDefault() now that we've handled the key. */
+    if(e.key==='Enter' && !e.isComposing && e.keyCode !== 229){
+      e.preventDefault();
+      const q=input.value.trim();
+      if(q) ask(q);
+    }
   });
 
   /* v215: rebuild chips when the global language changes. */
