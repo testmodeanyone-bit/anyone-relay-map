@@ -23839,7 +23839,7 @@ async function fetchRelayDetail(fp){
     <div class="rd-row"><span class="rd-key">${_i18t('rdLocation','Location')}</span><span class="rd-val">${flag} ${loc||'—'}</span></div>
     <div class="rd-row"><span class="rd-key">${_i18t('rdIsp','ISP')}</span><span class="rd-val rd-isp">${isp||'—'}</span></div>
     <div class="rd-row"><span class="rd-key">${_i18t('rdBandwidth','Bandwidth')}</span><span class="rd-val" style="color:#22d3ee">${bwDisplay}</span></div>
-    <div class="rd-row"><span class="rd-key">${_i18t('rdUptime','Uptime')}</span><span class="rd-val" style="color:#00f5a0">${uptimeStr}</span></div>
+    <div class="rd-row"><span class="rd-key">${_i18t('rdUptime','Uptime')}</span><span class="rd-val" style="color:#00f5a0" title="${uptimeSecs > 0 ? '' : 'Uptime not available — this relay is not registered to an operator wallet, so the network does not publish an uptime figure for it.'}">${uptimeStr}</span></div>
     <div class="rd-row"><span class="rd-key">${_i18t('rdWeight','Weight')}</span><span class="rd-val">${cwStr}</span></div>
     <div class="rd-row"><span class="rd-key">${_i18t('rdType','Type')}</span><span class="rd-val" style="color:${typeColor}">${typeName}</span></div>
     <div class="rd-row">
