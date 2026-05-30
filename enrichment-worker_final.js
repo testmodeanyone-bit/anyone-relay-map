@@ -15147,6 +15147,30 @@ var enrichment_worker_default = {
         allEnvKeys: Object.keys(env || {})
       });
     }
+    if (url.pathname === "/health") {
+      /* Public health surface for an external uptime monitor. Unlike /status
+       * (always 200/ok — an info endpoint), this returns 200 when the geo-drain
+       * cron ran recently and 503 when it has stalled, so a monitor on non-2xx
+       * fires an alert. Threshold 45min = 3 missed 15-min ticks. Read-only. */
+      let cursor = null;
+      try { cursor = await env.GEO_ENRICH.get("geo:_cursor", { type: "json" }); } catch (_) {}
+      const now = Date.now();
+      const lastRunAt = cursor && typeof cursor.lastRunAt === "number" ? cursor.lastRunAt : 0;
+      const ageMs = lastRunAt ? (now - lastRunAt) : null;
+      const STALE_MS = 45 * 60 * 1e3;
+      const stale = lastRunAt ? (ageMs > STALE_MS) : true;
+      const healthy = !stale;
+      const body = {
+        ok: healthy,
+        checkedAt: now,
+        lastRunAt,
+        ageMin: ageMs != null ? Math.round(ageMs / 6e4) : null,
+        stale,
+        lastRun: cursor ? { ok: cursor.ok, processedThisRun: cursor.processedThisRun, consensusRelays: cursor.consensusRelays } : null,
+        note: healthy ? "geo-enrichment cron healthy" : (lastRunAt ? "geo-enrichment drain stalled — cron not running" : "no cursor — cron has never run or KV unavailable")
+      };
+      return new Response(JSON.stringify(body, null, 2), { status: healthy ? 200 : 503, headers: { "Content-Type": "application/json", "Cache-Control": "no-store" } });
+    }
     if (url.pathname === "/status") {
       /* /status stays public: read-only, no outbound work, just the cursor. */
       let cursor = null;
