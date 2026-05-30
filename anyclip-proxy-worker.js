@@ -4999,6 +4999,31 @@ async function buildAndStoreUptimes(env) {
   };
   const _step2Dt = Date.now() - _step2T0;
   console.log(`[buildAndStoreUptimes] step2 done \u2014 ${Object.keys(relays).length} relays, ${_walletsTimeout} wallet timeouts, ${_step2Dt}ms`);
+  /* FIX (degraded-build guard): mirror the fp-index v47 guard. If too many
+   * wallets timed out, this build is partial and under-counts relays (uptime
+   * silently disappears for everyone whose wallet fetch failed — observed as
+   * all-uptimes dropping ~6556→4853 while the guarded fp-index held at 6577).
+   * Don't overwrite a good cache with a noisy partial — keep the previous
+   * result and try again next cycle. Threshold matches fp-index (2%). */
+  const _dropRate = allWallets.length > 0 ? (_walletsTimeout / allWallets.length) : 0;
+  result.walletTimeouts = _walletsTimeout;
+  result.dropRate = Math.round(_dropRate * 10000) / 10000;
+  if (_dropRate > 0.02 && env.FP_INDEX) {
+    console.warn(`[all-uptimes] degraded build: ${_walletsTimeout}/${allWallets.length} wallet timeouts (${(_dropRate * 100).toFixed(1)}%) \u2014 keeping previous cache`);
+    try {
+      const prevRaw = await env.FP_INDEX.get(KV_UPTIME_KEY);
+      if (prevRaw) {
+        const prev = JSON.parse(prevRaw);
+        if (prev && prev.relays && Object.keys(prev.relays).length > result.count) {
+          prev.lastDegradedAttempt = { ts: Date.now(), walletTimeouts: _walletsTimeout, dropRate: result.dropRate, partialCount: result.count };
+          await env.FP_INDEX.put(KV_UPTIME_KEY, JSON.stringify(prev), { expirationTtl: 7200 });
+          console.log(`[all-uptimes] kept previous good cache (${Object.keys(prev.relays).length} relays) instead of partial (${result.count})`);
+          return prev;
+        }
+      }
+    } catch (e) { console.warn("[all-uptimes] degraded-guard prev-cache read failed:", e.message); }
+    /* No usable previous cache → fall through and publish the partial below. */
+  }
   if (env.FP_INDEX) {
     try {
       const _kvT0 = Date.now();
