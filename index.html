@@ -22913,6 +22913,11 @@ function enrichBlankRelaysViaProxy(){
   if(!todo.length) return null;
   window._enrichBlankInflight = (async function(){
     try {
+      /* v522 perf: build an fp->relay index once (O(n)) so the merge below is
+       * O(1) per result instead of arr.find() (which was O(n) per result =
+       * ~11M comparisons for ~1500 results over a ~7400 array). */
+      const byFp = {};
+      for(const r of arr){ byFp[r.fp.toUpperCase()] = r; }
       for(let i = 0; i < todo.length; i += 100){
         const batch = todo.slice(i, i + 100);
         let data = null;
@@ -22927,7 +22932,7 @@ function enrichBlankRelaysViaProxy(){
           for(const fpU in data.relays){
             const e = data.relays[fpU];
             cache[fpU] = e;  // cache for rebuild re-apply
-            const match = arr.find(r => r.fp.toUpperCase() === fpU);
+            const match = byFp[fpU];
             if(match){
               if(e.n) match.nickname = e.n;
               if(e.cw) match.cw = e.cw;
