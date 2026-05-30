@@ -4961,31 +4961,40 @@ async function buildAndStoreUptimes(env) {
   for (let i = 0; i < allWallets.length; i += IPS_BATCH_SIZE) {
     const batch = allWallets.slice(i, i + IPS_BATCH_SIZE);
     await Promise.all(batch.map(async (wallet) => {
-      try {
-        const r = await fetch(`${IPS_BASE}${encodeURIComponent(wallet)}`, { signal: AbortSignal.timeout(5e3) });
-        if (!r.ok) {
-          _walletsTimeout++;
-          return;
+      /* FIX: match the fp-index fetchWalletIps behavior — 8s timeout + up to 3
+       * retries with backoff on timeout/5xx/429. The previous one-shot 5s fetch
+       * is why all-uptimes saw ~71% wallet timeouts while the (retrying) fp-index
+       * saw 0% on the SAME wallets, silently under-counting relays. */
+      let d = null;
+      for (let attempt = 1; attempt <= 3; attempt++) {
+        try {
+          const r = await fetch(`${IPS_BASE}${encodeURIComponent(wallet)}`, { signal: AbortSignal.timeout(8e3) });
+          if (!r.ok) {
+            if (attempt < 3 && (r.status >= 500 || r.status === 429)) { await new Promise((res) => setTimeout(res, 500 * attempt)); continue; }
+            break; // non-retryable HTTP error
+          }
+          d = await r.json();
+          break;
+        } catch (_) {
+          if (attempt < 3) { await new Promise((res) => setTimeout(res, 500 * attempt)); continue; }
         }
-        const d = await r.json();
-        const _walletKey = wallet.toLowerCase();
-        const _fpList = [];
-        for (const relay of d.ips || []) {
-          const fp = (relay.fingerprint || "").toUpperCase();
-          if (!fp) continue;
-          relays[fp] = {
-            up: relay.uptime_seconds || 0,
-            n: relay.descriptor_nickname || "",
-            bw: relay.bandwidth || 0,
-            cw: relay.consensus_weight || 0,
-            fl: relay.flags || []
-          };
-          _fpList.push(fp);
-        }
-        if (_fpList.length > 0) walletRelays[_walletKey] = _fpList;
-      } catch (_) {
-        _walletsTimeout++;
       }
+      if (!d) { _walletsTimeout++; return; }
+      const _walletKey = wallet.toLowerCase();
+      const _fpList = [];
+      for (const relay of d.ips || []) {
+        const fp = (relay.fingerprint || "").toUpperCase();
+        if (!fp) continue;
+        relays[fp] = {
+          up: relay.uptime_seconds || 0,
+          n: relay.descriptor_nickname || "",
+          bw: relay.bandwidth || 0,
+          cw: relay.consensus_weight || 0,
+          fl: relay.flags || []
+        };
+        _fpList.push(fp);
+      }
+      if (_fpList.length > 0) walletRelays[_walletKey] = _fpList;
     }));
   }
   const elapsed = ((Date.now() - t0) / 1e3).toFixed(1);
