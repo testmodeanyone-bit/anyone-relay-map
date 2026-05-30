@@ -22871,6 +22871,81 @@ async function enrichAllViaAnyoneAPI(){
   return window._enrichInflight;
 }
 
+/* v522: bulk-enrich the relays that show BLANK in the map/list. Those are
+ * non-wallet relays absent from /api/all-uptimes (the wallet-scoped set), so
+ * they render with no nickname and cw 0 even though the upstream has real data
+ * for them. fetchRelayDetail already enriches them on click; this fills the
+ * AT-A-GLANCE views (map dots, relay browser list) too. Collects still-blank
+ * fingerprints and POSTs them to the proxy /api/enrich-relays endpoint in
+ * batches of 100 (its cap), merging {n, cw, fl} back into allRelays. Results
+ * are cached in window._enrichBlankCache so the 3-min buildRelayList rebuild
+ * re-applies them instantly (mirrors the v520 uptime re-apply). uptime stays 0
+ * — honestly unavailable for these relays; the UI shows "—", never a fake value.
+ * Deferred + dedup-guarded so it never blocks first paint or double-fires. */
+function enrichBlankRelaysViaProxy(){
+  if(window._enrichBlankInflight) return window._enrichBlankInflight;
+  if(document.visibilityState === 'hidden'){
+    document.addEventListener('visibilitychange', function _eb(){
+      if(document.visibilityState === 'visible'){ document.removeEventListener('visibilitychange', _eb); enrichBlankRelaysViaProxy(); }
+    });
+    return null;
+  }
+  const arr = window.allRelays || [];
+  if(!arr.length) return null;
+  window._enrichBlankCache = window._enrichBlankCache || {};
+  const cache = window._enrichBlankCache;
+  // collect still-blank fps not already cached
+  const todo = [];
+  for(const r of arr){
+    if(!r.nickname && (r.cw || 0) === 0){
+      const fpU = r.fp.toUpperCase();
+      if(cache[fpU]){
+        // already known — apply now
+        const e = cache[fpU];
+        if(e.n) r.nickname = e.n;
+        if(e.cw) r.cw = e.cw;
+        if(e.fl) r.flags = e.fl;
+      } else {
+        todo.push(r.fp);
+      }
+    }
+  }
+  if(!todo.length) return null;
+  window._enrichBlankInflight = (async function(){
+    try {
+      for(let i = 0; i < todo.length; i += 100){
+        const batch = todo.slice(i, i + 100);
+        let data = null;
+        try {
+          const resp = await fetch(AC_PROXY + '/api/enrich-relays', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ fps: batch })
+          });
+          if(resp.ok) data = await resp.json();
+        } catch(_){ /* network hiccup — skip this batch, try next */ }
+        if(data && data.relays){
+          for(const fpU in data.relays){
+            const e = data.relays[fpU];
+            cache[fpU] = e;  // cache for rebuild re-apply
+            const match = arr.find(r => r.fp.toUpperCase() === fpU);
+            if(match){
+              if(e.n) match.nickname = e.n;
+              if(e.cw) match.cw = e.cw;
+              if(e.fl) match.flags = e.fl;
+            }
+          }
+        }
+      }
+      // refresh views that read allRelays
+      try { if(typeof updateRelayStats === 'function') updateRelayStats(arr); } catch(_){}
+      try { if(typeof renderRelayList === 'function') renderRelayList(); } catch(_){}
+    } finally {
+      window._enrichBlankInflight = null;
+    }
+  })();
+  return window._enrichBlankInflight;
+}
+
 /* ══════════════════════════════════════════
    STAKING DATA — Total $ANYONE locked + APY
    Reads from proxy /api/total-staked (on-chain ERC20 balanceOf)
@@ -23221,6 +23296,20 @@ function buildRelayList(raw){
       }
     }
   } catch(_){ /* never let uptime re-apply break the rebuild */ }
+  /* v522: re-apply the blank-relay enrichment cache after rebuild, so the
+   * nickname/cw/flags we fetched from /api/enrich-relays survive the 3-min
+   * refresh (same rationale as the v520 uptime re-apply above). Additive only. */
+  try {
+    const _ebCache = window._enrichBlankCache;
+    if(_ebCache){
+      for(const r of allRelays){
+        if(!r.nickname && (r.cw || 0) === 0){
+          const e = _ebCache[r.fp.toUpperCase()];
+          if(e){ if(e.n) r.nickname = e.n; if(e.cw) r.cw = e.cw; if(e.fl) r.flags = e.fl; }
+        }
+      }
+    }
+  } catch(_){ /* never let blank-enrich re-apply break the rebuild */ }
   filteredRelays = allRelays;
   updateRelayStats(allRelays);
   /* v325 Patch 2c: 5th init-time renderRelayList missed in earlier sweeps. */
@@ -24636,6 +24725,11 @@ async function init(){
      * bails if allRelays isn't populated yet (it is, by this point in init). */
     enrichAllViaAnyoneAPI();
     fetchUptimeAndGeoData();
+    /* v522: after the uptime enrichment, fill blank (non-wallet) relays'
+     * name/weight/flags in the map+list via /api/enrich-relays. Deferred so it
+     * never competes with first paint or the uptime pass; visibility-gated and
+     * dedup-guarded internally. */
+    setTimeout(function(){ try { enrichBlankRelaysViaProxy(); } catch(_){} }, 4000);
     setTimeout(fetchGrowthData, 1500);
     document.addEventListener('visibilitychange', ()=>{
       const pause = document.hidden;
