@@ -5320,6 +5320,96 @@ var worker_source_default = {
         return cors(JSON.stringify({ error: "Build failed", hint: "Build timed out. Try ?build=1 again or check Worker CPU limits." }), 502);
       }
     }
+    /* ────────────────────────────────────────────────────────────────────
+     * PoC: /api/enrich-relays  (POST { fps: [<40-hex>, ...] })
+     * Enriches NON-WALLET relays that /api/all-uptimes can't see (its wallet
+     * traversal only covers wallet-staked relays). Fetches each fingerprint
+     * server-side from api.ec.anyone.tech/relays/{fp} and returns the SAME
+     * { relays: { <UPPER_FP>: { up, n, bw, cw, fl } } } shape the client's
+     * v519/v520 merge already consumes — so no client changes are needed.
+     *
+     * Honest field handling (decided during scoping):
+     *   up: 0  — uptime is NOT available for non-wallet relays anywhere; we
+     *            never fabricate it. Client shows "—".
+     *   bw: 0  — the per-fp `observed_bandwidth` is a DIFFERENT metric from the
+     *            wallet `bw` (non-constant ~468–510x ratio, not a unit change);
+     *            mixing scales would mislead, so we leave it 0 here.
+     *   n, cw  — real values from the upstream per-fp endpoint.
+     *   fl     — derived from the `running` boolean (the only flag-ish signal
+     *            this endpoint returns); ["Running"] or [].
+     *
+     * PoC guardrails: ≤100 fps/call, 40-hex validation (same as /api/relay-info),
+     * per-IP rate limit, low outbound concurrency (5 — the safe ceiling measured
+     * against this upstream's throttling), and short-TTL per-fp KV cache. This is
+     * a MANUAL endpoint only — NOT wired into the cron yet. */
+    if (url.pathname === "/api/enrich-relays" && request.method === "POST") {
+      let body;
+      try { body = await request.json(); } catch (_) { return cors(JSON.stringify({ error: "invalid JSON body" }), 400); }
+      const rawFps = Array.isArray(body && body.fps) ? body.fps : null;
+      if (!rawFps) return cors(JSON.stringify({ error: "body must be { fps: [...] }" }), 400);
+      // validate + normalize + de-dupe; reject anything not exactly 40 hex chars
+      const seen = {};
+      const fps = [];
+      for (const f of rawFps) {
+        const up = String(f || "").toUpperCase().trim();
+        if (/^[A-F0-9]{40}$/.test(up) && !seen[up]) { seen[up] = 1; fps.push(up); }
+        if (fps.length >= 100) break; // PoC cap
+      }
+      if (fps.length === 0) return cors(JSON.stringify({ error: "no valid 40-hex fingerprints (max 100/call)" }), 400);
+      // per-IP rate limit (mirror /api/relay-info: 30/min)
+      if (env.FP_INDEX) {
+        const erIp = request.headers.get("CF-Connecting-IP") || "unknown";
+        const erKey = `enrich-rl:${erIp}`;
+        const erRl = await env.FP_INDEX.get(erKey, { type: "json" }).catch(() => null) || { count: 0, ts: Date.now() };
+        if (Date.now() - erRl.ts > 60000) { erRl.count = 0; erRl.ts = Date.now(); }
+        if (erRl.count >= 30) return cors(JSON.stringify({ error: "Rate limit reached" }), 429);
+        erRl.count++;
+        ctx.waitUntil(env.FP_INDEX.put(erKey, JSON.stringify(erRl), { expirationTtl: 120 }).catch(() => {}));
+      }
+      const relays = {};
+      let resolved = 0, notFound = 0, failed = 0, cacheHits = 0;
+      const ENRICH_CONC = 5; // safe ceiling vs upstream throttle (measured)
+      const ENRICH_TTL = 1800; // per-fp KV cache, 30 min
+      for (let i = 0; i < fps.length; i += ENRICH_CONC) {
+        const batch = fps.slice(i, i + ENRICH_CONC);
+        await Promise.all(batch.map(async (fp) => {
+          // per-fp KV cache first
+          if (env.FP_INDEX) {
+            try {
+              const c = await env.FP_INDEX.get(`enrich:${fp}`);
+              if (c) { const e = JSON.parse(c); relays[fp] = e; resolved++; cacheHits++; return; }
+            } catch (_) {}
+          }
+          try {
+            const r = await fetch(`https://api.ec.anyone.tech/relays/${fp}`, { signal: AbortSignal.timeout(8000) });
+            if (r.status === 200) {
+              const d = await r.json();
+              if (d && d.fingerprint) {
+                const entry = {
+                  up: 0,                                  // uptime unavailable — never fabricated
+                  n: d.nickname || "",
+                  bw: 0,                                  // observed_bandwidth is a different metric; not mixed in
+                  cw: d.consensus_weight || 0,
+                  fl: d.running ? ["Running"] : []
+                };
+                relays[fp] = entry;
+                resolved++;
+                if (env.FP_INDEX) ctx.waitUntil(env.FP_INDEX.put(`enrich:${fp}`, JSON.stringify(entry), { expirationTtl: ENRICH_TTL }).catch(() => {}));
+                return;
+              }
+            }
+            if (r.status === 404) notFound++; else failed++;
+          } catch (_) { failed++; }
+        }));
+      }
+      return new Response(JSON.stringify({
+        relays,
+        requested: fps.length,
+        resolved, notFound, failed, cacheHits,
+        builtAt: Date.now(),
+        note: "PoC manual enrichment — uptime(up) and bandwidth(bw) intentionally 0 (unavailable for non-wallet relays)"
+      }), { headers: jsonHeaders({ "Cache-Control": "no-store" }) });
+    }
     if (url.pathname === "/api/fp-index" && request.method === "GET") {
       const bust = url.searchParams.get("bust") === "1";
       if (!bust && env.FP_INDEX) {
