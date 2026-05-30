@@ -5107,14 +5107,25 @@ async function warmNonWalletEnrichment(env) {
     }));
   }
 
-  // 4. advance cursor + persist
+  // 4. prune stale entries + advance cursor + persist
+  /* FIX (stale-eviction): the accumulator was append-only. As all-uptimes
+   * recovers, relays leave the non-wallet gap but their entries lingered
+   * (observed: 1830 cached for a 784 gap → 1350 stale, carrying up:0/bw:0
+   * that could shadow real data if a relay ever transiently goes blank, plus
+   * unbounded growth toward the 5MB KV limit). Drop any accumulated fp that is
+   * no longer in the freshly-computed gap. Safe: we only reach here after a
+   * healthy gap computation (the function early-returns above if the registry
+   * read failed), so this never wrongly evicts everything on a bad read. */
+  const gapSet = new Set(gap);
+  let pruned = 0;
+  for (const fp in acc) { if (!gapSet.has(fp)) { delete acc[fp]; pruned++; } }
   const nextCursor = (cursor + ENRICH_SLICE >= gap.length) ? 0 : cursor + ENRICH_SLICE;
   const payload = JSON.stringify({ relays: acc, count: Object.keys(acc).length, gapSize: gap.length, builtAt: Date.now() });
   try {
     await env.FP_INDEX.put(ENRICH_NONWALLET_KEY, payload, { expirationTtl: 86400 });
     await env.FP_INDEX.put(ENRICH_CURSOR_KEY, String(nextCursor), { expirationTtl: 86400 });
   } catch (e) { console.error("[enrich-nonwallet] KV write failed:", e.message); }
-  console.log(`[enrich-nonwallet] slice ${cursor}-${cursor + slice.length}/${gap.length} — ok=${ok} fail=${fail} accumulated=${Object.keys(acc).length}`);
+  console.log(`[enrich-nonwallet] slice ${cursor}-${cursor + slice.length}/${gap.length} — ok=${ok} fail=${fail} pruned=${pruned} accumulated=${Object.keys(acc).length}`);
 }
 
 /* #14 (observability): track cron task outcomes so a silent stall is detectable.
