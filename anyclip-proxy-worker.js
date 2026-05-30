@@ -5083,6 +5083,25 @@ async function warmNonWalletEnrichment(env) {
   console.log(`[enrich-nonwallet] slice ${cursor}-${cursor + slice.length}/${gap.length} — ok=${ok} fail=${fail} accumulated=${Object.keys(acc).length}`);
 }
 
+/* #14 (observability): track cron task outcomes so a silent stall is detectable.
+ * Each task (snapshot/registry/enrich/uptimes) reports success or failure here;
+ * the /health endpoint reads it and goes 503 when something has been failing.
+ * Converts "find out at 9 AM when a user emails" into "a URL anything can poll." */
+var CRON_HEALTH_KEY = "cron_health_v1";
+async function recordCronOutcome(env, task, ok, errMsg) {
+  if (!env.FP_INDEX) return;
+  try {
+    let health = {};
+    try { const raw = await env.FP_INDEX.get(CRON_HEALTH_KEY); if (raw) health = JSON.parse(raw); } catch (_) {}
+    const t = health[task] || { lastSuccess: 0, lastError: 0, lastErrorMsg: "", consecutiveFailures: 0 };
+    const now = Date.now();
+    if (ok) { t.lastSuccess = now; t.consecutiveFailures = 0; t.lastErrorMsg = ""; }
+    else { t.lastError = now; t.lastErrorMsg = String(errMsg || "unknown").slice(0, 200); t.consecutiveFailures = (t.consecutiveFailures || 0) + 1; }
+    health[task] = t;
+    await env.FP_INDEX.put(CRON_HEALTH_KEY, JSON.stringify(health), { expirationTtl: 604800 });
+  } catch (e) { console.warn("[cron-health] write failed:", e.message); }
+}
+
 var worker_source_default = {
   async fetch(request, env, ctx) {
     if (request.method === "OPTIONS") return corsHeaders();
@@ -5417,6 +5436,33 @@ var worker_source_default = {
      * of doing slow per-fp fan-out (which throttled). Built incrementally by
      * warmNonWalletEnrichment on the cron; may be partial right after a cold
      * start (warms over ~7 ticks) but is complete and fresh in steady state. */
+    if (url.pathname === "/health" && request.method === "GET") {
+      const now = Date.now();
+      let cronHealth = {}, enrichBuiltAt = 0;
+      if (env.FP_INDEX) {
+        try { const raw = await env.FP_INDEX.get(CRON_HEALTH_KEY); if (raw) cronHealth = JSON.parse(raw); } catch (_) {}
+        try { const e = await env.FP_INDEX.get(ENRICH_NONWALLET_KEY); if (e) enrichBuiltAt = (JSON.parse(e).builtAt) || 0; } catch (_) {}
+      }
+      // staleness: enrichment cron should touch its data well within ~45 min
+      const STALE_MS = 45 * 60 * 1e3;
+      const enrichAgeMs = enrichBuiltAt ? (now - enrichBuiltAt) : null;
+      const enrichmentStale = enrichBuiltAt ? (enrichAgeMs > STALE_MS) : true;
+      // any cron task failing repeatedly = unhealthy
+      let failingTasks = [];
+      for (const task in cronHealth) {
+        if ((cronHealth[task].consecutiveFailures || 0) >= 3) failingTasks.push(task);
+      }
+      const healthy = !enrichmentStale && failingTasks.length === 0;
+      const body = {
+        ok: healthy,
+        checkedAt: now,
+        enrichment: { builtAt: enrichBuiltAt, ageMin: enrichAgeMs != null ? Math.round(enrichAgeMs / 6e4) : null, stale: enrichmentStale },
+        cron: cronHealth,
+        failingTasks,
+        note: healthy ? "all cron tasks healthy" : (enrichmentStale ? "enrichment data stale — cron may have stalled" : "cron task(s) failing: " + failingTasks.join(", "))
+      };
+      return new Response(JSON.stringify(body, null, 2), { status: healthy ? 200 : 503, headers: jsonHeaders({ "Cache-Control": "no-store" }) });
+    }
     if (url.pathname === "/api/enriched-nonwallet" && request.method === "GET") {
       if (env.FP_INDEX) {
         try {
@@ -10818,10 +10864,10 @@ Issued: ${(/* @__PURE__ */ new Date()).toISOString()}
      * Shares buildAndCacheRegistry with the route, so both write the same shape
      * and the persisted record bridges the gap between 15-min ticks. Fire-and-
      * forget: a warm failure must not affect storeSnapshot or the uptimes warm. */
-    ctx.waitUntil(buildAndCacheRegistry(env, ctx).catch(e => console.warn("[cron] registry warm failed:", e.message)));
+    ctx.waitUntil(buildAndCacheRegistry(env, ctx).then(() => recordCronOutcome(env, "registry", true)).catch(e => { console.warn("[cron] registry warm failed:", e.message); return recordCronOutcome(env, "registry", false, e.message); }));
     /* Incremental non-wallet enrichment: one slice per tick (cursor-based). Fire-
      * and-forget; a failure here must not affect snapshot/registry/uptimes warms. */
-    ctx.waitUntil(warmNonWalletEnrichment(env).catch(e => console.warn("[cron] non-wallet enrich failed:", e.message)));
+    ctx.waitUntil(warmNonWalletEnrichment(env).then(() => recordCronOutcome(env, "enrich", true)).catch(e => { console.warn("[cron] non-wallet enrich failed:", e.message); return recordCronOutcome(env, "enrich", false, e.message); }));
     ctx.waitUntil((async () => {
       if (!env.FP_INDEX) {
         console.warn("[cron] no FP_INDEX binding \u2014 cannot warm uptimes cache");
@@ -10846,8 +10892,10 @@ Issued: ${(/* @__PURE__ */ new Date()).toISOString()}
         }
         await buildAndStoreUptimes(env);
         console.log("[cron] warm complete");
+        ctx.waitUntil(recordCronOutcome(env, "uptimes", true));
       } catch (e) {
         console.error("[cron] all-uptimes warm failed:", e.message);
+        ctx.waitUntil(recordCronOutcome(env, "uptimes", false, e.message));
       } finally {
         /* Release the lock proactively so the next tick can run. The TTL is a
          * fallback in case this finally never executes. */
