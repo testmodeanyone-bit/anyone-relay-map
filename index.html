@@ -22894,56 +22894,44 @@ function enrichBlankRelaysViaProxy(){
   if(!arr.length) return null;
   window._enrichBlankCache = window._enrichBlankCache || {};
   const cache = window._enrichBlankCache;
-  // collect still-blank fps not already cached
-  const todo = [];
-  for(const r of arr){
-    if(!r.nickname && (r.cw || 0) === 0){
-      const fpU = r.fp.toUpperCase();
-      if(cache[fpU]){
-        // already known — apply now
-        const e = cache[fpU];
-        if(e.n) r.nickname = e.n;
-        if(e.cw) r.cw = e.cw;
-        if(e.fl) r.flags = e.fl;
-      } else {
-        todo.push(r.fp);
-      }
-    }
-  }
-  if(!todo.length) return null;
+  /* v524: read the cron-warmed bulk dataset in ONE request. Previously this did
+   * a per-fp POST fan-out to /api/enrich-relays, which was correct but far too
+   * slow — live profiling showed ~18 min and partial failures because the
+   * upstream throttles bulk per-fp requests. The proxy worker now pre-warms all
+   * non-wallet relay enrichment on its cron (warmNonWalletEnrichment) and serves
+   * it at GET /api/enriched-nonwallet. The client just fetches that cached map
+   * and merges — instant, no throttling, complete coverage once warmed. Degrades
+   * gracefully: reads whatever's warmed so far and fills in more as the cron
+   * progresses (each page load picks up the latest). uptime stays 0 — honestly
+   * unavailable for these relays. */
   window._enrichBlankInflight = (async function(){
     try {
-      /* v522 perf: build an fp->relay index once (O(n)) so the merge below is
-       * O(1) per result instead of arr.find() (which was O(n) per result =
-       * ~11M comparisons for ~1500 results over a ~7400 array). */
-      const byFp = {};
-      for(const r of arr){ byFp[r.fp.toUpperCase()] = r; }
-      for(let i = 0; i < todo.length; i += 100){
-        const batch = todo.slice(i, i + 100);
-        let data = null;
-        try {
-          const resp = await fetch(AC_PROXY + '/api/enrich-relays', {
-            method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ fps: batch })
-          });
-          if(resp.ok) data = await resp.json();
-        } catch(_){ /* network hiccup — skip this batch, try next */ }
-        if(data && data.relays){
-          for(const fpU in data.relays){
-            const e = data.relays[fpU];
-            cache[fpU] = e;  // cache for rebuild re-apply
-            const match = byFp[fpU];
-            if(match){
-              if(e.n) match.nickname = e.n;
-              if(e.cw) match.cw = e.cw;
-              if(e.fl) match.flags = e.fl;
-            }
+      let data = null;
+      try {
+        const resp = await fetch(AC_PROXY + '/api/enriched-nonwallet', { cache: 'no-store' });
+        if(resp.ok) data = await resp.json();
+      } catch(_){ /* network hiccup — leave blanks as-is, retry next load */ }
+      if(data && data.relays){
+        // fp->relay index once (O(n)); merge is O(1) per cached entry
+        const byFp = {};
+        for(const r of arr){ byFp[r.fp.toUpperCase()] = r; }
+        let merged = 0;
+        for(const fpU in data.relays){
+          const e = data.relays[fpU];
+          cache[fpU] = e;  // keep for the v522 rebuild re-apply pass
+          const match = byFp[fpU];
+          if(match && !match.nickname && (match.cw || 0) === 0){
+            if(e.n) match.nickname = e.n;
+            if(e.cw) match.cw = e.cw;
+            if(e.fl) match.flags = e.fl;
+            merged++;
           }
         }
+        if(merged){
+          try { if(typeof updateRelayStats === 'function') updateRelayStats(arr); } catch(_){}
+          try { if(typeof renderRelayList === 'function') renderRelayList(); } catch(_){}
+        }
       }
-      // refresh views that read allRelays
-      try { if(typeof updateRelayStats === 'function') updateRelayStats(arr); } catch(_){}
-      try { if(typeof renderRelayList === 'function') renderRelayList(); } catch(_){}
     } finally {
       window._enrichBlankInflight = null;
     }
