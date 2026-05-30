@@ -5014,6 +5014,75 @@ async function buildAndStoreUptimes(env) {
   }
   return result;
 }
+
+/* Incremental cron warmer for NON-WALLET relays.
+ * /api/all-uptimes only covers wallet-staked relays (~6,500); the registry
+ * (relay-registry-cache) has all ~7,400 fingerprints. The ~800 in the gap are
+ * real consensus relays whose name/weight/flags live at the per-fp upstream
+ * (api.ec.anyone.tech/relays/{fp}) but aren't in any wallet-scoped source.
+ *
+ * Live profiling showed the upstream needs LOW concurrency (≈3) to avoid
+ * failures, at ~1.3s/relay — so the full gap takes ~18 min, far more than one
+ * Worker invocation allows. This warms a SLICE per cron tick using a KV cursor,
+ * accumulating into ENRICH_NONWALLET_KEY. Over ~7 ticks the gap is fully warmed,
+ * then the cursor wraps to keep it refreshed. The client reads the accumulated
+ * map in one fast cached response (no client-side per-fp fan-out). */
+var ENRICH_NONWALLET_KEY = "enriched_nonwallet_v1";
+var ENRICH_CURSOR_KEY = "enriched_nonwallet_cursor";
+var ENRICH_SLICE = 120;     // relays per tick (~2.5 min at conc 3)
+var ENRICH_CONC = 3;        // sustainable upstream concurrency (measured)
+async function warmNonWalletEnrichment(env) {
+  if (!env.FP_INDEX) return;
+  // 1. gap set = registry fps not present in the wallet-scoped all-uptimes set
+  let registry = null, uptimes = null;
+  try { registry = await env.FP_INDEX.get(REGISTRY_CACHE_KEY, { type: "json" }); } catch (_) {}
+  try { const r = await env.FP_INDEX.get(KV_UPTIME_KEY); if (r) uptimes = JSON.parse(r); } catch (_) {}
+  if (!registry || !registry.data) { console.log("[enrich-nonwallet] no registry yet — skip"); return; }
+  const walletFps = {};
+  if (uptimes && uptimes.relays) for (const k in uptimes.relays) walletFps[k.toUpperCase()] = 1;
+  const gap = [];
+  for (const k in registry.data) { const u = k.toUpperCase(); if (!walletFps[u]) gap.push(u); }
+  gap.sort(); // stable order so the cursor is meaningful across ticks
+  if (gap.length === 0) { console.log("[enrich-nonwallet] gap empty — nothing to warm"); return; }
+
+  // 2. load cursor + accumulated map
+  let cursor = 0;
+  try { const c = await env.FP_INDEX.get(ENRICH_CURSOR_KEY); if (c) cursor = parseInt(c, 10) || 0; } catch (_) {}
+  if (cursor >= gap.length) cursor = 0; // wrap to refresh
+  let acc = {};
+  try { const a = await env.FP_INDEX.get(ENRICH_NONWALLET_KEY); if (a) { const p = JSON.parse(a); acc = p.relays || {}; } } catch (_) {}
+
+  // 3. process this slice at low concurrency
+  const slice = gap.slice(cursor, cursor + ENRICH_SLICE);
+  let ok = 0, fail = 0;
+  for (let i = 0; i < slice.length; i += ENRICH_CONC) {
+    const batch = slice.slice(i, i + ENRICH_CONC);
+    await Promise.all(batch.map(async (fp) => {
+      try {
+        const r = await fetch(`https://api.ec.anyone.tech/relays/${fp}`, { signal: AbortSignal.timeout(8000) });
+        if (r.status === 200) {
+          const d = await r.json();
+          if (d && d.fingerprint) {
+            acc[fp] = { up: 0, n: d.nickname || "", bw: 0, cw: d.consensus_weight || 0, fl: d.running ? ["Running"] : [] };
+            ok++;
+            return;
+          }
+        }
+        fail++;
+      } catch (_) { fail++; }
+    }));
+  }
+
+  // 4. advance cursor + persist
+  const nextCursor = (cursor + ENRICH_SLICE >= gap.length) ? 0 : cursor + ENRICH_SLICE;
+  const payload = JSON.stringify({ relays: acc, count: Object.keys(acc).length, gapSize: gap.length, builtAt: Date.now() });
+  try {
+    await env.FP_INDEX.put(ENRICH_NONWALLET_KEY, payload, { expirationTtl: 86400 });
+    await env.FP_INDEX.put(ENRICH_CURSOR_KEY, String(nextCursor), { expirationTtl: 86400 });
+  } catch (e) { console.error("[enrich-nonwallet] KV write failed:", e.message); }
+  console.log(`[enrich-nonwallet] slice ${cursor}-${cursor + slice.length}/${gap.length} — ok=${ok} fail=${fail} accumulated=${Object.keys(acc).length}`);
+}
+
 var worker_source_default = {
   async fetch(request, env, ctx) {
     if (request.method === "OPTIONS") return corsHeaders();
@@ -5342,6 +5411,21 @@ var worker_source_default = {
      * per-IP rate limit, low outbound concurrency (5 — the safe ceiling measured
      * against this upstream's throttling), and short-TTL per-fp KV cache. This is
      * a MANUAL endpoint only — NOT wired into the cron yet. */
+    /* GET /api/enriched-nonwallet — serves the cron-warmed non-wallet relay
+     * enrichment ({ relays: { FP: {up,n,bw,cw,fl} }, count, gapSize, builtAt }).
+     * This is the bulk, cached dataset the client reads in ONE request instead
+     * of doing slow per-fp fan-out (which throttled). Built incrementally by
+     * warmNonWalletEnrichment on the cron; may be partial right after a cold
+     * start (warms over ~7 ticks) but is complete and fresh in steady state. */
+    if (url.pathname === "/api/enriched-nonwallet" && request.method === "GET") {
+      if (env.FP_INDEX) {
+        try {
+          const raw = await env.FP_INDEX.get(ENRICH_NONWALLET_KEY);
+          if (raw) return new Response(raw, { headers: jsonHeaders({ "Cache-Control": "max-age=300" }) });
+        } catch (e) { console.warn("[enriched-nonwallet] KV read error:", e.message); }
+      }
+      return new Response(JSON.stringify({ relays: {}, count: 0, gapSize: 0, builtAt: 0, note: "not warmed yet" }), { headers: jsonHeaders({ "Cache-Control": "max-age=60" }) });
+    }
     if (url.pathname === "/api/enrich-relays" && request.method === "POST") {
       let body;
       try { body = await request.json(); } catch (_) { return cors(JSON.stringify({ error: "invalid JSON body" }), 400); }
@@ -10735,6 +10819,9 @@ Issued: ${(/* @__PURE__ */ new Date()).toISOString()}
      * and the persisted record bridges the gap between 15-min ticks. Fire-and-
      * forget: a warm failure must not affect storeSnapshot or the uptimes warm. */
     ctx.waitUntil(buildAndCacheRegistry(env, ctx).catch(e => console.warn("[cron] registry warm failed:", e.message)));
+    /* Incremental non-wallet enrichment: one slice per tick (cursor-based). Fire-
+     * and-forget; a failure here must not affect snapshot/registry/uptimes warms. */
+    ctx.waitUntil(warmNonWalletEnrichment(env).catch(e => console.warn("[cron] non-wallet enrich failed:", e.message)));
     ctx.waitUntil((async () => {
       if (!env.FP_INDEX) {
         console.warn("[cron] no FP_INDEX binding \u2014 cannot warm uptimes cache");
