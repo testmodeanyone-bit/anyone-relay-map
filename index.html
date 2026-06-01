@@ -10688,7 +10688,7 @@ function initMapLibre(zones){
        * the left, all of Europe + Africa centered, and Asia/Australia/Japan toward the right
        * edge. Captured live from the map state the operator set, then baked in here and as
        * the reset-button target. */
-      center:[3.383,16.02], zoom:2, maxZoom:15, attributionControl:{compact:true} });
+      center:[3.383,16.02], zoom:2, maxZoom:15, renderWorldCopies:false, attributionControl:{compact:true} });
     window.__anyoneMapLibre = map;
     map.addControl(new maplibregl.NavigationControl({showCompass:false}), 'bottom-right');
 
