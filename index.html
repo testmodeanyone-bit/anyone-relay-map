@@ -11435,18 +11435,34 @@ function initMapLibre(zones){
                * fix every country got null/string id and hover-highlight targeted them all
                * as one feature — borders/fills rendered but hover never narrowed to one. */
               fc.features.forEach(f => { if(f.id != null) f.id = +f.id; });
-              /* v479: drop antimeridian-crossing features. In the world-atlas-110m
-               * TopoJSON, three countries span the full 360° of longitude (Fiji=242,
-               * Russia=643, Antarctica=010) because their polygons aren't normalized
-               * across the date line. MapLibre renders the outline of these polygons by
-               * drawing straight horizontal segments between the wrap-around points,
-               * producing ~5 phantom horizontal teal lines across the entire map.
-               * Filtering them out kills those artifacts cleanly. Tradeoff: hover-
-               * highlight on Fiji/Russia/Antarctica is disabled — Russia is the only one
-               * that meaningfully matters (it has relays), but the relay dots still
-               * render normally and Russia is still searchable via the Relay Browser. */
-              const ANTIMERIDIAN_IDS = new Set([242, 643, 10]);
-              fc.features = fc.features.filter(f => !ANTIMERIDIAN_IDS.has(+f.id));
+              /* v530: antimeridian NORMALIZATION (supersedes the v479 blanket drop).
+               * Background: in the world-atlas-110m TopoJSON three countries span the
+               * full 360° of longitude because their polygons aren't normalized across
+               * the date line — Fiji(242), Russia(643), Antarctica(10). MapLibre drew a
+               * straight segment between the wrap-around points, producing phantom
+               * horizontal teal lines across the whole map, so v479 dropped all three
+               * from the hover layer. But that also killed hover-highlight on Russia —
+               * the one country here with meaningful relays (its main landmass IS one of
+               * the wrapping polygons, so it can't be salvaged by dropping sub-polygons).
+               * Fix: instead of dropping Russia & Fiji, UNWRAP each ring's longitudes so
+               * consecutive vertices never jump >180°. That removes the cross-map segment
+               * (hence the phantom lines) while preserving the entire landmass, so Russia
+               * highlights like any other country. Verified live against the deployed map:
+               * the unwrapped Russia fill renders cleanly with zero phantom lines (the
+               * small Chukotka tip past +180° just sits at the east edge, which is the
+               * correct behavior under renderWorldCopies:false). Antarctica(10) stays
+               * dropped: it's a polar ring encircling the South Pole, so a longitude
+               * unwrap can't normalize it (needs pole-closure), and it has no relays. */
+              const unwrapRing = (r) => { const o = [r[0].slice()]; for (let i = 1; i < r.length; i++) { let lon = r[i][0]; const p = o[i - 1][0]; while (lon - p > 180) lon -= 360; while (lon - p < -180) lon += 360; o.push([lon, r[i][1]]); } return o; };
+              const UNWRAP_IDS = new Set([242, 643]); // Fiji, Russia — normalize & keep
+              const DROP_IDS = new Set([10]);          // Antarctica — polar, keep dropping
+              fc.features = fc.features.filter(f => !DROP_IDS.has(+f.id));
+              fc.features.forEach(f => {
+                if (!UNWRAP_IDS.has(+f.id) || !f.geometry) return;
+                const g = f.geometry;
+                if (g.type === 'Polygon') g.coordinates = g.coordinates.map(unwrapRing);
+                else if (g.type === 'MultiPolygon') g.coordinates = g.coordinates.map(poly => poly.map(unwrapRing));
+              });
               map.addSource('countries-hover', { type:'geojson', data:fc });
             }
             if(!map.getLayer('countries-hover-fill')){
