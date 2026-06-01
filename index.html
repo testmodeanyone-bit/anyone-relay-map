@@ -39,7 +39,7 @@
 <!-- staked/APY/health pays no TCP+TLS handshake cost. -->
 <link rel="preconnect" href="https://anyclip-proxy.anyonerelaysmap.workers.dev" crossorigin>
 <link rel="dns-prefetch" href="https://anyclip-proxy.anyonerelaysmap.workers.dev">
-<script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.8.5/d3.min.js" integrity="sha384-su5kReKyYlIFrI62mbQRKXHzFobMa7BHp1cK6julLPbnYcCW9NIZKJiTODjLPeDh" crossorigin="anonymous"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.8.5/d3.min.js" defer integrity="sha384-su5kReKyYlIFrI62mbQRKXHzFobMa7BHp1cK6julLPbnYcCW9NIZKJiTODjLPeDh" crossorigin="anonymous"></script>
 
 
 <script>
@@ -1609,7 +1609,7 @@ document.addEventListener('keydown', function(e){
   }
 });
 </script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/topojson/3.0.2/topojson.min.js" integrity="sha384-9dCJK6nh7skY14HrcvlLYlFga9/MehJjL9ONWRflmiXNRuf8p2jiF4Y5PR881PTq" crossorigin="anonymous"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/topojson/3.0.2/topojson.min.js" defer integrity="sha384-9dCJK6nh7skY14HrcvlLYlFga9/MehJjL9ONWRflmiXNRuf8p2jiF4Y5PR881PTq" crossorigin="anonymous"></script>
 <link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Orbitron:wght@400;700;900&family=Rajdhani:wght@400;600;700&display=swap" rel="stylesheet">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -15148,8 +15148,12 @@ async function acAskAnyClip(query){
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'x-token': token },
       body: JSON.stringify({
-        messages: [...acClipGetHistory(), { role: 'user', content: query }],
-        system: context
+        task: 'assistant',
+        lounge: true,
+        stats: acCollectStats(),
+        memory: (typeof operatorContext === 'string' ? operatorContext : '')
+              + (typeof relayContext   === 'string' ? relayContext   : ''),
+        messages: [...acClipGetHistory(), { role: 'user', content: query }]
       })
     });
     acHideTyping();
@@ -18666,28 +18670,19 @@ async function acRequestPin(nick){
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'x-token': token },
       body: JSON.stringify({
-        messages: [{ role: 'user', content: `Operator "${nick}" wants to pin this message: "${lastMsg.text}"\n\nShould this be pinned? A good pin is: useful info, network announcements, tips, milestones, warnings, or community updates. Bad pins: random chatter, jokes, greetings, single words, spam.\n\nRespond ONLY with JSON: {"pin":true,"reason":"brief reason"} or {"pin":false,"reason":"brief reason"}` }],
-        system: 'You are AnyClip, the AI moderator. Evaluate pin requests strictly. Only approve pins that are useful for all operators. Respond with JSON only.'
+        task: 'moderate_pin',
+        messages: [{ role: 'user', content: `Operator "${nick}" wants to pin this message: "${lastMsg.text}"` }]
       })
     });
-    const d = await res.json();
-    const reply = d.content?.[0]?.text || '';
-
-    try {
-      const result = JSON.parse(reply.replace(/```json|```/g, '').trim());
-      if(result.pin){
-        acPinMessage(lastMsg.nick, lastMsg.text, '🤖 AnyClip');
-        acAddMessage('🤖 AnyClip', 'ai', '📌 Message pinned! ' + (result.reason || ''), Date.now());
-      } else {
-        acAddMessage('🤖 AnyClip', 'ai', '📌 Pin request denied — ' + (result.reason || 'not relevant enough for a pin.'), Date.now());
-      }
-    } catch {
+    const result = await res.json();
+    if(result.approve){
       acPinMessage(lastMsg.nick, lastMsg.text, '🤖 AnyClip');
-      acAddMessage('🤖 AnyClip', 'ai', '📌 Message pinned!', Date.now());
+      acAddMessage('🤖 AnyClip', 'ai', '📌 Message pinned! ' + (result.reason || ''), Date.now());
+    } else {
+      acAddMessage('🤖 AnyClip', 'ai', '📌 Pin request denied — ' + (result.reason || 'not relevant enough for a pin.'), Date.now());
     }
   } catch(e){
-    acPinMessage(lastMsg.nick, lastMsg.text, '🤖 AnyClip');
-    acAddMessage('🤖 AnyClip', 'ai', '📌 Message pinned.', Date.now());
+    acAddMessage('🤖 AnyClip', 'ai', '📌 Could not evaluate pin right now — not pinned.', Date.now());
   }
 }
 
@@ -19189,15 +19184,12 @@ async function acReportUser(e, btn){
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'x-token': token },
       body: JSON.stringify({
-        messages: [{ role: 'user', content: `Operator "${_acUser?.nick}" reported "${nick}" for this message: "${msgText}"\n\nAnalyze the reported message. Determine the appropriate action:\n- "mute" — if the message is mildly inappropriate, off-topic spam, or annoying\n- "block" — if the message contains hate speech, threats, harassment, NSFW content, doxxing, or dangerous content\n- "dismiss" — if the message is fine and the report is unfounded\n\nRespond ONLY with JSON: {"action":"mute"|"block"|"dismiss","reason":"brief explanation"}` }],
-        system: 'You are AnyClip, the AI moderator for the Anyone Protocol Operators Lounge. You are the sole authority on blocking and muting. Evaluate reports fairly and strictly. Protect the community from harmful content, but do not penalize normal conversation. Respond with JSON only.'
+        task: 'moderate_report',
+        messages: [{ role: 'user', content: `Operator "${_acUser?.nick}" reported "${nick}" for this message: "${msgText}"` }]
       })
     });
-    const d = await res.json();
-    const reply = d.content?.[0]?.text || '';
-
     try {
-      const result = JSON.parse(reply.replace(/```json|```/g, '').trim());
+      const result = await res.json();
       if(result.action === 'block'){
         acBlockUser(nick);
         acAddMessage('🤖 AnyClip', 'ai', `🚫 ${nick} has been blocked: ${result.reason || 'Violated community guidelines.'}`, Date.now());
@@ -28434,6 +28426,53 @@ body.light #geo-info-side-panel .hw-tip-section {
 /* ══ AnyClip Brain ══ */
 (function(){
   window.acBuildSystemPrompt = buildSystem;
+  function acCollectStats() {
+    const g = id => { try { return (document.getElementById(id)?.textContent||'').replace(/,/g,'').trim()||'?'; } catch(_){ return '?'; } };
+    const raw = id => { try { return document.getElementById(id)?.textContent?.trim()||'?'; } catch(_){ return '?'; } };
+    let hwActive = '?', hwOffline = '?';
+    try {
+      if (typeof hwFps !== 'undefined' && typeof allRelays !== 'undefined' && allRelays.length) {
+        const live = new Set(allRelays.map(r => (r.fp||'').toUpperCase()));
+        let a = 0; for (const fp of hwFps) if (live.has(fp)) a++;
+        hwActive = a; hwOffline = Math.max(0, hwFps.size - a);
+      }
+    } catch(_){}
+    const zoneCount = t => { try { return (typeof relayData!=='undefined') ? relayData.filter(z=>z.dominantType===t).length : '?'; } catch(_){ return '?'; } };
+    const topCountriesStr = (() => { try {
+      if(!allRelays||!allRelays.length) return '?'; const m={};
+      allRelays.forEach(r=>{ if(r.countryCode&&r.countryName) m[r.countryCode]={name:r.countryName,count:(m[r.countryCode]?.count||0)+1}; });
+      return Object.entries(m).sort((a,b)=>b[1].count-a[1].count).slice(0,7).map(([cc,v])=>`${v.name} (${cc}): ${v.count}`).join(', ');
+    } catch(_){ return '?'; }})();
+    const topISPsStr = (() => { try {
+      if(!allRelays||!allRelays.length) return '?'; const m={};
+      allRelays.forEach(r=>{ if(r.asName) m[r.asName]=(m[r.asName]||0)+1; });
+      return Object.entries(m).sort((a,b)=>b[1]-a[1]).slice(0,5).map(([i,n])=>`${i}: ${n}`).join(', ');
+    } catch(_){ return '?'; }})();
+    const hwLocStr = (() => { try {
+      if(!allRelays||!hwFps||!hwFps.size) return 'loading'; const hwl=allRelays.filter(r=>hwFps.has(r.fp.toUpperCase())); const m={};
+      hwl.forEach(r=>{ const cc=r.countryCode||'??'; m[cc]=(m[cc]||0)+1; });
+      return Object.entries(m).sort((a,b)=>b[1]-a[1]).slice(0,5).map(([cc,n])=>`${cc}:${n}`).join(', ');
+    } catch(_){ return '?'; }})();
+    const fmtDelta = d => (typeof d!=='undefined'&&d!==null) ? ((d>=0?'+':'')+d+' relays') : 'loading';
+    const trend = (typeof _growthWeekDelta!=='undefined'&&_growthWeekDelta!==null)
+      ? (_growthWeekDelta>100?'strongly growing':_growthWeekDelta>0?'growing':_growthWeekDelta<-100?'declining':'stable') : 'unknown';
+    return {
+      totalRelays:g('sR'), exitRelays:g('sX'), guardRelays:g('sG'), middleRelays:g('sMD'),
+      exitFpsCount:(typeof exitFps!=='undefined')?exitFps.size:'?',
+      guardFpsCount:(typeof guardFps!=='undefined')?guardFps.size:'?',
+      hwActiveInConsensus:hwActive, hwFpsCount:(typeof hwFps!=='undefined')?hwFps.size:'?', hwOfflineRegistered:hwOffline,
+      totalBW:raw('sBW'), zones:g('sZ'), topZone:g('sM'), avgPerZone:g('sA'),
+      countries:raw('rs-countries'), isps:raw('rs-isps'),
+      healthScore:g('btn-health-score'), healthGrade:raw('health-grade'),
+      exitZones:zoneCount('exit'), guardZones:zoneCount('guard'), middleZones:zoneCount('middle'), hwZones:zoneCount('hardware'),
+      topCountriesStr, topISPsStr, hwLocStr,
+      selectedCountry:(typeof selectedCountryName!=='undefined'&&selectedCountryName)?`Currently viewing: ${selectedCountryName} (${selectedCountryIso})`:'Viewing: global (all countries)',
+      growthWeek:fmtDelta(typeof _growthWeekDelta!=='undefined'?_growthWeekDelta:null),
+      growthMonth:fmtDelta(typeof _growthMonthDelta!=='undefined'?_growthMonthDelta:null),
+      growthDays:(typeof _growthDays!=='undefined')?_growthDays:0, growthTrend:trend
+    };
+  }
+
   function buildSystem(){
     const g = id => { try { return (document.getElementById(id)?.textContent||'').replace(/,/g,'').trim()||'?'; } catch(_){ return '?'; } };
     const totalRelays   = g('sR');
@@ -29541,15 +29580,12 @@ IMPORTANT: The user's preferred language is ${activeLang.name}. You MUST respond
       /* v322: capture res for status-aware error handling. The catch below
        * now sees res.status and the parsed body, not just a string. */
       const chatBody = {
-        model:'claude-haiku-4-5-20251001',
-        /* v474: raised from 300 -> 600. At 300 (~225 words) longer answers were
-         * cut off mid-sentence; 600 (~450 words) gives complete replies with
-         * headroom while staying tight on cost. The system prompt still asks for
-         * concise answers, so typical replies stay short — this only lifts the
-         * ceiling. The v472 faster typewriter renders a 600-token reply in a few
-         * seconds, so the extra length doesn't drag. */
-        max_tokens:600,
-        system: buildSystem() + buildMemoryContext() + langInstruction,
+        task: 'assistant',
+        stats: acCollectStats(),
+        memory: buildMemoryContext(),
+        lang: (activeLang && activeLang.code) ? activeLang.code : null,
+        /* v474: 600-token ceiling kept; server clamps to the same value. */
+        max_tokens: 600,
         messages: history
       };
       let res, data, attempt = 0;
