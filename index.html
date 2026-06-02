@@ -23701,8 +23701,12 @@ function selectRelay(fp, lat, lon, fromMap){
          * left side if there's no room on the right. Falls back to the dot-anchored
          * placement below when no country is selected. */
         const _cb = document.getElementById('country-banner');
-        if (_cb && _cb.classList.contains('visible')) {
-          const br = _cb.getBoundingClientRect();
+        const _cbr = _cb ? _cb.getBoundingClientRect() : null;
+        /* require a real rendered rect, not just the class: refresh() hides the
+         * banner via inline display:none but leaves .visible on it, which would
+         * otherwise dock the card onto a zero-size banner at (0,0). */
+        if (_cb && _cb.classList.contains('visible') && _cbr && _cbr.width > 1 && _cbr.height > 1) {
+          const br = _cbr;
           let bl = br.right + gap;
           if (bl + cw > window.innerWidth - pad) bl = br.left - cw - gap; // flip to banner's left
           let bt = br.top;                                                // align tops
