@@ -31541,8 +31541,8 @@ body.aclive-on #anyclip-avatar{display:none !important;}
 #aclive .acl-say{position:absolute;left:50%;bottom:118px;transform:translate(-50%,6px);max-width:230px;min-width:60px;padding:8px 12px;border-radius:12px;background:linear-gradient(165deg,rgba(6,22,32,.96),rgba(3,12,20,.94));border:1px solid rgba(45,212,191,.4);border-top:2px solid #2dd4bf;color:#dffaf5;font-family:'Rajdhani','Outfit',sans-serif;font-size:13px;font-weight:600;line-height:1.35;text-align:center;white-space:normal;box-shadow:0 10px 30px rgba(0,0,0,.5),0 0 18px -6px rgba(45,212,191,.6);opacity:0;pointer-events:none;transition:opacity .25s,transform .25s;letter-spacing:.2px;}
 #aclive .acl-say.show{opacity:1;transform:translate(-50%,0);}
 #aclive .acl-say:after{content:"";position:absolute;left:50%;bottom:-7px;transform:translateX(-50%);border:7px solid transparent;border-top-color:rgba(6,22,32,.96);border-bottom:0;}
-#aclive.dir-left .acl-say{transform:translate(-50%,0) scaleX(-1);}
-#aclive.dir-left .acl-say:not(.show){transform:translate(-50%,6px) scaleX(-1);}
+/* speech bubble is a sibling of the character (not inside the scaleX-flipped
+   .acl-char), so it must NEVER be mirrored — base .acl-say transforms apply as-is. */
 #aclive .acl-chat{position:absolute;right:-6px;top:2px;width:24px;height:24px;border-radius:50%;background:rgba(6,22,32,.92);border:1px solid rgba(45,212,191,.5);color:#2dd4bf;font-size:12px;display:flex;align-items:center;justify-content:center;cursor:pointer;pointer-events:auto;box-shadow:0 0 10px rgba(45,212,191,.4);transition:transform .15s,background .15s;}
 #aclive.dir-left .acl-chat{transform:scaleX(-1);}
 #aclive .acl-chat:hover{background:rgba(45,212,191,.18);transform:scale(1.12);}
