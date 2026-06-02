@@ -34,7 +34,7 @@
  * on next page navigation, which deletes the old cache (the activate
  * handler filters keys !== CACHE) and re-precaches STATIC against the
  * current worker. Bump per release. */
-const WORKER_VERSION = 'v534';
+const WORKER_VERSION = 'v488';
 
 /* v410: shared cross-worker KV schema. Inlined at build time from kv-schema.js
  * (single source of truth). Exposes _kvSchema.validate(obj, schema, opts) and
@@ -184,33 +184,10 @@ async function _bmHandle(request, env, ctx) {
         const up = 'https://api.maptiler.com/tiles/v3/' + m[1] + '/' + m[2] + '/' + m[3] + '.pbf?key=' + env.MAPTILER_KEY;
         const r = await fetch(up, { cf: { cacheTtl: 86400, cacheEverything: true } });
         if (r.status === 200) {
-          /* v494: buffer the upstream body before building the response. The old
-           * `new Response(r.body, …)` streamed MapTiler's body straight through, and
-           * the `cache.put(cacheKey, resp.clone())` at the end of _bmHandle tees that
-           * single upstream stream into two consumers — the exact stall-and-hang the
-           * v394 fix removed for maplibre-worker.js (a stalled upstream leaves the
-           * client response pending forever). HD tiles are small, so a full
-           * ArrayBuffer read is cheap and cannot stall mid-transfer.
-           *
-           * Content-Encoding: forward it ONLY when still present on the upstream
-           * response. The runtime auto-decompresses gzip/brotli and strips the
-           * header before this Worker sees it (so arrayBuffer() is identity and we
-           * send no header); it passes zstd through UNTOUCHED — header present,
-           * bytes still compressed — so we must forward the header for the browser
-           * to decode. Verified live (2026-05): MapTiler currently serves zstd, so
-           * dropping the header here would serve raw zstd as identity protobuf and
-           * break tile parsing. The old code's `|| ''` emitted an empty (malformed)
-           * Content-Encoding when absent; omitting the header is the correct form. */
-          const buf = await r.arrayBuffer();
-          const hdrs = { 'Content-Type': 'application/x-protobuf', 'Cache-Control': 'public, max-age=86400, immutable' };
-          const enc = r.headers.get('content-encoding');
-          if (enc) hdrs['Content-Encoding'] = enc;
-          resp = new Response(buf, { headers: hdrs });
+          resp = new Response(r.body, { headers: { 'Content-Type': 'application/x-protobuf', 'Content-Encoding': r.headers.get('content-encoding') || '', 'Cache-Control': 'public, max-age=86400, immutable' } });
         } else {
-          /* non-200 (204 empty tile, 400 out of bounds, etc) — pass through as empty
-           * so MapLibre moves on. (The old `r.status === 200 ? 200 : 204` ternary was
-           * dead: this branch is the else of `r.status === 200`, so it is always 204.) */
-          resp = new Response('', { status: 204 });
+          // 204 (empty tile), 400 (out of bounds), etc — pass through as empty so MapLibre moves on
+          resp = new Response('', { status: r.status === 200 ? 200 : 204 });
         }
       }
     } else if (path === '/basemap/hd/tiles.json') {
