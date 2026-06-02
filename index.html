@@ -5235,12 +5235,31 @@ body.light .rs-btn.active{background:rgba(0,180,255,.1);border-color:rgba(0,180,
  * through. */
 #relay-detail.rd-floating{
   position:fixed; top:64px; left:16px; z-index:1400;
-  width:288px; max-width:calc(100vw - 24px); max-height:calc(100vh - 96px); overflow-y:auto;
-  margin-top:0; background:rgba(4,16,24,.72);
-  border:1px solid rgba(0,245,255,.32); border-radius:12px;
-  box-shadow:0 12px 40px rgba(0,0,0,.45), 0 0 0 1px rgba(0,245,255,.05);
-  backdrop-filter:blur(10px); -webkit-backdrop-filter:blur(10px);
+  width:300px; max-width:calc(100vw - 24px); max-height:calc(100vh - 96px); overflow-y:auto;
+  margin-top:0; padding:13px 15px 14px;
+  background:linear-gradient(165deg, rgba(6,22,32,.93), rgba(3,12,20,.9));
+  border:1px solid rgba(0,245,255,.26);
+  border-top:2px solid var(--rd-accent,#00f5ff);
+  border-radius:14px;
+  box-shadow:0 16px 48px rgba(0,0,0,.55), 0 0 0 1px rgba(0,245,255,.04), 0 0 26px -8px var(--rd-accent,rgba(0,245,255,.5));
+  backdrop-filter:blur(16px) saturate(1.15); -webkit-backdrop-filter:blur(16px) saturate(1.15);
+  animation:rdFloatIn .26s cubic-bezier(.2,.8,.2,1);
 }
+@keyframes rdFloatIn{from{opacity:0;transform:translateY(8px) scale(.985);}to{opacity:1;transform:translateY(0) scale(1);}}
+/* v534: polish scoped to the floating card so the inline (Relay Browser) variant is untouched */
+#relay-detail.rd-floating .rd-title{font-size:12px;letter-spacing:.4px;margin-bottom:10px;padding-bottom:9px;border-bottom:1px solid rgba(0,245,255,.1);}
+#relay-detail.rd-floating .rd-title>span:first-child{font-weight:700;color:#eaf8ff;}
+#relay-detail.rd-floating .rd-row{padding:5px 0;border-bottom:1px solid rgba(255,255,255,.045);transition:background .12s;}
+#relay-detail.rd-floating .rd-row:hover{background:rgba(0,245,255,.035);border-radius:5px;margin:0 -6px;padding-left:6px;padding-right:6px;}
+#relay-detail.rd-floating .rd-key{font-size:9px;letter-spacing:.7px;text-transform:uppercase;color:rgba(138,188,196,.5);}
+#relay-detail.rd-floating .rd-val{font-size:11px;max-width:165px;}
+#relay-detail.rd-floating .rd-flags{margin-top:10px;gap:4px;}
+#relay-detail.rd-floating .rd-flag{padding:2px 7px;border-radius:5px;letter-spacing:.4px;text-transform:uppercase;font-size:8.5px;}
+#relay-detail.rd-floating .rd-actions{margin-top:12px;gap:7px;}
+#relay-detail.rd-floating .rd-btn{padding:8px 10px;border-radius:9px;}
+.rd-status-pill{display:inline-flex;align-items:center;gap:4px;font-size:9px;font-weight:700;letter-spacing:.5px;border-radius:999px;padding:2px 8px;line-height:1.3;flex-shrink:0;}
+.rd-status-pill.live{color:var(--an-green,#34d399);background:rgba(52,211,153,.12);border:1px solid rgba(52,211,153,.35);}
+.rd-status-pill.off{color:#ff7a5c;background:rgba(255,107,53,.12);border:1px solid rgba(255,107,53,.35);}
 body.light #relay-detail.rd-floating{ background:rgba(255,255,255,.82); border-color:rgba(0,100,160,.3); }
 .rd-title{font-family:'Orbitron',sans-serif;font-size:11px;color:var(--cyan);margin-bottom:8px;display:flex;align-items:center;justify-content:space-between;}
 .rd-row{display:flex;justify-content:space-between;align-items:center;padding:3px 0;border-bottom:1px solid rgba(0,245,255,.05);}
@@ -23677,6 +23696,24 @@ function selectRelay(fp, lat, lon, fromMap){
         const cw = _card.offsetWidth || 300;
         const ch = _card.offsetHeight || 280;
         const pad = 12, gap = 16;
+        /* v534: when a country card is open, dock the relay card to its RIGHT
+         * edge, top-aligned, so the pair reads as one unit. Flip to the banner's
+         * left side if there's no room on the right. Falls back to the dot-anchored
+         * placement below when no country is selected. */
+        const _cb = document.getElementById('country-banner');
+        if (_cb && _cb.classList.contains('visible')) {
+          const br = _cb.getBoundingClientRect();
+          let bl = br.right + gap;
+          if (bl + cw > window.innerWidth - pad) bl = br.left - cw - gap; // flip to banner's left
+          let bt = br.top;                                                // align tops
+          if (bl < pad) bl = pad;
+          if (bl + cw > window.innerWidth - pad) bl = window.innerWidth - cw - pad;
+          if (bt + ch > window.innerHeight - pad) bt = Math.max(pad, window.innerHeight - ch - pad);
+          if (bt < pad) bt = pad;
+          _card.style.left = Math.round(bl) + 'px';
+          _card.style.top  = Math.round(bt) + 'px';
+          return;
+        }
         /* v461: keep the floating card clear of any fixed UI panels it could
          * overlap — the #country-banner (fixed across the top when a country is
          * selected) and #relay-panel (the Relay Browser, fixed on the left when
@@ -23850,8 +23887,8 @@ async function fetchRelayDetail(fp){
   ].filter(Boolean).join('');
 
   const dot = running
-    ? '<span style="color:var(--an-green,#34d399);font-size:10px">&#9679; ' + _i18t('rdLive','LIVE') + '</span>'
-    : '<span style="color:#ff6b35;font-size:10px">&#9675; ' + _i18t('rdOffline','OFFLINE') + '</span>';
+    ? '<span class="rd-status-pill live">&#9679; ' + _i18t('rdLive','LIVE') + '</span>'
+    : '<span class="rd-status-pill off">&#9675; ' + _i18t('rdOffline','OFFLINE') + '</span>';
 
   card.innerHTML = `
     <div class="rd-title" style="display:flex;align-items:center;gap:6px;">
@@ -23880,6 +23917,7 @@ async function fetchRelayDetail(fp){
       </button>
     </div>
   `;
+  try { card.style.setProperty('--rd-accent', typeColor); } catch(_){}
 
   if(localRelay){
     if(obsBw > 0){
