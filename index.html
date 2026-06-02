@@ -39,50 +39,12 @@
 <!-- staked/APY/health pays no TCP+TLS handshake cost. -->
 <link rel="preconnect" href="https://anyclip-proxy.anyonerelaysmap.workers.dev" crossorigin>
 <link rel="dns-prefetch" href="https://anyclip-proxy.anyonerelaysmap.workers.dev">
-<script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.8.5/d3.min.js" integrity="sha384-su5kReKyYlIFrI62mbQRKXHzFobMa7BHp1cK6julLPbnYcCW9NIZKJiTODjLPeDh" crossorigin="anonymous"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.8.5/d3.min.js" defer integrity="sha384-su5kReKyYlIFrI62mbQRKXHzFobMa7BHp1cK6julLPbnYcCW9NIZKJiTODjLPeDh" crossorigin="anonymous"></script>
 
 
 <script>
 // ═══ LOADING / ERROR / EMPTY STATES ═══
-function showError(elId, msg, retryFn){
-  var el = document.getElementById(elId);
-  if(!el) return;
-  var retry = retryFn ? '<button class="state-retry" onclick="' + retryFn + '">Retry</button>' : '';
-  el.innerHTML = '<span class="state-error"><span class="state-error-icon"></span>' + (msg || 'Failed to load') + retry + '</span>';
-}
-// Contextual error messages per data type
-var _errorMessages = {
-  health: {
-    title: 'Health data unavailable',
-    detail: 'The network health service is temporarily unreachable. Health scores, geographic spread, and ISP diversity data will refresh automatically when the service recovers.',
-    hint: 'This usually resolves within a few minutes.'
-  },
-  relays: {
-    title: 'Relay data unavailable',
-    detail: 'Could not fetch the latest relay information. The relay count, bandwidth, and zone data may be stale.',
-    hint: 'The map will update automatically when data is available.'
-  },
-  staking: {
-    title: 'Staking data unavailable',
-    detail: 'Could not reach the staking service. Total staked amount and APY will appear when the service responds.',
-    hint: 'Your staking position is not affected.'
-  },
-  chat: {
-    title: 'Chat connection lost',
-    detail: 'The Operators Lounge is temporarily unreachable. Your messages are safe — they are archived on IPFS.',
-    hint: 'Reconnecting automatically...'
-  },
-  network: {
-    title: 'Network error',
-    detail: 'Your connection to the Anyone Protocol services was interrupted.',
-    hint: 'Check your internet connection and try again.'
-  }
-};
-function showEmpty(elId, msg){
-  var el = document.getElementById(elId);
-  if(!el) return;
-  el.innerHTML = '<span class="state-empty">' + (msg || 'No data available') + '</span>';
-}
+/* v515: removed dead showError(), _errorMessages, and showEmpty() — defined but never called (an early error-UI scaffold that was never wired up). Verified zero references across index.html and all worker files; the state-error/state-empty/state-retry CSS they used is now also unused (separate cleanup). */
 // ═══ SAFE FETCH WITH ERROR STATES ═══
 // Show empty state if chat has no messages after loading
 function acCheckEmptyState(){
@@ -861,13 +823,7 @@ function switchToOperatorMode(){
   applyAppMode('operator');
 }
 
-function switchToExploreMode(){
-  applyAppMode('explore');
-}
-
-function toggleAppMode(){
-  applyAppMode(_appMode === 'explore' ? 'operator' : 'explore');
-}
+/* v518: removed dead wrappers switchToExploreMode() and toggleAppMode() — defined but never called (no JS refs, no DOM/onclick refs, not in worker files). The live app-mode feature uses applyAppMode() directly; switchToOperatorMode() (powers the "Enter Operator Mode" button) is kept. */
 
 function updateExploreCard(){
   // Pull live stats from sidebar into explore card
@@ -1554,6 +1510,13 @@ document.addEventListener('keydown', function(e){
   // ═══ ESCAPE — close the topmost open panel ═══
   if(e.key === 'Escape'){
     e.preventDefault();
+    /* v510: the keyboard-shortcuts panel (#kb-shortcuts-tip, z-index 200000)
+     * is the topmost, most transient overlay and literally says "Press ? or
+     * Esc to close" — but Esc never actually removed it (it wasn't in this
+     * list, and the panel's own handler only wired ? and click). Close it
+     * first so the label isn't lying. */
+    var kbTip = document.getElementById('kb-shortcuts-tip');
+    if(kbTip){ kbTip.remove(); return; }
     // v459: a floating relay detail card (from a map-dot click) is the most transient
     // overlay — close it first if open.
     var rd = document.getElementById('relay-detail');
@@ -1594,23 +1557,18 @@ document.addEventListener('keydown', function(e){
     return;
   }
 
-  // ═══ S — Toggle Signals ═══
-  if(e.key === 's' || e.key === 'S'){
-    if(typeof toggleSignals === 'function') toggleSignals();
-    return;
-  }
-  // ═══ H — Toggle Health panel ═══
-  if(e.key === 'h' || e.key === 'H'){
-    var hp = document.getElementById('health-panel');
-    if(hp) hp.classList.toggle('visible');
-    return;
-  }
-  // ═══ R — Toggle Relay Browser ═══
-  if(e.key === 'r' || e.key === 'R'){
-    var rp = document.getElementById('relay-panel');
-    if(rp) rp.style.display = rp.style.display === 'block' ? 'none' : 'block';
-    return;
-  }
+  /* v489: S, H, and R were REMOVED from this handler. They were ALSO handled by a
+   * second keydown listener (defined later, ~line 13432) that uses the proper
+   * toggleSignals() / openHealthPanel() / openRelayBrowser() functions plus
+   * preventDefault + showShortcutHint(). Having both listeners fire on the same
+   * key caused each toggle to run TWICE per press and cancel itself out:
+   *   - S pressed → toggleSignals() called twice → signals flicker on then off
+   *     (net: no visible change). Confirmed via instrumentation: 2 calls/press.
+   *   - R pressed → this handler flipped relay-panel display none→block, then the
+   *     other handler's openRelayBrowser() flipped it block→none (net: no change).
+   *   - H worked by luck (both did additive class ops) but was still double-handled.
+   * Fix: this older handler no longer claims S/H/R; the newer handler owns them.
+   * C, M, ?, and +/- remain here because no other listener handles them. */
   // ═══ C — Toggle AnyChat ═══
   if(e.key === 'c' || e.key === 'C'){
     if(typeof toggleAnyChat === 'function') toggleAnyChat();
@@ -1629,6 +1587,11 @@ document.addEventListener('keydown', function(e){
     tip.id = 'kb-shortcuts-tip';
     tip.style.cssText = 'position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);z-index:200000;background:rgba(2,11,18,.95);border:1.5px solid rgba(94,234,212,.3);border-radius:16px;padding:24px 32px;color:var(--an-text,#e4e4e9);font-family:system-ui;font-size:14px;min-width:280px;backdrop-filter:blur(12px);';
     tip.innerHTML = '<div style="color:var(--an-teal-text,#5eead4);font-weight:700;font-size:16px;margin-bottom:12px">⌨ Keyboard Shortcuts</div>'
+      /* v509: the description labels had no explicit color and inherited
+       * --an-text, which resolves to a dim value in this theme — the text was
+       * almost unreadable (dark gray on dark blue). Force the labels to white
+       * via a scoped style so they read clearly; keys stay teal. */
+      + '<style>#kb-shortcuts-tip span{color:#ffffff;font-weight:600;}</style>'
       + '<div style="display:grid;grid-template-columns:60px 1fr;gap:6px 12px;">'
       + '<kbd style="color:var(--an-teal,#2dd4bf);font-family:monospace">Esc</kbd><span>Close panel</span>'
       + '<kbd style="color:var(--an-teal,#2dd4bf);font-family:monospace">+ / -</kbd><span>Zoom in / out</span>'
@@ -1639,14 +1602,14 @@ document.addEventListener('keydown', function(e){
       + '<kbd style="color:var(--an-teal,#2dd4bf);font-family:monospace">M</kbd><span>Light/Dark mode</span>'
       + '<kbd style="color:var(--an-teal,#2dd4bf);font-family:monospace">?</kbd><span>This help</span>'
       + '</div>'
-      + '<div style="color:var(--an-text-dim,#94a3b8);font-size:11px;margin-top:12px;text-align:center">Press ? or Esc to close</div>';
+      + '<div style="color:#cbd5e1;font-size:11px;margin-top:12px;text-align:center">Press ? or Esc to close</div>';
     tip.onclick = function(){ tip.remove(); };
     document.body.appendChild(tip);
     return;
   }
 });
 </script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/topojson/3.0.2/topojson.min.js" integrity="sha384-9dCJK6nh7skY14HrcvlLYlFga9/MehJjL9ONWRflmiXNRuf8p2jiF4Y5PR881PTq" crossorigin="anonymous"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/topojson/3.0.2/topojson.min.js" defer integrity="sha384-9dCJK6nh7skY14HrcvlLYlFga9/MehJjL9ONWRflmiXNRuf8p2jiF4Y5PR881PTq" crossorigin="anonymous"></script>
 <link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Orbitron:wght@400;700;900&family=Rajdhani:wght@400;600;700&display=swap" rel="stylesheet">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -2506,9 +2469,14 @@ html,body{width:100%;height:100%;background:var(--bg);font-family:'Rajdhani',san
 /* ── HEADER — slim, logo + clock + action buttons only ── */
 #hdr{
   position:fixed;top:0;left:0;right:0;z-index:400;height:52px;
-  background:rgba(1,7,14,0.88);border-bottom:1px solid var(--border);
+  /* v492: translucent floating-glass chrome — opacity dropped from 0.88 to 0.30
+   * so the map clearly shows through; bumped blur 16->24px and added
+   * saturate(125%) to keep text readable against the busier visible map. Border
+   * softened to rgba(0,245,255,0.08) so the panel feels like it floats rather
+   * than being bolted to a hard cyan rule. */
+  background:rgba(1,7,14,0.30);border-bottom:1px solid rgba(0,245,255,0.08);
   display:flex;align-items:center;justify-content:space-between;padding:0 16px 0 6px;
-  backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);
+  backdrop-filter:blur(24px) saturate(125%);-webkit-backdrop-filter:blur(24px) saturate(125%);
 }
 .logo{display:flex;align-items:center;gap:10px;}
 .logo-box{
@@ -2693,10 +2661,11 @@ body.light .sl{color:#7ecfdf;}
 ══════════════════════════════════════════ */
 #sidebar{
   position:fixed;top:52px;left:0;bottom:0;width:210px;z-index:300;
-  background:rgba(1,6,16,0.85);border-right:1px solid var(--border);
+  /* v492: translucent floating-glass chrome — see #hdr above for rationale. */
+  background:rgba(1,6,16,0.30);border-right:1px solid rgba(0,245,255,0.06);
   display:flex;flex-direction:column;overflow:hidden;
   transition:width .25s cubic-bezier(.4,0,.2,1);
-  backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);
+  backdrop-filter:blur(24px) saturate(125%);-webkit-backdrop-filter:blur(24px) saturate(125%);
 }
 #sidebar.collapsed{ width:0 !important;padding:0 !important;border-right:none !important;background:transparent !important;backdrop-filter:none !important;-webkit-backdrop-filter:none !important;overflow:visible !important; }
 #sidebar.collapsed .sb-content{ opacity:0; pointer-events:none; }
@@ -2885,9 +2854,10 @@ body.light .clabel{ fill:rgba(180,220,235,0.9); stroke:rgba(5,15,30,0.8); }
 #ticker{
   position:fixed;bottom:0;left:210px;right:0;height:28px;z-index:300;
   transition:left .25s cubic-bezier(.4,0,.2,1);
-  background:rgba(1,5,11,.85);border-top:1px solid var(--border);
+  /* v492: translucent floating-glass chrome — see #hdr above for rationale. */
+  background:rgba(1,5,11,0.30);border-top:1px solid rgba(0,245,255,0.06);
   display:flex;align-items:center;overflow:hidden;
-  backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);
+  backdrop-filter:blur(24px) saturate(125%);-webkit-backdrop-filter:blur(24px) saturate(125%);
 }
 /* v229: was width:48px (fixed) — too narrow for translations like "EN DIRECT" or "ЗАГРУЗКА". */
 /* Use min-width + horizontal padding so the badge auto-expands to fit any language. */
@@ -3031,34 +3001,7 @@ body.light #status{color:#7ecfdf;}
 /* ══════════════════════════════════════════
    COMMAND PALETTE — Ctrl+K / Cmd+K
 ══════════════════════════════════════════ */
-#cmd-overlay{position:fixed;inset:0;z-index:950;background:rgba(0,0,0,.55);display:none;align-items:flex-start;justify-content:center;padding-top:min(18vh,140px);backdrop-filter:blur(3px);-webkit-backdrop-filter:blur(3px);}
-#cmd-overlay.open{display:flex;}
-#cmd-box{width:min(520px,92vw);background:rgba(2,14,24,.96);border:1px solid rgba(0,245,255,.25);border-radius:12px;overflow:hidden;box-shadow:0 20px 60px rgba(0,0,0,.6),0 0 40px rgba(0,245,255,.06);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);animation:cmdIn .15s cubic-bezier(.4,0,.2,1);}
-@keyframes cmdIn{from{opacity:0;transform:translateY(-8px) scale(.98);}to{opacity:1;transform:none;}}
-#cmd-input{width:100%;padding:14px 18px;border:none;background:transparent;color:#fff;font-family:'Share Tech Mono',monospace;font-size:14px;letter-spacing:.5px;outline:none;border-bottom:1px solid rgba(0,245,255,.1);}
-#cmd-input::placeholder{color:rgba(138,188,196,.35);}
-#cmd-results{max-height:340px;overflow-y:auto;scrollbar-width:thin;scrollbar-color:rgba(0,245,255,.15) transparent;}
-.cmd-group{padding:6px 0;}
-.cmd-group-title{font-family:'Orbitron',sans-serif;font-size:8px;font-weight:700;color:rgba(0,245,255,.5);letter-spacing:2px;padding:6px 18px 4px;text-transform:uppercase;}
-.cmd-item{display:flex;align-items:center;gap:10px;padding:8px 18px;cursor:pointer;transition:background .1s;}
-.cmd-item:hover,.cmd-item.active{background:rgba(0,245,255,.08);}
-.cmd-item-icon{width:22px;height:22px;border-radius:6px;display:flex;align-items:center;justify-content:center;font-size:12px;flex-shrink:0;}
-.cmd-item-icon.relay{background:rgba(0,245,255,.1);color:#00f5ff;}
-.cmd-item-icon.country{background:rgba(255,107,53,.1);color:#ff6b35;}
-.cmd-item-icon.isp{background:rgba(167,139,250,.1);color:var(--an-purple,#a78bfa);}
-.cmd-item-icon.panel{background:rgba(0,255,136,.1);color:var(--an-green,#00ff88);}
-.cmd-item-text{flex:1;min-width:0;}
-.cmd-item-name{font-size:12px;color:#e0f4ff;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
-.cmd-item-sub{font-size:10px;color:rgba(138,188,196,.65);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
-.cmd-item-badge{font-size:9px;color:rgba(0,245,255,.5);font-family:'Share Tech Mono',monospace;flex-shrink:0;}
-.cmd-hint{padding:8px 18px;font-size:10px;color:rgba(138,188,196,.55);font-family:'Share Tech Mono',monospace;border-top:1px solid rgba(0,245,255,.06);display:flex;justify-content:space-between;}
-.cmd-hint kbd{background:rgba(0,245,255,.08);border:1px solid rgba(0,245,255,.15);border-radius:3px;padding:1px 5px;font-size:9px;color:rgba(0,245,255,.5);}
-body.light #cmd-box{background:rgba(245,248,252,.96);border-color:rgba(0,100,160,.2);box-shadow:0 20px 60px rgba(0,0,0,.15);}
-body.light #cmd-input{color:#0a2540;}
-body.light #cmd-input::placeholder{color:rgba(10,37,64,.3);}
-body.light .cmd-item:hover,body.light .cmd-item.active{background:rgba(0,100,160,.06);}
-body.light .cmd-item-name{color:#0a2540;}
-body.light .cmd-group-title{color:rgba(0,100,160,.5);}
+/* v512: legacy #cmd-overlay palette CSS removed — superseded by #cmdk-* (the active Cmd/Ctrl+K palette). The unrelated AnyChat .ac-cmd-item popup is a different feature. */
 
 /* ══════════════════════════════════════════
    ANYCHAT — OP MESSENGER STYLE
@@ -6468,36 +6411,7 @@ body.explore-mode #anyclip-bubble{display:none !important}
   font-size:12px;color:var(--an-red,#f87171);display:none;
 }
 .ac-no-wallet a{color:var(--an-teal-text,#5eead4);text-decoration:underline}
-/* ═══ LOADING / ERROR / EMPTY STATES ═══ */
-.state-loading{
-  display:inline-flex;align-items:center;gap:6px;
-  color:var(--an-teal-text,#5eead4);font-size:11px;opacity:.7;
-}
-.state-loading::before{
-  content:'';width:12px;height:12px;border:2px solid rgba(94,234,212,.2);
-  border-top-color:var(--an-teal-text,#5eead4);border-radius:50%;
-  animation:stSpin .8s linear infinite;
-}
-@keyframes stSpin{to{transform:rotate(360deg)}}
-.state-error{
-  display:flex;align-items:center;gap:6px;
-  color:var(--an-red,#f87171);font-size:11px;
-}
-.state-error-icon::before{content:'⚠';margin-right:2px}
-.state-retry{
-  background:rgba(248,113,113,.1);border:1px solid rgba(248,113,113,.3);
-  color:var(--an-red,#f87171);font-size:10px;padding:4px 10px;border-radius:12px;
-  cursor:pointer;margin-left:6px;min-height:28px;
-}
-.state-retry:hover{background:rgba(248,113,113,.2)}
-/* Contextual error expanded view */
-.state-error b{color:var(--an-red,#f87171);font-size:11px}
-.state-error .state-retry{margin-left:0;margin-top:4px}
-
-.state-empty{
-  color:var(--an-text-dim,#94a3b8);font-size:12px;
-  text-align:center;padding:16px;opacity:.7;
-}
+/* v515-v517 cleanup: the entire "LOADING / ERROR / EMPTY STATES" CSS+JS scaffold was dead (never wired up) and has been removed — showError()/showEmpty()/_errorMessages (v515), .state-error/.state-retry/.state-empty (v516), and .state-loading/stSpin (v517). No live code referenced any of it. */
 /* ═══ ACCESSIBILITY: 44pt Minimum Touch Targets (Apple HIG) ═══ */
 button, [role="button"], .sb-btn, .sb-stat[onclick] {
   min-height: 44px;
@@ -8069,17 +7983,7 @@ input:focus-visible, textarea:focus-visible, select:focus-visible{
   <div class="ttbar"><div class="ttfill" id="ttfill"></div></div>
 </div>
 
-<!-- COMMAND PALETTE -->
-<div id="cmd-overlay" onclick="if(event.target===this)closeCmdPalette()">
-  <div id="cmd-box">
-    <input id="cmd-input" type="text" placeholder="Search relays, countries, ISPs, or jump to panel..." autocomplete="off" spellcheck="false">
-    <div id="cmd-results"></div>
-    <div class="cmd-hint">
-      <span><kbd>↑↓</kbd> navigate <kbd>↵</kbd> select <kbd>esc</kbd> close</span>
-      <span><kbd>Ctrl</kbd>+<kbd>K</kbd></span>
-    </div>
-  </div>
-</div>
+<!-- v512: legacy #cmd-overlay command palette removed (superseded by #cmdk-* palette). -->
 
 
 <script>
@@ -8267,17 +8171,81 @@ async function fetchData(){
 }
 
 let _cachedExitRelaysData = null;
+
+/* v491: country-centroid lookup ([lat, lng]) for APPROXIMATE-LOCATION relays.
+ * The producer (anyclip-proxy v55b) preserves the country for relays it quarantined
+ * as country-centroid hits (precise position unknown but country known) and nulls
+ * their coordinates. parseFingerprintMap plots those at the centroid below, tagged
+ * approx:true for distinct "approximate" rendering. The four HIGH-tier quarantine
+ * countries (US, LI, AD, SM) are the ones currently in play; the rest are included
+ * so this keeps working if the producer's centroid blocklist grows. US uses a
+ * lower-48 display point (the literal geographic centroid sits in Kansas, which is
+ * fine, but lower-48 reads better as a single national marker). */
+const COUNTRY_CENTROIDS = {
+  US: [39.50, -98.35], LI: [47.17, 9.53], AD: [42.55, 1.58], SM: [43.93, 12.46],
+  LU: [49.77, 6.05], DE: [51.13, 9.39], GB: [54.00, -2.00], RO: [46.07, 25.02],
+  FR: [46.60, 2.30], ES: [40.20, -3.70], IT: [42.80, 12.50], NL: [52.20, 5.50],
+  CH: [46.80, 8.20], AT: [47.60, 14.10], BE: [50.60, 4.60], SE: [62.00, 15.00],
+  NO: [62.00, 10.00], FI: [64.00, 26.00], DK: [56.00, 10.00], PL: [52.10, 19.40],
+  CZ: [49.80, 15.50], CA: [56.00, -96.00], AU: [-25.00, 134.00], JP: [36.00, 138.00],
+  RU: [61.50, 105.00], CN: [35.00, 103.00], IN: [22.00, 79.00], BR: [-10.00, -52.00],
+  SG: [1.35, 103.82], HK: [22.30, 114.20], IE: [53.00, -8.00], PT: [39.50, -8.00],
+  UA: [49.00, 32.00], TR: [39.00, 35.00], ZA: [-29.00, 24.00], MX: [23.00, -102.00],
+};
+
 /* ── Parse fingerprint-map into grouped hex zones ── */
 function parseFingerprintMap(raw){
   const hexMap = new Map();
   let _quarantinedCount = 0;
+  let _approxCount = 0;
   Object.entries(raw).forEach(([fingerprint, relay])=>{
-    const hex = relay.hexId;
-    if(!hex){ if(relay && relay.geoQuality && relay.geoQuality.indexOf('quarantined_') === 0) _quarantinedCount++; return; }
+    let hex = relay.hexId;
+    let approxGeo = null;   // v491: [lat,lng] country-centroid for approx-located relays
+    /* v490: relays with a valid lat/lon but an EMPTY hexId were being silently
+     * dropped here, so they never appeared as dots on the map. This hit ~64 relays
+     * concentrated in micro-states (San Marino, Liechtenstein, Andorra) where the
+     * upstream geo pipeline produced coordinates but failed to assign a hex-grid
+     * cell. A real user reported missing relays ("many exits don't exist on the
+     * map") — this was the cause.
+     *
+     * Fix: when hexId is missing but coordinates are valid, synthesize a fallback
+     * zone key from the rounded coordinates. Rounding to 2 decimals (~1.1 km)
+     * groups relays at the same location into one zone, exactly like a real hex
+     * cell would. Only relays with NO usable coordinates fall through to the
+     * approx/quarantine handling below. */
+    if(!hex){
+      const c = relay.coordinates;
+      const hasCoords = c && c.length >= 2 && c[0] != null && c[1] != null
+        && !(c[0] === 0 && c[1] === 0) && !isNaN(c[0]) && !isNaN(c[1]);
+      if(hasCoords){
+        hex = 'synth_' + (+c[0]).toFixed(2) + '_' + (+c[1]).toFixed(2);
+      } else if(relay && relay.approxLocation && relay.countryCode && COUNTRY_CENTROIDS[relay.countryCode]){
+        /* v491: APPROXIMATE-LOCATION relays. The producer (anyclip-proxy v55b) now
+         * preserves the country for relays it quarantined as country-centroid hits
+         * (precise position unknown, but country known). Rather than drop them, we
+         * plot them at the country's centroid, clustered one zone per country, and
+         * tag the zone approx:true so rendering can mark them visually distinct
+         * (hollow dashed ring) and honest about the imprecision. enrichFromCache
+         * upstream may later upgrade them to a precise location on a future refresh.
+         * Coordinates are nulled by the producer, so we use our centroid table. */
+        approxGeo = COUNTRY_CENTROIDS[relay.countryCode];
+        hex = 'approx_' + relay.countryCode;
+        _approxCount++;
+      } else {
+        if(relay && relay.geoQuality && relay.geoQuality.indexOf('quarantined_') === 0) _quarantinedCount++;
+        return;
+      }
+    }
+    /* v491: resolve the coordinate this relay contributes — real coords when present,
+     * else the synthesized country centroid for approx relays. Used for both the
+     * zone's display geo and the per-relay relayCoords entry. */
+    const relCoord = (relay.coordinates && relay.coordinates.length>=2 && relay.coordinates[0]!=null)
+      ? [relay.coordinates[0], relay.coordinates[1]]
+      : approxGeo;
     if(!hexMap.has(hex)){
       hexMap.set(hex, {
         index: hex,
-        geo: [relay.coordinates[0], relay.coordinates[1]],
+        geo: relCoord ? [relCoord[0], relCoord[1]] : [0,0],   /* v491: null-safe (approx relays have null coords) */
         relayCount: 0,
         fingerprints: [],
         relayCoords: [],   /* v362: per-relay [lat,lng] parallel to fingerprints — enables zoom-aware decluster subdivision (render-only). Harmless if unused. */
@@ -8288,16 +8256,18 @@ function parseFingerprintMap(raw){
         isps: {},
         topIsps: [],
         bwMibs: 0,
+        approx: !!approxGeo,   /* v491: flags a country-centroid (approximate) zone for distinct rendering */
       });
     }
     const zone = hexMap.get(hex);
     zone.relayCount++;
     zone.fingerprints.push(fingerprint);
-    if(relay.coordinates && relay.coordinates.length>=2) zone.relayCoords.push([relay.coordinates[0], relay.coordinates[1]]);  /* v362: parallel to fingerprints */
+    if(relCoord) zone.relayCoords.push([relCoord[0], relCoord[1]]);  /* v362/v491: real coord, or country centroid for approx relays */
     const isp = relay.asName || 'Unknown';
     zone.isps[isp] = (zone.isps[isp]||0)+1;
   });
   window._quarantinedCount = _quarantinedCount;
+  window._approxCount = _approxCount;   /* v491: relays plotted at approximate country-centroid */
   try { sessionStorage.setItem('_qCount', String(_quarantinedCount)); } catch(_){}
   hexMap.forEach(zone=>{
     zone.topIsps = Object.entries(zone.isps)
@@ -8346,7 +8316,15 @@ async function fetchFlagIndex(){
     const fpCount = Object.keys(data.index || {}).length;
     if(fpCount === 0 && _fpRetryCount < 6){
       _fpRetryCount++;
-      const delay = Math.min(15000 * _fpRetryCount, 60000);
+      /* v468: HW diamonds (and exit/guard flags) only render once fp-index
+       * returns a non-empty index. When the producer's registry cache has a gap,
+       * fp-index comes back empty and we retry. The old backoff was 15s * n, so
+       * the FIRST retry alone made users stare at a flagless map for 15 seconds.
+       * Make the first retry fast (~2.5s) since a cold cache usually warms within
+       * a second or two, then escalate (7.5s, 15s, 30s, ...) for persistent
+       * emptiness so we don't hammer the endpoint. Caps at 60s. */
+      const schedule = [2500, 7500, 15000, 30000, 45000, 60000];
+      const delay = schedule[Math.min(_fpRetryCount - 1, schedule.length - 1)];
       if(_ll) _ll.style.display = 'none';
       setTimeout(fetchFlagIndex, delay);
       return;
@@ -8567,181 +8545,14 @@ function animateNum(el, target, opts = {}){
 
 /* ══════════════════════════════════════════
    COMMAND PALETTE — Ctrl+K / Cmd+K
+   v512: legacy #cmd-overlay palette JS REMOVED (was a duplicate of the
+   #cmdk-* palette and caused the double-open bug; v511 disabled its
+   hotkey, v512 deletes it). Removed: _cmdActive, CMD_PANELS,
+   openCmdPalette/closeCmdPalette/renderCmdResults/executeCmdResult/
+   highlightCmdItem, its keydown handler, and the #cmd-input listener.
+   The active palette is #cmdk-* (search "cmdk"); AnyChat acPickCmd is
+   a separate, unrelated feature and is untouched.
 ══════════════════════════════════════════ */
-let _cmdActive = -1;
-const CMD_PANELS = [
-  {name:'Relay Browser', key:'relay_browser', icon:'panel', action:()=>{document.getElementById('relay-panel').style.display!=='none'?null:document.querySelector('.sb-btn[onclick*="toggleRelayPanel"]')?.click()||toggleRelayPanel?.()}},
-  {name:'Signals', key:'signals', icon:'panel', action:()=>toggleSignals()},
-  {name:'Network Health', key:'health', icon:'panel', action:()=>openHealthPanel()},
-  {name:'Domains', key:'domains', icon:'panel', action:()=>toggleDomainPanel()},
-  {name:'Alerts', key:'alerts', icon:'panel', action:()=>{const p=document.getElementById('alerts-panel');if(p)p.style.display=p.style.display==='none'?'block':'none';}},
-  {name:'Feedback', key:'feedback', icon:'panel', action:()=>{FB.open=!FB.open;const p=document.getElementById('feedback-panel');if(p)p.classList.toggle('open',FB.open);}},
-  {name:'Light / Dark Mode', key:'theme', icon:'panel', action:()=>toggleTheme()},
-  {name:'Refresh Data', key:'refresh', icon:'panel', action:()=>refresh()},
-];
-
-function openCmdPalette(){
-  const overlay = document.getElementById('cmd-overlay');
-  overlay.classList.add('open');
-  const input = document.getElementById('cmd-input');
-  input.value = '';
-  input.focus();
-  _cmdActive = -1;
-  renderCmdResults('');
-}
-function closeCmdPalette(){
-  document.getElementById('cmd-overlay').classList.remove('open');
-}
-function renderCmdResults(query){
-  const el = document.getElementById('cmd-results');
-  const q = query.toLowerCase().trim();
-  let html = '';
-  const results = [];
-
-  const panelMatches = CMD_PANELS.filter(p => !q || p.name.toLowerCase().includes(q) || p.key.includes(q));
-  if(panelMatches.length > 0){
-    html += '<div class="cmd-group"><div class="cmd-group-title">Panels</div>';
-    panelMatches.forEach((p,i) => {
-      results.push({type:'panel', data:p});
-      html += `<div class="cmd-item" data-idx="${results.length-1}"><div class="cmd-item-icon panel">⬡</div><div class="cmd-item-text"><div class="cmd-item-name">${p.name}</div></div></div>`;
-    });
-    html += '</div>';
-  }
-
-  if(q.length >= 1 && allRelays && allRelays.length){
-    const countryMap = {};
-    allRelays.forEach(r => {
-      const cc = r.countryCode || '';
-      const cn = r.countryName || '';
-      if(!cc) return;
-      if(!countryMap[cc]) countryMap[cc] = {code:cc, name:cn, count:0};
-      countryMap[cc].count++;
-    });
-    const countries = Object.values(countryMap).filter(c =>
-      c.name.toLowerCase().includes(q) || c.code.toLowerCase().includes(q)
-    ).sort((a,b) => b.count - a.count).slice(0, 6);
-    if(countries.length){
-      html += '<div class="cmd-group"><div class="cmd-group-title">Countries</div>';
-      countries.forEach(c => {
-        const flag = isoToFlag(c.code);
-        results.push({type:'country', data:c});
-        html += `<div class="cmd-item" data-idx="${results.length-1}"><div class="cmd-item-icon country">${flag}</div><div class="cmd-item-text"><div class="cmd-item-name">${c.name}</div><div class="cmd-item-sub">${c.code}</div></div><div class="cmd-item-badge">${c.count.toLocaleString()} relays</div></div>`;
-      });
-      html += '</div>';
-    }
-  }
-
-  if(q.length >= 2 && allRelays && allRelays.length){
-    const ispMap = {};
-    allRelays.forEach(r => {
-      const isp = r.asName || '';
-      if(!isp) return;
-      if(!ispMap[isp]) ispMap[isp] = {name:isp, count:0};
-      ispMap[isp].count++;
-    });
-    const isps = Object.values(ispMap).filter(i => i.name.toLowerCase().includes(q)).sort((a,b) => b.count - a.count).slice(0, 5);
-    if(isps.length){
-      html += '<div class="cmd-group"><div class="cmd-group-title">ISPs</div>';
-      isps.forEach(i => {
-        results.push({type:'isp', data:i});
-        html += `<div class="cmd-item" data-idx="${results.length-1}"><div class="cmd-item-icon isp">◈</div><div class="cmd-item-text"><div class="cmd-item-name">${i.name}</div></div><div class="cmd-item-badge">${i.count.toLocaleString()} relays</div></div>`;
-      });
-      html += '</div>';
-    }
-  }
-
-  if(q.length >= 2 && allRelays && allRelays.length){
-    const relayMatches = allRelays.filter(r => {
-      const nick = (r.nickname || '').toLowerCase();
-      const fp = (r.fp || '').toLowerCase();
-      const city = (r.cityName || '').toLowerCase();
-      return nick.includes(q) || fp.startsWith(q) || city.includes(q);
-    }).slice(0, 8);
-    if(relayMatches.length){
-      html += '<div class="cmd-group"><div class="cmd-group-title">Relays</div>';
-      relayMatches.forEach(r => {
-        const flag = isoToFlag(r.countryCode || '');
-        const nick = r.nickname || r.fp.slice(0,12) + '…';
-        const loc = [r.cityName, r.countryName].filter(Boolean).join(', ') || r.countryCode || '';
-        results.push({type:'relay', data:r});
-        html += `<div class="cmd-item" data-idx="${results.length-1}"><div class="cmd-item-icon relay">${flag||'⬡'}</div><div class="cmd-item-text"><div class="cmd-item-name">${_aoEscHtml(nick)}</div><div class="cmd-item-sub">${_aoEscHtml(loc)} · ${_aoEscHtml(r.asName||'')}</div></div><div class="cmd-item-badge">${r.fp.slice(0,8)}…</div></div>`;
-      });
-      html += '</div>';
-    }
-  }
-
-  if(!html) html = '<div style="padding:20px 18px;font-size:11px;color:rgba(138,188,196,.55);text-align:center;">No results found</div>';
-  el.innerHTML = html;
-  window._cmdResults = results;
-
-  el.querySelectorAll('.cmd-item').forEach(item => {
-    item.addEventListener('click', () => {
-      const idx = parseInt(item.dataset.idx);
-      executeCmdResult(idx);
-    });
-  });
-}
-
-function executeCmdResult(idx){
-  const results = window._cmdResults || [];
-  const r = results[idx];
-  if(!r) return;
-  closeCmdPalette();
-  if(r.type === 'panel') r.data.action();
-  else if(r.type === 'country'){
-    if(typeof filterRelays === 'function') filterRelays('all');
-    const searchEl = document.getElementById('relay-search');
-    if(searchEl){ searchEl.value = r.data.name; searchEl.dispatchEvent(new Event('input')); }
-  }
-  else if(r.type === 'isp'){
-    const searchEl = document.getElementById('relay-search');
-    if(searchEl){ searchEl.value = r.data.name; searchEl.dispatchEvent(new Event('input')); }
-  }
-  else if(r.type === 'relay'){
-    selectRelay(r.data.fp, r.data.lat, r.data.lon);
-  }
-}
-
-document.addEventListener('keydown', e => {
-  if((e.ctrlKey || e.metaKey) && e.key === 'k'){
-    e.preventDefault();
-    const overlay = document.getElementById('cmd-overlay');
-    if(overlay.classList.contains('open')) closeCmdPalette();
-    else openCmdPalette();
-    return;
-  }
-  const overlay = document.getElementById('cmd-overlay');
-  if(!overlay.classList.contains('open')) return;
-
-  if(e.key === 'Escape'){ closeCmdPalette(); e.preventDefault(); return; }
-
-  const results = window._cmdResults || [];
-  if(e.key === 'ArrowDown'){
-    e.preventDefault();
-    _cmdActive = Math.min(_cmdActive + 1, results.length - 1);
-    highlightCmdItem();
-  } else if(e.key === 'ArrowUp'){
-    e.preventDefault();
-    _cmdActive = Math.max(_cmdActive - 1, 0);
-    highlightCmdItem();
-  } else if(e.key === 'Enter' && _cmdActive >= 0){
-    e.preventDefault();
-    executeCmdResult(_cmdActive);
-  }
-});
-
-function highlightCmdItem(){
-  document.querySelectorAll('#cmd-results .cmd-item').forEach((el,i) => {
-    const idx = parseInt(el.dataset.idx);
-    el.classList.toggle('active', idx === _cmdActive);
-    if(idx === _cmdActive) el.scrollIntoView({block:'nearest'});
-  });
-}
-
-document.getElementById('cmd-input')?.addEventListener('input', function(){
-  _cmdActive = -1;
-  renderCmdResults(this.value);
-});
 
 function applyStats(data, isLive=true){
   const total=data.reduce((s,d)=>s+d.relayCount,0);
@@ -10841,6 +10652,7 @@ function initMapLibre(zones){
           properties:{ tier: tier, hw: isHw,
             fp: fp,   // v375: per-relay fingerprint → enables click-to-detail
             lat: c[0], lng: c[1],
+            approx: z.approx ? 1 : 0,   /* v491: 1 = plotted at country centroid (approximate location) → distinct hollow-ring styling */
             city: z.cityName || z.countryName || z.countryCode || '', asn: z.asName || '' } });
       });
     });
@@ -10876,7 +10688,7 @@ function initMapLibre(zones){
        * the left, all of Europe + Africa centered, and Asia/Australia/Japan toward the right
        * edge. Captured live from the map state the operator set, then baked in here and as
        * the reset-button target. */
-      center:[3.383,16.02], zoom:2, maxZoom:15, attributionControl:{compact:true} });
+      center:[3.383,16.02], zoom:2, maxZoom:15, renderWorldCopies:false, attributionControl:{compact:true} });
     window.__anyoneMapLibre = map;
     map.addControl(new maplibregl.NavigationControl({showCompass:false}), 'bottom-right');
 
@@ -11115,12 +10927,26 @@ function initMapLibre(zones){
           'circle-stroke-opacity':0.95
         }});
       // crisp core dot — v390: bigger + fully opaque sooner so relays read clearly
-      map.addLayer({ id:'relay-points', type:'circle', source:'relays', filter:['==',['get','hw'],0],
+      map.addLayer({ id:'relay-points', type:'circle', source:'relays', filter:['all',['==',['get','hw'],0],['!=',['get','approx'],1]],
         paint:{ 'circle-color':['match',['get','tier'],'exit','#fca5a5','guard','#ddd6fe','middle','#99f6e4','#ccc'],
           'circle-radius':['interpolate',['linear'],['zoom'],1,1.6,4,2.4,8,3.6,14,5.5],
           'circle-stroke-width':['interpolate',['linear'],['zoom'],1,0,6,0.5,12,1],
           'circle-stroke-color':'rgba(255,255,255,0.5)',
           'circle-opacity':['interpolate',['linear'],['zoom'],1,0.85,4,0.95,8,1,14,1] }});
+
+      /* v491: APPROXIMATE-LOCATION relays (country-centroid pins). These are relays the
+       * producer quarantined as country-centroid hits — country known, precise position
+       * unknown — which we plot at the country centroid. Rendered as a distinct HOLLOW
+       * ring (transparent fill, colored stroke, slightly larger) so they read clearly as
+       * "somewhere in this country, exact spot unknown" rather than masquerading as precise
+       * pings. Tier color is preserved so exit/guard/middle is still legible. Placed right
+       * after relay-points so it sits at the same depth as the solid dots. */
+      map.addLayer({ id:'relay-points-approx', type:'circle', source:'relays', filter:['all',['==',['get','hw'],0],['==',['get','approx'],1]],
+        paint:{ 'circle-color':'rgba(0,0,0,0)',
+          'circle-radius':['interpolate',['linear'],['zoom'],1,2.4,4,3.4,8,5,14,7.5],
+          'circle-stroke-width':['interpolate',['linear'],['zoom'],1,1,6,1.4,12,2],
+          'circle-stroke-color':['match',['get','tier'],'exit','#fca5a5','guard','#ddd6fe','middle','#99f6e4','#ccc'],
+          'circle-stroke-opacity':['interpolate',['linear'],['zoom'],1,0.65,8,0.8,14,0.9] }});
 
       /* v389: PULSING radar pings. We animate the GLOW layer's radius + opacity with a
        * single global sine wave (a "breathing" pulse) so the network looks alive. This
@@ -11195,26 +11021,43 @@ function initMapLibre(zones){
           try {
             if (typeof ranked === 'undefined' || !ranked || ranked.length < 4) return {type:'FeatureCollection',features:feats};
             const total = ranked.reduce((s,d)=>s+(d.relayCount||0),0) || 1;
-            const hubs = ranked.slice(0,18).filter(z=>z && z.geo);    // top hubs
-            const reach = ranked.slice(18,55).filter(z=>z && z.geo);  // secondary
+            /* v467: port of the old D3 map's buildConnectionWeb() — the full
+             * "Connection Web" the user wants back (the yellow strong-link bundle
+             * incl. the long USA<->South Africa arc). Structure matches the D3
+             * version exactly: top 20 zones are hubs (all pairs connected, skipping
+             * near-neighbours), plus 12 of those hubs each link to 3 random "reach"
+             * zones (ranked 20-60). Each arc carries a `strength` (combined relay
+             * share) which the existing signal-arcs-flow paint expression colors —
+             * colors are UNCHANGED from the current MapLibre styling per request.
+             * Cosmetic visualization of relay geography, not per-circuit traffic. */
+            const withGeo = ranked.filter(z=>z && z.geo);
+            const hubs  = withGeo.slice(0, 20);   // top 20 hub zones (was D3's slice(0,20))
+            const reach = withGeo.slice(20, 60);  // reach zones (D3's slice(20,60))
             const seen = new Set();
             const addArc = (z1,z2,strength) => {
+              if(!z1||!z2||!z1.geo||!z2.geo) return;
               const key = z1.geo.join(',')+'|'+z2.geo.join(',');
-              if (seen.has(key)) return; seen.add(key);
+              const keyR = z2.geo.join(',')+'|'+z1.geo.join(',');
+              if (seen.has(key) || seen.has(keyR)) return; seen.add(key);
               const a=[z1.geo[1],z1.geo[0]], b=[z2.geo[1],z2.geo[0]];
               const dx=a[0]-b[0], dy=a[1]-b[1];
-              if (Math.sqrt(dx*dx+dy*dy) < 4) return; // skip very short links
+              if (Math.sqrt(dx*dx+dy*dy) < 1.5) return; // skip near-neighbours (D3 used geoDist<0.15)
               feats.push({ type:'Feature',
                 properties:{ strength: strength },
                 geometry:{ type:'LineString', coordinates: arcCoords(a,b) } });
             };
-            // hub-to-hub (sparse — every 3rd pair, "medium" density ~40 arcs)
-            for(let i=0;i<hubs.length;i++){ for(let j=i+3;j<hubs.length;j+=3){
-              addArc(hubs[i],hubs[j], ((hubs[i].relayCount+hubs[j].relayCount)/total)); } }
-            // a few hub-to-reach spokes from the top 6 hubs
-            hubs.slice(0,6).forEach((hub,hi)=>{
-              const peer = reach[(hi*5)%Math.max(1,reach.length)];
-              if (peer) addArc(hub,peer, ((hub.relayCount+(peer.relayCount||0))/total/2));
+            // 1) hub-to-hub: ALL pairs (D3 parity — this is the dense backbone incl. long arcs)
+            for(let i=0;i<hubs.length;i++){
+              for(let j=i+1;j<hubs.length;j++){
+                addArc(hubs[i],hubs[j], ((hubs[i].relayCount||0)+(hubs[j].relayCount||0))/total);
+              }
+            }
+            // 2) hub-to-reach spokes: first 12 hubs each to 3 random reach zones (D3 parity)
+            hubs.slice(0,12).forEach(hub=>{
+              const picks = [...reach].sort(()=>Math.random()-0.5).slice(0,3);
+              picks.forEach(peer=>{
+                addArc(hub, peer, ((hub.relayCount||0)+(peer.relayCount||0))/total/2);
+              });
             });
           } catch(_){}
           return {type:'FeatureCollection',features:feats};
@@ -11224,17 +11067,27 @@ function initMapLibre(zones){
         const ensureLayers = () => {
           if (map.getSource('signal-arcs')) return;
           map.addSource('signal-arcs', { type:'geojson', data:{type:'FeatureCollection',features:[]} });
+          /* v469: insert the arc layers BENEATH the relay dots. Previously the arc
+           * web (esp. the dense purple high-strength links) painted ON TOP of the
+           * Exit/Guard/Middle dots, washing out their colors whenever Signals was
+           * on — the relay colors looked "wrong". MapLibre paints in insert order,
+           * so we add the arcs with beforeId='relay-glow' (the lowest relay-dot
+           * layer) so dots always render crisp in front and the arcs sweep behind
+           * them. Colors/opacity of the arcs are unchanged. HW diamonds already sat
+           * above everything and are unaffected. */
+          const _arcBefore = map.getLayer('relay-glow') ? 'relay-glow'
+                           : (map.getLayer('relay-points') ? 'relay-points' : undefined);
           // soft glow underlay
           map.addLayer({ id:'signal-arcs-glow', type:'line', source:'signal-arcs',
             layout:{ 'line-cap':'round', 'line-join':'round' },
             paint:{ 'line-color':'#5eead4', 'line-width':['interpolate',['linear'],['zoom'],1,1.2,5,2.2,10,3.5],
-              'line-opacity':0.12, 'line-blur':3 }});
+              'line-opacity':0.12, 'line-blur':3 }}, _arcBefore);
           // bright flowing dashed overlay
           map.addLayer({ id:'signal-arcs-flow', type:'line', source:'signal-arcs',
             layout:{ 'line-cap':'round', 'line-join':'round' },
             paint:{ 'line-color':['interpolate',['linear'],['get','strength'],0,'#2dd4bf',0.02,'#5eead4',0.08,'#a78bfa'],
               'line-width':['interpolate',['linear'],['zoom'],1,0.8,5,1.4,10,2.2],
-              'line-opacity':0.85, 'line-dasharray':[0,4,3] }});
+              'line-opacity':0.85, 'line-dasharray':[0,4,3] }}, _arcBefore);
           /* v455: moving-packet layers — reproduces the old map's "circuits firing
            * between relays". A point source holds the in-flight packet dots; each is a
            * glowing circle whose coordinate we advance along an arc each frame. Two
@@ -11329,10 +11182,17 @@ function initMapLibre(zones){
         };
         const pickW = pool => { const total=pool.reduce((s,z)=>s+(z.relayCount||1),0); let r=Math.random()*total;
           for(const z of pool){ r-=(z.relayCount||1); if(r<=0) return z; } return pool[0]; };
+        /* v463: uniform (un-weighted) pick — gives small/remote zones the same odds
+         * as big hubs, so packets regularly fire to/from under-represented regions. */
+        const pickU = pool => pool.length ? pool[Math.floor(Math.random()*pool.length)] : null;
+        /* Spread pick: ~45% of the time pick uniformly (global reach), otherwise
+         * weight by relay count (keeps hubs busiest). Purely cosmetic spread — does
+         * not claim real routing. */
+        const pickS = pool => (Math.random() < 0.45 ? pickU(pool) : pickW(pool)) || pickW(pool);
         const fireCircuit = () => {
           if(!started) return;
           if(!pools || poolAge < Date.now()-30000){ pools = buildPools(); poolAge = Date.now(); }
-          const g=pickW(pools.guard), m=pickW(pools.middle), e=pickW(pools.exit);
+          const g=pickS(pools.guard), m=pickS(pools.middle), e=pickS(pools.exit);
           if(!g||!m||!e) return;
           fireHop(g, m, '#a78bfa');                                   // guard → middle (purple)
           setTimeout(()=>{ if(started) fireHop(m, e, '#ff8a3d'); }, 380 + Math.random()*260);  // middle → exit (orange)
@@ -11352,6 +11212,7 @@ function initMapLibre(zones){
           start(){
             try {
               ensureLayers();
+              /* v465: arc lines restored (global-spread) AND moving packet bubbles. */
               map.getSource('signal-arcs').setData(buildArcGeo());
               map.setLayoutProperty('signal-arcs-glow','visibility','visible');
               map.setLayoutProperty('signal-arcs-flow','visibility','visible');
@@ -11574,18 +11435,34 @@ function initMapLibre(zones){
                * fix every country got null/string id and hover-highlight targeted them all
                * as one feature — borders/fills rendered but hover never narrowed to one. */
               fc.features.forEach(f => { if(f.id != null) f.id = +f.id; });
-              /* v479: drop antimeridian-crossing features. In the world-atlas-110m
-               * TopoJSON, three countries span the full 360° of longitude (Fiji=242,
-               * Russia=643, Antarctica=010) because their polygons aren't normalized
-               * across the date line. MapLibre renders the outline of these polygons by
-               * drawing straight horizontal segments between the wrap-around points,
-               * producing ~5 phantom horizontal teal lines across the entire map.
-               * Filtering them out kills those artifacts cleanly. Tradeoff: hover-
-               * highlight on Fiji/Russia/Antarctica is disabled — Russia is the only one
-               * that meaningfully matters (it has relays), but the relay dots still
-               * render normally and Russia is still searchable via the Relay Browser. */
-              const ANTIMERIDIAN_IDS = new Set([242, 643, 10]);
-              fc.features = fc.features.filter(f => !ANTIMERIDIAN_IDS.has(+f.id));
+              /* v530: antimeridian NORMALIZATION (supersedes the v479 blanket drop).
+               * Background: in the world-atlas-110m TopoJSON three countries span the
+               * full 360° of longitude because their polygons aren't normalized across
+               * the date line — Fiji(242), Russia(643), Antarctica(10). MapLibre drew a
+               * straight segment between the wrap-around points, producing phantom
+               * horizontal teal lines across the whole map, so v479 dropped all three
+               * from the hover layer. But that also killed hover-highlight on Russia —
+               * the one country here with meaningful relays (its main landmass IS one of
+               * the wrapping polygons, so it can't be salvaged by dropping sub-polygons).
+               * Fix: instead of dropping Russia & Fiji, UNWRAP each ring's longitudes so
+               * consecutive vertices never jump >180°. That removes the cross-map segment
+               * (hence the phantom lines) while preserving the entire landmass, so Russia
+               * highlights like any other country. Verified live against the deployed map:
+               * the unwrapped Russia fill renders cleanly with zero phantom lines (the
+               * small Chukotka tip past +180° just sits at the east edge, which is the
+               * correct behavior under renderWorldCopies:false). Antarctica(10) stays
+               * dropped: it's a polar ring encircling the South Pole, so a longitude
+               * unwrap can't normalize it (needs pole-closure), and it has no relays. */
+              const unwrapRing = (r) => { const o = [r[0].slice()]; for (let i = 1; i < r.length; i++) { let lon = r[i][0]; const p = o[i - 1][0]; while (lon - p > 180) lon -= 360; while (lon - p < -180) lon += 360; o.push([lon, r[i][1]]); } return o; };
+              const UNWRAP_IDS = new Set([242, 643]); // Fiji, Russia — normalize & keep
+              const DROP_IDS = new Set([10]);          // Antarctica — polar, keep dropping
+              fc.features = fc.features.filter(f => !DROP_IDS.has(+f.id));
+              fc.features.forEach(f => {
+                if (!UNWRAP_IDS.has(+f.id) || !f.geometry) return;
+                const g = f.geometry;
+                if (g.type === 'Polygon') g.coordinates = g.coordinates.map(unwrapRing);
+                else if (g.type === 'MultiPolygon') g.coordinates = g.coordinates.map(poly => poly.map(unwrapRing));
+              });
               map.addSource('countries-hover', { type:'geojson', data:fc });
             }
             if(!map.getLayer('countries-hover-fill')){
@@ -11731,7 +11608,7 @@ function initMapLibre(zones){
 
       // v387: no clusters anymore — every relay is an individual ping. Click a relay
       // or hw-diamond -> open the REAL detail panel (same as D3 map).
-      ['relay-points','hw-diamonds'].forEach(lyr => {
+      ['relay-points','relay-points-approx','hw-diamonds'].forEach(lyr => {
         map.on('click', lyr, (ev)=>{ const p=ev.features[0].properties;
           const fp = p.fp, coords = ev.features[0].geometry.coordinates;
           if (fp && typeof selectRelay === 'function') {
@@ -11745,7 +11622,7 @@ function initMapLibre(zones){
           new maplibregl.Popup({offset:8}).setLngLat(coords)
             .setHTML('<b>'+(p.city||'Unknown')+'</b><br>'+p.tier+(p.hw==1?' · hardware':'')+(p.asn?'<br>'+p.asn:'')).addTo(map); });
       });
-      ['relay-points','hw-diamonds'].forEach(l=>{ map.on('mouseenter',l,()=>map.getCanvas().style.cursor='pointer'); map.on('mouseleave',l,()=>map.getCanvas().style.cursor=''); });
+      ['relay-points','relay-points-approx','hw-diamonds'].forEach(l=>{ map.on('mouseenter',l,()=>map.getCanvas().style.cursor='pointer'); map.on('mouseleave',l,()=>map.getCanvas().style.cursor=''); });
 
       /* v376: tier filtering. Mirrors the Relay Browser filter (Exit/Guard/Middle/HW)
        * onto the map: matching relays stay bright, non-matching dim to near-invisible.
@@ -12722,6 +12599,33 @@ function toggleSidebar(){
   const rp = document.getElementById('relay-panel');
   if(rp) rp.style.left = collapsed ? '0px' : '210px';
   localStorage.setItem('sb_collapsed', collapsed ? '1' : '0');
+
+  /* v513: keep the MapLibre canvas in sync with #map-wrap WHILE it animates.
+   * #map-wrap has `transition: left .25s`, but this function never resized the
+   * map — so the GL canvas lagged the moving container and the newly-exposed
+   * strip flashed the dark GL clear-color until some unrelated event happened to
+   * trigger a resize (hence the intermittent "map goes dark for a second").
+   * Drive map.resize() every frame across the transition (+ a small buffer) so
+   * the canvas tracks the container continuously, then one final settle resize.
+   * Guarded so rapid re-toggles cancel the prior loop instead of stacking. */
+  try {
+    const map = window.__anyoneMapLibre;
+    if(map && typeof map.resize === 'function'){
+      if(window.__sbResizeRAF) cancelAnimationFrame(window.__sbResizeRAF);
+      const start = performance.now();
+      const DURATION = 300; // 250ms transition + ~50ms buffer
+      const pump = () => {
+        map.resize();
+        if(performance.now() - start < DURATION){
+          window.__sbResizeRAF = requestAnimationFrame(pump);
+        } else {
+          window.__sbResizeRAF = null;
+          map.resize(); // final settle
+        }
+      };
+      window.__sbResizeRAF = requestAnimationFrame(pump);
+    }
+  } catch(_){ /* never let a resize hiccup break the toggle */ }
 }
 
 /* ══════════════════════════════════════════
@@ -15260,8 +15164,12 @@ async function acAskAnyClip(query){
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'x-token': token },
       body: JSON.stringify({
-        messages: [...acClipGetHistory(), { role: 'user', content: query }],
-        system: context
+        task: 'assistant',
+        lounge: true,
+        stats: acCollectStats(),
+        memory: (typeof operatorContext === 'string' ? operatorContext : '')
+              + (typeof relayContext   === 'string' ? relayContext   : ''),
+        messages: [...acClipGetHistory(), { role: 'user', content: query }]
       })
     });
     acHideTyping();
@@ -18778,28 +18686,19 @@ async function acRequestPin(nick){
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'x-token': token },
       body: JSON.stringify({
-        messages: [{ role: 'user', content: `Operator "${nick}" wants to pin this message: "${lastMsg.text}"\n\nShould this be pinned? A good pin is: useful info, network announcements, tips, milestones, warnings, or community updates. Bad pins: random chatter, jokes, greetings, single words, spam.\n\nRespond ONLY with JSON: {"pin":true,"reason":"brief reason"} or {"pin":false,"reason":"brief reason"}` }],
-        system: 'You are AnyClip, the AI moderator. Evaluate pin requests strictly. Only approve pins that are useful for all operators. Respond with JSON only.'
+        task: 'moderate_pin',
+        messages: [{ role: 'user', content: `Operator "${nick}" wants to pin this message: "${lastMsg.text}"` }]
       })
     });
-    const d = await res.json();
-    const reply = d.content?.[0]?.text || '';
-
-    try {
-      const result = JSON.parse(reply.replace(/```json|```/g, '').trim());
-      if(result.pin){
-        acPinMessage(lastMsg.nick, lastMsg.text, '🤖 AnyClip');
-        acAddMessage('🤖 AnyClip', 'ai', '📌 Message pinned! ' + (result.reason || ''), Date.now());
-      } else {
-        acAddMessage('🤖 AnyClip', 'ai', '📌 Pin request denied — ' + (result.reason || 'not relevant enough for a pin.'), Date.now());
-      }
-    } catch {
+    const result = await res.json();
+    if(result.approve){
       acPinMessage(lastMsg.nick, lastMsg.text, '🤖 AnyClip');
-      acAddMessage('🤖 AnyClip', 'ai', '📌 Message pinned!', Date.now());
+      acAddMessage('🤖 AnyClip', 'ai', '📌 Message pinned! ' + (result.reason || ''), Date.now());
+    } else {
+      acAddMessage('🤖 AnyClip', 'ai', '📌 Pin request denied — ' + (result.reason || 'not relevant enough for a pin.'), Date.now());
     }
   } catch(e){
-    acPinMessage(lastMsg.nick, lastMsg.text, '🤖 AnyClip');
-    acAddMessage('🤖 AnyClip', 'ai', '📌 Message pinned.', Date.now());
+    acAddMessage('🤖 AnyClip', 'ai', '📌 Could not evaluate pin right now — not pinned.', Date.now());
   }
 }
 
@@ -19301,15 +19200,12 @@ async function acReportUser(e, btn){
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'x-token': token },
       body: JSON.stringify({
-        messages: [{ role: 'user', content: `Operator "${_acUser?.nick}" reported "${nick}" for this message: "${msgText}"\n\nAnalyze the reported message. Determine the appropriate action:\n- "mute" — if the message is mildly inappropriate, off-topic spam, or annoying\n- "block" — if the message contains hate speech, threats, harassment, NSFW content, doxxing, or dangerous content\n- "dismiss" — if the message is fine and the report is unfounded\n\nRespond ONLY with JSON: {"action":"mute"|"block"|"dismiss","reason":"brief explanation"}` }],
-        system: 'You are AnyClip, the AI moderator for the Anyone Protocol Operators Lounge. You are the sole authority on blocking and muting. Evaluate reports fairly and strictly. Protect the community from harmful content, but do not penalize normal conversation. Respond with JSON only.'
+        task: 'moderate_report',
+        messages: [{ role: 'user', content: `Operator "${_acUser?.nick}" reported "${nick}" for this message: "${msgText}"` }]
       })
     });
-    const d = await res.json();
-    const reply = d.content?.[0]?.text || '';
-
     try {
-      const result = JSON.parse(reply.replace(/```json|```/g, '').trim());
+      const result = await res.json();
       if(result.action === 'block'){
         acBlockUser(nick);
         acAddMessage('🤖 AnyClip', 'ai', `🚫 ${nick} has been blocked: ${result.reason || 'Violated community guidelines.'}`, Date.now());
@@ -22983,6 +22879,74 @@ async function enrichAllViaAnyoneAPI(){
   return window._enrichInflight;
 }
 
+/* v522: bulk-enrich the relays that show BLANK in the map/list. Those are
+ * non-wallet relays absent from /api/all-uptimes (the wallet-scoped set), so
+ * they render with no nickname and cw 0 even though the upstream has real data
+ * for them. fetchRelayDetail already enriches them on click; this fills the
+ * AT-A-GLANCE views (map dots, relay browser list) too. Collects still-blank
+ * fingerprints and POSTs them to the proxy /api/enrich-relays endpoint in
+ * batches of 100 (its cap), merging {n, cw, fl} back into allRelays. Results
+ * are cached in window._enrichBlankCache so the 3-min buildRelayList rebuild
+ * re-applies them instantly (mirrors the v520 uptime re-apply). uptime stays 0
+ * — honestly unavailable for these relays; the UI shows "—", never a fake value.
+ * Deferred + dedup-guarded so it never blocks first paint or double-fires. */
+function enrichBlankRelaysViaProxy(){
+  if(window._enrichBlankInflight) return window._enrichBlankInflight;
+  if(document.visibilityState === 'hidden'){
+    document.addEventListener('visibilitychange', function _eb(){
+      if(document.visibilityState === 'visible'){ document.removeEventListener('visibilitychange', _eb); enrichBlankRelaysViaProxy(); }
+    });
+    return null;
+  }
+  const arr = window.allRelays || [];
+  if(!arr.length) return null;
+  window._enrichBlankCache = window._enrichBlankCache || {};
+  const cache = window._enrichBlankCache;
+  /* v524: read the cron-warmed bulk dataset in ONE request. Previously this did
+   * a per-fp POST fan-out to /api/enrich-relays, which was correct but far too
+   * slow — live profiling showed ~18 min and partial failures because the
+   * upstream throttles bulk per-fp requests. The proxy worker now pre-warms all
+   * non-wallet relay enrichment on its cron (warmNonWalletEnrichment) and serves
+   * it at GET /api/enriched-nonwallet. The client just fetches that cached map
+   * and merges — instant, no throttling, complete coverage once warmed. Degrades
+   * gracefully: reads whatever's warmed so far and fills in more as the cron
+   * progresses (each page load picks up the latest). uptime stays 0 — honestly
+   * unavailable for these relays. */
+  window._enrichBlankInflight = (async function(){
+    try {
+      let data = null;
+      try {
+        const resp = await fetch(AC_PROXY + '/api/enriched-nonwallet', { cache: 'no-store' });
+        if(resp.ok) data = await resp.json();
+      } catch(_){ /* network hiccup — leave blanks as-is, retry next load */ }
+      if(data && data.relays){
+        // fp->relay index once (O(n)); merge is O(1) per cached entry
+        const byFp = {};
+        for(const r of arr){ byFp[r.fp.toUpperCase()] = r; }
+        let merged = 0;
+        for(const fpU in data.relays){
+          const e = data.relays[fpU];
+          cache[fpU] = e;  // keep for the v522 rebuild re-apply pass
+          const match = byFp[fpU];
+          if(match && !match.nickname && (match.cw || 0) === 0){
+            if(e.n) match.nickname = e.n;
+            if(e.cw) match.cw = e.cw;
+            if(e.fl) match.flags = e.fl;
+            merged++;
+          }
+        }
+        if(merged){
+          try { if(typeof updateRelayStats === 'function') updateRelayStats(arr); } catch(_){}
+          try { if(typeof renderRelayList === 'function') renderRelayList(); } catch(_){}
+        }
+      }
+    } finally {
+      window._enrichBlankInflight = null;
+    }
+  })();
+  return window._enrichBlankInflight;
+}
+
 /* ══════════════════════════════════════════
    STAKING DATA — Total $ANYONE locked + APY
    Reads from proxy /api/total-staked (on-chain ERC20 balanceOf)
@@ -23298,13 +23262,55 @@ function buildRelayList(raw){
       asName:      r.asName       || '',
       hexId:       r.hexId        || '',
       bwMibs:      r.bw > 0 ? r.bw / 1024 : (hexBwMap[r.hexId] || prev.bwMibs || 0),
-      uptimeSecs:  r.up || prev.uptimeSecs || 0,
+      /* v519: uptime fallback chain. Was `r.up || prev.uptimeSecs || 0`, which
+       * reset uptime to 0 whenever a refresh rebuilt allRelays while prevEnrich
+       * lacked this relay (rebuild racing between enrichment cycles) AND the base
+       * raw had no r.up — causing the intermittent "uptime appears, then it's
+       * gone" flicker until the next enrichAllViaAnyoneAPI() pass (60s+) re-filled
+       * it. window._allUptimesCache holds the authoritative full-network uptimes
+       * already in memory (keyed by UPPERCASE fp); consult it before giving up to
+       * 0. Mirrors the existing detail-card fallback (~line 23688). */
+      uptimeSecs:  r.up || prev.uptimeSecs || ((window._allUptimesCache && window._allUptimesCache[fp.toUpperCase()] || {}).up) || 0,
       nickname:    r.n  || prev.nickname   || '',
       bwKBs:       prev.bwKBs     || 0,
       cw:          prev.cw        || 0,
     };
   });
   window.allRelays = allRelays;  /* v247 (Bug #1): keep window mirror in sync after reassignment */
+  /* v520: re-apply the full all-uptimes dataset after every rebuild. The 3-min
+   * refresh() -> buildRelayList() rebuilds allRelays, but enrichAllViaAnyoneAPI()
+   * (which carries the authoritative ~5,800-relay uptime set) only fires once and
+   * isn't re-run on rebuild — so relays whose uptime came ONLY from that dataset
+   * (not base r.up, not prevEnrich) reverted to 0, showing empty on the map even
+   * though their uptime is known. A live trace found ~2,500 such relays. The v519
+   * inline fallback helped but didn't fully cover them (cache-timing dependent).
+   * This explicit pass folds the cached uptimes back in after each rebuild.
+   * Additive only: sets uptime from the authoritative cache, never clears it. */
+  try {
+    const _upCache = window._allUptimesCache;
+    if(_upCache){
+      for(const r of allRelays){
+        if((r.uptimeSecs || 0) === 0){
+          const d = _upCache[r.fp.toUpperCase()];
+          if(d && d.up > 0) r.uptimeSecs = d.up;
+        }
+      }
+    }
+  } catch(_){ /* never let uptime re-apply break the rebuild */ }
+  /* v522: re-apply the blank-relay enrichment cache after rebuild, so the
+   * nickname/cw/flags we fetched from /api/enrich-relays survive the 3-min
+   * refresh (same rationale as the v520 uptime re-apply above). Additive only. */
+  try {
+    const _ebCache = window._enrichBlankCache;
+    if(_ebCache){
+      for(const r of allRelays){
+        if(!r.nickname && (r.cw || 0) === 0){
+          const e = _ebCache[r.fp.toUpperCase()];
+          if(e){ if(e.n) r.nickname = e.n; if(e.cw) r.cw = e.cw; if(e.fl) r.flags = e.fl; }
+        }
+      }
+    }
+  } catch(_){ /* never let blank-enrich re-apply break the rebuild */ }
   filteredRelays = allRelays;
   updateRelayStats(allRelays);
   /* v325 Patch 2c: 5th init-time renderRelayList missed in earlier sweeps. */
@@ -23600,6 +23606,18 @@ function closeRelayDetail(){
     var u = new URL(window.location.href);
     if(u.searchParams.has('fp')){ u.searchParams.delete('fp'); history.replaceState(null,'',u.toString()); }
   } catch(_){}
+  /* v493: also reset the maplibre map to the world-default view on close, so the
+   * user doesn't have to manually hit the reset-zoom button after exploring a
+   * relay. Matches the #zr reset button's exact target values (line ~11897) so
+   * close-detail and reset-button feel like the same action. Wrapped in try so
+   * the card always closes cleanly even if maplibre is unavailable. */
+  try {
+    var __m = window.__anyoneMapLibre;
+    if (__m && typeof __m.easeTo === 'function') {
+      try { __m.stop(); } catch(_){}
+      __m.easeTo({ center:[3.383, 16.02], zoom:2, bearing:0, pitch:0, duration:600 });
+    }
+  } catch(_){}
 }
 
 function selectRelay(fp, lat, lon, fromMap){
@@ -23620,6 +23638,17 @@ function selectRelay(fp, lat, lon, fromMap){
    * document.body while floating, and restore it into the panel for inline use. We
    * remember the original anchor so it goes back to the right spot. */
   if(fromMap){
+    /* v462: clicking a relay dot on the map shows the standalone floating card
+     * and should NOT leave the Relay Browser open behind it. Close the browser
+     * panel the same way its own X button does (hide + persist rb_open=0) so the
+     * card is the only thing showing. Note: this re-parents _card to <body> just
+     * below, so hiding #relay-panel never hides the card. The country banner is
+     * left untouched — only the browser list panel is closed. */
+    var _rbPanel = document.getElementById('relay-panel');
+    if(_rbPanel && _rbPanel.style.display !== 'none'){
+      _rbPanel.style.display = 'none';
+      try { localStorage.setItem('rb_open','0'); } catch(_){}
+    }
     if(_card){
       if(!window.__rdHome){ window.__rdHome = { parent: _card.parentElement, next: _card.nextElementSibling }; }
       if(_card.parentElement !== document.body){ document.body.appendChild(_card); }
@@ -23634,12 +23663,59 @@ function selectRelay(fp, lat, lon, fromMap){
         const cw = _card.offsetWidth || 300;
         const ch = _card.offsetHeight || 280;
         const pad = 12, gap = 16;
+        /* v461: keep the floating card clear of any fixed UI panels it could
+         * overlap — the #country-banner (fixed across the top when a country is
+         * selected) and #relay-panel (the Relay Browser, fixed on the left when
+         * open). Both have a lower z-index than the card so it renders on top of
+         * them, but visually covering them is the bug. Collect the live rects of
+         * whichever are currently visible, then position the card and, if it still
+         * intersects one, nudge it clear: push DOWN past a top panel (banner) and
+         * push RIGHT past a left panel (browser). Measuring rects keeps this
+         * correct across the desktop/narrow layouts and is a no-op when nothing is
+         * open. */
+        const obstacles = [];
+        const banner = document.getElementById('country-banner');
+        if (banner && banner.classList.contains('visible')) {
+          const r = banner.getBoundingClientRect();
+          if (r.width && r.height) obstacles.push(r);
+        }
+        const panel = document.getElementById('relay-panel');
+        if (panel && getComputedStyle(panel).display !== 'none') {
+          const r = panel.getBoundingClientRect();
+          if (r.width && r.height) obstacles.push(r);
+        }
+        const intersects = (l, t) => obstacles.find(o =>
+          l < o.right && l + cw > o.left && t < o.bottom && t + ch > o.top);
         let left = a.x + gap;                 // prefer right of the dot
         if(left + cw > window.innerWidth - pad) left = a.x - cw - gap; // flip to left if off-screen
         if(left < pad) left = pad;
         let top = a.y - 20;                    // roughly align card top near the dot
         if(top + ch > window.innerHeight - pad) top = window.innerHeight - ch - pad;
         if(top < pad) top = pad;
+        /* Resolve overlaps. Try, in order: push right of the obstacle, then push
+         * below it, then (last resort) clamp into the largest free gap. Re-check
+         * after each move since moving off one panel could touch another. */
+        for (let i = 0; i < obstacles.length + 1; i++) {
+          const hit = intersects(left, top);
+          if (!hit) break;
+          const rightOf = hit.right + gap;
+          const belowOf = hit.bottom + gap;
+          if (rightOf + cw <= window.innerWidth - pad) {
+            left = rightOf;                    // slide right of a left-side panel
+          } else if (belowOf + ch <= window.innerHeight - pad) {
+            top = belowOf; left = Math.max(pad, Math.min(left, window.innerWidth - cw - pad)); // drop below a top panel
+          } else {
+            // No clean side; dock to the right edge and top, accept minimal overlap of map only.
+            left = Math.max(pad, window.innerWidth - cw - pad);
+            top = pad;
+            break;
+          }
+        }
+        // Final viewport clamp.
+        if (left + cw > window.innerWidth - pad) left = window.innerWidth - cw - pad;
+        if (left < pad) left = pad;
+        if (top + ch > window.innerHeight - pad) top = Math.max(pad, window.innerHeight - ch - pad);
+        if (top < pad) top = pad;
         _card.style.left = Math.round(left) + 'px';
         _card.style.top  = Math.round(top)  + 'px';
       };
@@ -23771,7 +23847,7 @@ async function fetchRelayDetail(fp){
     <div class="rd-row"><span class="rd-key">${_i18t('rdLocation','Location')}</span><span class="rd-val">${flag} ${loc||'—'}</span></div>
     <div class="rd-row"><span class="rd-key">${_i18t('rdIsp','ISP')}</span><span class="rd-val rd-isp">${isp||'—'}</span></div>
     <div class="rd-row"><span class="rd-key">${_i18t('rdBandwidth','Bandwidth')}</span><span class="rd-val" style="color:#22d3ee">${bwDisplay}</span></div>
-    <div class="rd-row"><span class="rd-key">${_i18t('rdUptime','Uptime')}</span><span class="rd-val" style="color:#00f5a0">${uptimeStr}</span></div>
+    <div class="rd-row"><span class="rd-key">${_i18t('rdUptime','Uptime')}</span><span class="rd-val" style="color:#00f5a0" title="${uptimeSecs > 0 ? '' : 'Uptime not available — this relay is not registered to an operator wallet, so the network does not publish an uptime figure for it.'}">${uptimeStr}</span></div>
     <div class="rd-row"><span class="rd-key">${_i18t('rdWeight','Weight')}</span><span class="rd-val">${cwStr}</span></div>
     <div class="rd-row"><span class="rd-key">${_i18t('rdType','Type')}</span><span class="rd-val" style="color:${typeColor}">${typeName}</span></div>
     <div class="rd-row">
@@ -23893,144 +23969,7 @@ function isoToFlag(iso){
   return String.fromCodePoint(...[...iso.toUpperCase()].map(c=>0x1F1E6+c.charCodeAt(0)-65));
 }
 
-function renderRelayCard(card, d, fp){
-  fp = fp || d.fingerprint || '';
-  const inMap = window._rawFingerprintData && window._rawFingerprintData[fp.toUpperCase()];
-  const live  = d.in_consensus !== undefined ? d.in_consensus : !!inMap;
-
-  const dot = live
-    ? '<span style="color:var(--an-green,#34d399);font-size:10px">&#9679; ' + _i18t('rdLive','LIVE') + '</span>'
-    : '<span style="color:#ff6b35;font-size:10px">&#9675; ' + _i18t('rdOffline','OFFLINE') + '</span>';
-
-  if(d.registered === false && !d.source && !d.nickname && !d.bandwidth){
-    const mapRec = inMap || {};
-    const cc  = mapRec.countryCode || '';
-    const flag = isoToFlag(cc);
-    const loc  = [mapRec.cityName||mapRec.regionName||'', mapRec.countryName||''].filter(Boolean).join(', ') || '—';
-    const isp  = mapRec.asName || '—';
-    card.innerHTML = `
-      <div class="rd-title" style="display:flex;align-items:center;gap:6px;">
-        <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${_i18t('rdUnregistered','Unregistered Relay')}</span>${dot}
-        <button onclick="closeRelayDetail()" aria-label="Close" title="Close (Esc)" style="background:rgba(0,245,255,.08);border:1px solid rgba(0,245,255,.25);border-radius:6px;color:rgba(0,245,255,.85);cursor:pointer;font-size:14px;line-height:1;padding:3px 7px;flex-shrink:0;transition:all .15s;" onmouseover="this.style.background='rgba(255,80,80,.22)';this.style.borderColor='rgba(255,80,80,.55)';this.style.color='#ff6b6b';" onmouseout="this.style.background='rgba(0,245,255,.08)';this.style.borderColor='rgba(0,245,255,.25)';this.style.color='rgba(0,245,255,.85)';">✕</button>
-      </div>
-      <div class="rd-row"><span class="rd-key">${_i18t('rdFingerprint','Fingerprint')}</span>
-        <span class="rd-val" style="font-size:9px;font-family:monospace" title="${fp}">${fp.slice(0,10)}&hellip;${fp.slice(-6)}</span></div>
-      <div class="rd-row"><span class="rd-key">${_i18t('rdLocation','Location')}</span>
-        <span class="rd-val">${flag} ${_aoEscHtml(loc)}</span></div>
-      <div class="rd-row"><span class="rd-key">${_i18t('rdIsp','ISP')}</span>
-        <span class="rd-val rd-isp">${_aoEscHtml(isp)}</span></div>
-      <div style="margin-top:7px;font-size:9px;color:rgba(138,188,196,.35)">&#9888; ${_i18t('rdNotStaked','Not staked — operator has not registered $ANYONE tokens')}</div>
-      <div class="rd-actions">
-        <button class="rd-btn copy" onclick="copyFingerprint('${fp}',this)">
-          <svg aria-hidden="true" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>
-          ${_i18t('rdCopyFp','COPY FP')}
-        </button>
-        <button class="rd-btn copy" onclick="copyRelayLink('${fp}',this)">
-          <svg aria-hidden="true" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M10 13a5 5 0 007.54.54l3-3a5 5 0 00-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 00-7.54-.54l-3 3a5 5 0 007.07 7.07l1.71-1.71"/></svg>
-          ${_i18t('rdShare','SHARE')}
-        </button>
-      </div>
-    `;
-    return;
-  }
-
-  if(d.registered === false && (d.source || d.nickname || d.bandwidth)){
-    const mapRec2 = inMap || {};
-    if(!d.country || d.country === '—') d.country = mapRec2.countryName || '—';
-    if(!d.country_iso) d.country_iso = mapRec2.countryCode || '';
-  }
-
-  const flag = isoToFlag(d.country_iso || '');
-
-  const mapRec = inMap || {};
-  const isp = mapRec.asName || '—';
-
-  let FLAGS = d.flags || [];
-  const fp_u = (fp || d.fingerprint || '').toUpperCase();
-  if(FLAGS.length === 0 && fp_u){
-    if(exitFps?.has(fp_u))   FLAGS.push('Exit');
-    if(guardFps?.has(fp_u))  FLAGS.push('Guard');
-    if(stableFps?.has(fp_u)){ FLAGS.push('Stable'); FLAGS.push('Fast'); }
-    else if(fastFps?.has(fp_u)) FLAGS.push('Fast');
-    if(FLAGS.length > 0)     FLAGS.push('Running');
-  }
-  const FLAG_CLASS = {
-    Exit:'exit', Guard:'guard', HSDir:'hsdir',
-    Stable:'stable', Fast:'fast', V2Dir:'v2dir',
-    Running:'running', Valid:'valid'
-  };
-  const SHOW = ['Exit','Guard','Fast','Stable','HSDir','V2Dir'];
-  const hwBadge = d.is_hardware ? '<span class="rd-flag hw">\u{1F527} HW</span>' : '';
-  const flagBadges = [
-    ...FLAGS.filter(f=>SHOW.includes(f))
-            .map(f=>`<span class="rd-flag ${FLAG_CLASS[f]||''}">${f}</span>`),
-    hwBadge
-  ].join('');
-
-
-  const localRelay = allRelays.find(r => r.fp.toUpperCase() === fp_u);
-  if(localRelay){
-    if(!d.uptime){
-      const cachedEntry = window._allUptimesCache && window._allUptimesCache[fp_u];
-      const upSecs = (proxy && proxy.uptime_seconds > 0) ? proxy.uptime_seconds
-        : (cachedEntry && cachedEntry.up > 0) ? cachedEntry.up
-        : (localRelay.uptimeSecs || 0);
-      if(upSecs > 0){
-        const days = Math.floor(upSecs / 86400);
-        const hrs  = Math.floor((upSecs % 86400) / 3600);
-        d.uptime = days + 'd ' + hrs + 'h';
-      }
-    }
-    if(!d.bandwidth && localRelay.bwKBs > 0){
-      const mb = localRelay.bwKBs / 1024;
-      d.bandwidth = mb >= 1024 ? (mb/1024).toFixed(1)+' GB/s' : mb.toFixed(1)+' MB/s';
-    }
-    if((!d.country || d.country === '—') && localRelay.countryName){
-      d.country = localRelay.countryName;
-      d.country_iso = localRelay.countryCode;
-    }
-    if(!d.is_hardware && hwFps?.has(fp_u)) d.is_hardware = true;
-  }
-  const flag2 = isoToFlag(d.country_iso || '');  // re-compute flag after merge
-
-  card.innerHTML = `
-    <div class="rd-title" style="display:flex;align-items:center;gap:6px;">
-      <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${_aoEscHtml(d.nickname||'—')}</span>${dot}
-      <button onclick="closeRelayDetail()" aria-label="Close" title="Close (Esc)" style="background:rgba(0,245,255,.08);border:1px solid rgba(0,245,255,.25);border-radius:6px;color:rgba(0,245,255,.85);cursor:pointer;font-size:14px;line-height:1;padding:3px 7px;flex-shrink:0;transition:all .15s;" onmouseover="this.style.background='rgba(255,80,80,.22)';this.style.borderColor='rgba(255,80,80,.55)';this.style.color='#ff6b6b';" onmouseout="this.style.background='rgba(0,245,255,.08)';this.style.borderColor='rgba(0,245,255,.25)';this.style.color='rgba(0,245,255,.85)';">✕</button>
-    </div>
-    <div class="rd-row">
-      <span class="rd-key">${_i18t('rdLocation','Location')}</span>
-      <span class="rd-val">${flag2||flag} ${d.country||'—'}</span>
-    </div>
-    <div class="rd-row">
-      <span class="rd-key">${_i18t('rdIsp','ISP')}</span>
-      <span class="rd-val" style="font-size:9px;max-width:150px">${_aoEscHtml(isp)}</span>
-    </div>
-    <div class="rd-row">
-      <span class="rd-key">${_i18t('rdBandwidth','Bandwidth')}</span>
-      <span class="rd-val" style="color:#22d3ee">${d.bandwidth||'—'}</span>
-    </div>
-    <div class="rd-row">
-      <span class="rd-key">${_i18t('rdUptime','Uptime')}</span>
-      <span class="rd-val" style="color:var(--an-green,#34d399)">${d.uptime||'—'}</span>
-    </div>
-    <div class="rd-row">
-      <span class="rd-key">${_i18t('rdFingerprint','Fingerprint')}</span>
-      <span class="rd-val" style="font-size:9px;font-family:monospace" title="${fp}">${fp.slice(0,10)}&hellip;${fp.slice(-6)}</span>
-    </div>
-    <div class="rd-flags">${flagBadges}</div>
-    <div class="rd-actions">
-      <button class="rd-btn copy" onclick="copyFingerprint('${fp}',this)">
-        <svg aria-hidden="true" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>
-        ${_i18t('rdCopyFp','COPY FP')}
-      </button>
-      <button class="rd-btn copy" onclick="copyRelayLink('${fp}',this)">
-        <svg aria-hidden="true" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M10 13a5 5 0 007.54.54l3-3a5 5 0 00-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 00-7.54-.54l-3 3a5 5 0 007.07 7.07l1.71-1.71"/></svg>
-        ${_i18t('rdShare','SHARE')}
-      </button>
-    </div>
-  `;
-}
+/* v514: removed dead function renderRelayCard() — defined but never called (superseded by the active relay-detail render path). Verified zero references in index.html and all worker files. */
 
 function filterRelays(q){
   q = q.trim().toLowerCase();
@@ -24775,7 +24714,23 @@ async function init(){
     updateHealthButton();
     syncSidebarStats();
     setTimeout(checkNetworkAlerts, 3000);
+    /* v521: kick off the full-network uptime enrichment EARLY, in parallel with
+     * fetchUptimeAndGeoData's slow wallet loop. Previously enrichAllViaAnyoneAPI()
+     * (which fetches /api/all-uptimes — the ~5,800-relay uptime set that covers the
+     * ~2,500 relays base data misses) was only called at the END of
+     * fetchUptimeAndGeoData, after fetching exit-relays + looping 30 wallets in
+     * batches with retries — so those relays sat empty for many seconds on initial
+     * load. The all-uptimes fetch doesn't depend on any of that, so start it now.
+     * Safe: enrichAllViaAnyoneAPI dedups via _enrichInflight (the original late
+     * call at the tail of fetchUptimeAndGeoData becomes a no-op dedup hit) and
+     * bails if allRelays isn't populated yet (it is, by this point in init). */
+    enrichAllViaAnyoneAPI();
     fetchUptimeAndGeoData();
+    /* v522: after the uptime enrichment, fill blank (non-wallet) relays'
+     * name/weight/flags in the map+list via /api/enrich-relays. Deferred so it
+     * never competes with first paint or the uptime pass; visibility-gated and
+     * dedup-guarded internally. */
+    setTimeout(function(){ try { enrichBlankRelaysViaProxy(); } catch(_){} }, 4000);
     setTimeout(fetchGrowthData, 1500);
     document.addEventListener('visibilitychange', ()=>{
       const pause = document.hidden;
@@ -25227,8 +25182,15 @@ if('serviceWorker' in navigator){
 .ac-chip:hover{ background:rgba(45,212,191,.1);border-color:rgba(45,212,191,.4); }
 
 /* Input row */
-#ac-input-row{
-  display:flex;gap:6px;margin-top:2px;
+#ac-input-row,
+#ac-bubble-input-row{
+  /* v470: the AnyClip AI widget's input row markup is #ac-bubble-input-row
+   * (see #anyclip-bubble), but this flex rule only targeted #ac-input-row, so
+   * the row was never a flex container: #ac-input's `flex:1` was inert (input
+   * collapsed to the default narrow width) and the 36x36 #ac-send button sat
+   * misplaced in block flow. Match both IDs and center items so the input
+   * expands to fill the row and the send button sits inline beside it. */
+  display:flex;gap:6px;margin-top:2px;align-items:center;
 }
 #ac-input{
   flex:1;background:rgba(0,245,255,.06);
@@ -28419,13 +28381,14 @@ body.light #geo-info-side-panel .hw-tip-section {
 
 <!-- Character markup -->
 <div id="anyclip">
-  <div id="anyclip-bubble">
+  <div id="anyclip-bubble" role="region" aria-label="AnyClip AI Assistant">
     <div class="ac-name">AnyClip · AI Assistant</div>
-    <div id="ac-msg"></div>
-    <div id="ac-chips"></div>
+    <div id="ac-msg" aria-hidden="true"></div>
+    <div id="ac-sr-live" aria-live="polite" aria-atomic="true" style="position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;border:0;"></div>
+    <div id="ac-chips" aria-label="Suggested questions"></div>
     <div id="ac-bubble-input-row">
-      <input id="ac-input" placeholder="How can I help?" data-i18n-placeholder="acInputPlaceholder" autocomplete="off"/>
-      <button id="ac-send">➤</button>
+      <input id="ac-input" placeholder="How can I help?" data-i18n-placeholder="acInputPlaceholder" autocomplete="off" aria-label="Ask AnyClip a question"/>
+      <button id="ac-send" aria-label="Send message">➤</button>
     </div>
   </div>
 
@@ -28479,6 +28442,53 @@ body.light #geo-info-side-panel .hw-tip-section {
 /* ══ AnyClip Brain ══ */
 (function(){
   window.acBuildSystemPrompt = buildSystem;
+  function acCollectStats() {
+    const g = id => { try { return (document.getElementById(id)?.textContent||'').replace(/,/g,'').trim()||'?'; } catch(_){ return '?'; } };
+    const raw = id => { try { return document.getElementById(id)?.textContent?.trim()||'?'; } catch(_){ return '?'; } };
+    let hwActive = '?', hwOffline = '?';
+    try {
+      if (typeof hwFps !== 'undefined' && typeof allRelays !== 'undefined' && allRelays.length) {
+        const live = new Set(allRelays.map(r => (r.fp||'').toUpperCase()));
+        let a = 0; for (const fp of hwFps) if (live.has(fp)) a++;
+        hwActive = a; hwOffline = Math.max(0, hwFps.size - a);
+      }
+    } catch(_){}
+    const zoneCount = t => { try { return (typeof relayData!=='undefined') ? relayData.filter(z=>z.dominantType===t).length : '?'; } catch(_){ return '?'; } };
+    const topCountriesStr = (() => { try {
+      if(!allRelays||!allRelays.length) return '?'; const m={};
+      allRelays.forEach(r=>{ if(r.countryCode&&r.countryName) m[r.countryCode]={name:r.countryName,count:(m[r.countryCode]?.count||0)+1}; });
+      return Object.entries(m).sort((a,b)=>b[1].count-a[1].count).slice(0,7).map(([cc,v])=>`${v.name} (${cc}): ${v.count}`).join(', ');
+    } catch(_){ return '?'; }})();
+    const topISPsStr = (() => { try {
+      if(!allRelays||!allRelays.length) return '?'; const m={};
+      allRelays.forEach(r=>{ if(r.asName) m[r.asName]=(m[r.asName]||0)+1; });
+      return Object.entries(m).sort((a,b)=>b[1]-a[1]).slice(0,5).map(([i,n])=>`${i}: ${n}`).join(', ');
+    } catch(_){ return '?'; }})();
+    const hwLocStr = (() => { try {
+      if(!allRelays||!hwFps||!hwFps.size) return 'loading'; const hwl=allRelays.filter(r=>hwFps.has(r.fp.toUpperCase())); const m={};
+      hwl.forEach(r=>{ const cc=r.countryCode||'??'; m[cc]=(m[cc]||0)+1; });
+      return Object.entries(m).sort((a,b)=>b[1]-a[1]).slice(0,5).map(([cc,n])=>`${cc}:${n}`).join(', ');
+    } catch(_){ return '?'; }})();
+    const fmtDelta = d => (typeof d!=='undefined'&&d!==null) ? ((d>=0?'+':'')+d+' relays') : 'loading';
+    const trend = (typeof _growthWeekDelta!=='undefined'&&_growthWeekDelta!==null)
+      ? (_growthWeekDelta>100?'strongly growing':_growthWeekDelta>0?'growing':_growthWeekDelta<-100?'declining':'stable') : 'unknown';
+    return {
+      totalRelays:g('sR'), exitRelays:g('sX'), guardRelays:g('sG'), middleRelays:g('sMD'),
+      exitFpsCount:(typeof exitFps!=='undefined')?exitFps.size:'?',
+      guardFpsCount:(typeof guardFps!=='undefined')?guardFps.size:'?',
+      hwActiveInConsensus:hwActive, hwFpsCount:(typeof hwFps!=='undefined')?hwFps.size:'?', hwOfflineRegistered:hwOffline,
+      totalBW:raw('sBW'), zones:g('sZ'), topZone:g('sM'), avgPerZone:g('sA'),
+      countries:raw('rs-countries'), isps:raw('rs-isps'),
+      healthScore:g('btn-health-score'), healthGrade:raw('health-grade'),
+      exitZones:zoneCount('exit'), guardZones:zoneCount('guard'), middleZones:zoneCount('middle'), hwZones:zoneCount('hardware'),
+      topCountriesStr, topISPsStr, hwLocStr,
+      selectedCountry:(typeof selectedCountryName!=='undefined'&&selectedCountryName)?`Currently viewing: ${selectedCountryName} (${selectedCountryIso})`:'Viewing: global (all countries)',
+      growthWeek:fmtDelta(typeof _growthWeekDelta!=='undefined'?_growthWeekDelta:null),
+      growthMonth:fmtDelta(typeof _growthMonthDelta!=='undefined'?_growthMonthDelta:null),
+      growthDays:(typeof _growthDays!=='undefined')?_growthDays:0, growthTrend:trend
+    };
+  }
+
   function buildSystem(){
     const g = id => { try { return (document.getElementById(id)?.textContent||'').replace(/,/g,'').trim()||'?'; } catch(_){ return '?'; } };
     const totalRelays   = g('sR');
@@ -29286,24 +29296,65 @@ Q: Where to get help? A: t.me/anyoneprotocol | docs.anyone.io | Ask AnyClip in t
   /* still typing), two ticks would race and overwrite msgEl with interleaved */
   /* characters. Track the active timer + a generation counter so any in-flight */
   /* tick from a previous call no-ops itself. */
-  let _typewriteTimer = null, _typewriteGen = 0;
+  let _typewriteTimer = null, _typewriteGen = 0, _typewriteFinalizeActive = null;
   function typewrite(text, done){
+    /* v471 (Bug 1 fix): the PREVIOUS version returned silently when superseded
+     * (myGen !== _typewriteGen), so an in-flight call's cursor was orphaned and
+     * its done() never fired. Because done() for a reply is restoreInput(), a
+     * greeting/relang/second typewrite starting mid-reply left the input
+     * PERMANENTLY disabled with a stuck cursor — widget unusable until reload.
+     *
+     * The interruption happens HERE, where a new call clears the old timer:
+     * after that, the old call's tick never runs again, so any guard inside
+     * tick can't help. So we finalize the previous in-flight call explicitly,
+     * right now, before starting the new one. _typewriteFinalizeActive holds
+     * the current call's finalizer; the next call invokes it first, guaranteeing
+     * the superseded call's cleanup + done() always run exactly once. */
+    if(_typewriteFinalizeActive){ try { _typewriteFinalizeActive(true); } catch(_){} _typewriteFinalizeActive = null; }
     if(_typewriteTimer){ clearTimeout(_typewriteTimer); _typewriteTimer = null; }
     const myGen = ++_typewriteGen;
     msgEl.innerHTML = '';
     let i = 0;
     const cursor = document.createElement('span');
     cursor.className = 'ac-cursor';
+    let finished = false;
+    function finalize(superseded){
+      if(finished) return;
+      finished = true;
+      if(_typewriteFinalizeActive === finalize) _typewriteFinalizeActive = null;
+      if(_typewriteTimer && !superseded){ clearTimeout(_typewriteTimer); _typewriteTimer = null; }
+      try { cursor.remove(); } catch(_){}
+      /* v475 (a11y): #ac-msg is the visual typewriter and is aria-hidden (it
+       * rewrites its full textContent every tick, which would make a live
+       * region re-announce dozens of times). Instead, when the animation
+       * finishes naturally, set the COMPLETE text into the visually-hidden
+       * #ac-sr-live region once so screen readers announce the final reply
+       * (or greeting/error) a single time. Skipped on supersession so we don't
+       * announce text that was abandoned mid-stream. */
+      if(!superseded){
+        try { var _sr = document.getElementById('ac-sr-live'); if(_sr) _sr.textContent = text; } catch(_){}
+      }
+      if(done){ try { done(); } catch(_){} }
+    }
+    _typewriteFinalizeActive = finalize;
+    /* v472 (Bug 2 fix): the old loop revealed ONE character per tick at
+     * 18-32ms, so a 300-char reply took ~5-10s and a long one 15-30s+ — far
+     * too slow, and the input stays disabled the whole time. Reveal a small
+     * CHUNK per tick and shorten the delay: this keeps the visible "typing"
+     * feel (cursor still trails, text still streams in) but roughly triples
+     * the speed and stops long answers from dragging. STEP chars every ~16-26ms
+     * => ~3x faster, near-constant pacing regardless of length. */
+    const STEP = 3;
     function tick(){
-      if(myGen !== _typewriteGen) return; /* superseded */
+      if(myGen !== _typewriteGen){ finalize(true); return; } /* belt-and-suspenders */
       if(i < text.length){
-        msgEl.textContent = text.slice(0,++i);
+        i = Math.min(i + STEP, text.length);
+        msgEl.textContent = text.slice(0, i);
         msgEl.appendChild(cursor);
-        _typewriteTimer = setTimeout(tick, 18 + Math.random()*14);
+        _typewriteTimer = setTimeout(tick, 16 + Math.random()*10);
       } else {
-        cursor.remove();
         _typewriteTimer = null;
-        if(done) done();
+        finalize(false);
       }
     }
     tick();
@@ -29545,9 +29596,12 @@ IMPORTANT: The user's preferred language is ${activeLang.name}. You MUST respond
       /* v322: capture res for status-aware error handling. The catch below
        * now sees res.status and the parsed body, not just a string. */
       const chatBody = {
-        model:'claude-haiku-4-5-20251001',
-        max_tokens:300,
-        system: buildSystem() + buildMemoryContext() + langInstruction,
+        task: 'assistant',
+        stats: acCollectStats(),
+        memory: buildMemoryContext(),
+        lang: (activeLang && activeLang.code) ? activeLang.code : null,
+        /* v474: 600-token ceiling kept; server clamps to the same value. */
+        max_tokens: 600,
         messages: history
       };
       let res, data, attempt = 0;
@@ -29680,7 +29734,18 @@ IMPORTANT: The user's preferred language is ${activeLang.name}. You MUST respond
     if(q) ask(q);
   };
   input.addEventListener('keydown', e=>{
-    if(e.key==='Enter'){ const q=input.value.trim(); if(q) ask(q); }
+    /* v473 (Bug 3 fix): only treat Enter as "send" when the user is NOT mid-IME
+     * composition. CJK users (the widget supports zh/ja/ko) press Enter to
+     * confirm a candidate from the IME popup while composing a word — the old
+     * handler fired ask() on that Enter, submitting a half-composed message and
+     * making the widget unusable for those languages. e.isComposing is the
+     * standard signal; keyCode === 229 is the legacy fallback some browsers set
+     * during composition. Also preventDefault() now that we've handled the key. */
+    if(e.key==='Enter' && !e.isComposing && e.keyCode !== 229){
+      e.preventDefault();
+      const q=input.value.trim();
+      if(q) ask(q);
+    }
   });
 
   /* v215: rebuild chips when the global language changes. */
