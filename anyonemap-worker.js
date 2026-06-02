@@ -1017,6 +1017,45 @@ const html = "<!--\n  ==========================================================
         return;
       }
       const data = await r.json();
+
+      /* v533: fail-closed guard against the mirror's DNS-seeder fallback.
+       * When bitnodes.io is unreachable, the GitHub Actions mirror commits a
+       * DEGRADED snapshot: source:"dns-seeders", latest_height:0, and ~100
+       * nodes instead of the usual ~22k. Those seeder nodes carry valid
+       * lat/lon/country, so they sail past the reduced.length===0 guard below
+       * and OVERWRITE the last-good ~22k-node KV value — which is exactly what
+       * flips the /bitcoin panel to the "live feed unavailable / 2024 reference
+       * snapshot" banner (the SPA treats the tiny sample as not-real and shows
+       * its static fallback). The empty-sample guard never caught this because
+       * the sample isn't empty, just degraded.
+       *
+       * Fail closed: detect the degraded shape and, if we already hold a real
+       * snapshot, keep it rather than clobbering it with seeder data. If no
+       * good snapshot is cached, leave KV untouched so the route serves its
+       * static fallback (same documented behavior as an empty KV) instead of
+       * persisting a snapshot the consumer will reject anyway. The mirror
+       * (bitnodes-mirror.yml) is the place that should stop emitting this; this
+       * is defense in depth so a future mirror regression can't blank the panel. */
+      const _MIN_PLAUSIBLE_NODES = 1000;
+      const _degraded =
+        data.source === 'dns-seeders' ||
+        data.latest_height === 0 ||
+        (typeof data.total_nodes === 'number' && data.total_nodes < _MIN_PLAUSIBLE_NODES);
+      if (_degraded) {
+        let _prev = null;
+        try { _prev = await _snapKv.get('bitnodes-snapshot:latest', { type: 'json' }); } catch (_) {}
+        if (_prev && typeof _prev.total === 'number' && _prev.total >= _MIN_PLAUSIBLE_NODES) {
+          console.warn('bitnodes-snapshot cron: mirror serving DEGRADED data' +
+            ' (source=' + data.source + ', total_nodes=' + data.total_nodes +
+            ', latest_height=' + data.latest_height + '); preserving last-good KV snapshot (total=' + _prev.total + ')');
+          return;
+        }
+        console.warn('bitnodes-snapshot cron: mirror serving DEGRADED data' +
+          ' (source=' + data.source + ') and no good snapshot is cached;' +
+          ' leaving KV untouched so the route serves its static fallback');
+        return;
+      }
+
       const nodes = data.nodes || {};
       const TARGET = 200;
       /* v379: stratified sampling by country. Previous version iterated the */
@@ -1169,7 +1208,12 @@ const html = "<!--\n  ==========================================================
         sample: reduced,
         timestamp: data.timestamp,
         cachedAt: Math.floor(Date.now() / 1000),
-        source: 'kv-snapshot'
+        source: 'kv-snapshot',
+        /* v533: carry the mirror's provenance through so operators (and the
+         * degraded-snapshot guard above on the next run) can tell a real
+         * bitnodes snapshot from a seeder fallback. 'kv-snapshot' above is the
+         * storage layer; this is the upstream data origin. */
+        upstreamSource: data.source || 'bitnodes'
       };
       /* v381: guard against persisting empty snapshots. If bitnodes returned */
       /* zero valid nodes (every entry failed the lat/lon/country validity */
