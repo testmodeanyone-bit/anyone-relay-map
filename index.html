@@ -28649,7 +28649,9 @@ TECHNICAL ARCHITECTURE (from GitHub):
 - Full org: https://github.com/anyone-protocol (56 public repositories)
 
 === THE ANYONE ROUTER (HARDWARE) ===
-The Anyone Router is a dedicated hardware device built specifically for the Anyone network. It is the easiest way to support the network and start earning $ANYONE tokens. It has two modes: Router Mode (routes your browsing through the Anyone Network for privacy) and Relay Mode (contributes your bandwidth to the network while earning token rewards). Hardware relays do NOT require locking 100 $ANYONE tokens to register for rewards — they get a special hardware-only rewards pool. The hardware connects via WiFi or Ethernet. Setup is done through a control panel at https://relayup.local. Hardware preorders are live at anyone.io.
+The Anyone Router is a dedicated hardware device built specifically for the Anyone network. It is the easiest way to support the network and start earning $ANYONE tokens. It has two modes: Router Mode (routes your browsing through the Anyone Network for privacy) and Relay Mode (contributes your bandwidth to the network while earning token rewards). Hardware relays do NOT require locking 100 $ANYONE tokens to register for rewards — they get a special hardware-only rewards pool. The hardware connects via WiFi or Ethernet. Setup is plug-and-play: power it over USB-C, run a one-time secure install over USB, then manage everything from the local control panel at https://relayup.local (network settings, reward wallet, relay family) — no command line needed.
+FULL SPECS: dual-core 1.5GHz CPU; 4GB LPDDR4 RAM; 32GB eMMC storage (upgradable); 1x Gigabit Ethernet; Wi-Fi 5 (802.11ac); CryptoAuth security chip (the same kind used in hardware wallets); anodized-aluminum body; USB-C 12V/3A power.
+WHERE TO BUY: preorder from the official shop at https://www.anyone.io/shop. Endorsed resellers: FreshMiners (freshminers.com), AmpChampment (ampchampment.com), and Helium Deploy (heliumdeploy.com). Pricing varies by reseller and region — do NOT quote a specific price; direct people to the shop for current pricing. The $ANYONE token is separate from the hardware and trades on Uniswap.
 
 === RELAY SETUP ===
 Anyone relay nodes can be run on your own hardware at home or in a datacenter. Full instructions are at docs.anyone.io/relay.
@@ -29401,6 +29403,10 @@ Q: Where to get help? A: t.me/anyoneprotocol | docs.anyone.io | Ask AnyClip in t
      a:'ANyONe uses a dual-chain architecture: AO (Arweave compute) for on-chain relay data via 6 Lua contracts (operator-registry, relay-directory, relay-rewards, staking-rewards, staking-snapshots), and Ethereum EVM for token operations via 3 Solidity contracts (HodlerV3 for locking/staking, Facilitator for claiming rewards, Registrator for relay registration). All source at https://github.com/anyone-protocol/smart-contracts.'},
     {k:['android','ios','mobile','browser','vpn','app'],
      a:'ANyONe has mobile apps: AnyoneBrowser (iOS, open-source, forked from OnionBrowser — github.com/anyone-protocol/AnyoneBrowser), AnyoneVPN (Android, forked from Orbot/Guardian Project — github.com/anyone-protocol/AnyoneVPN), and anon-android (Android library for developers — Maven: io.anyone:anon-android:0.4.9.11, requires Android API 21+). All available on GitHub.'},
+    {k:['buy','purchase','price','cost','how much','order','preorder','shop','reseller','acquire','where to buy','get one','for sale','pricing'],
+     a:"You can preorder the Anyone Router from the official shop at anyone.io/shop. Endorsed resellers: FreshMiners, AmpChampment, and Helium Deploy. Pricing varies by reseller and region — check the shop for current pricing. (The $ANYONE token is separate and trades on Uniswap.)"},
+    {k:['spec','specs','specification','cpu','processor','ram','memory','ethernet','wifi','wi-fi','antenna','storage','aluminum','watt','usb-c'],
+     a:"Anyone Router specs: dual-core 1.5GHz CPU, 4GB LPDDR4 RAM, 32GB eMMC (upgradable), Gigabit Ethernet + Wi-Fi 5 (802.11ac), a CryptoAuth security chip (like a hardware wallet), anodized-aluminum body, and USB-C 12V/3A power. Plug-and-play setup via the relayup.local dashboard."},
     {k:['hardware','hw','router','device','anyone router','diamond','🔧'],
      a:(()=>{
        const hw = document.getElementById("sHW")?.textContent||"?";
