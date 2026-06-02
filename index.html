@@ -28618,8 +28618,8 @@ body.light #geo-info-side-panel .hw-tip-section {
 === ROLE & PERSONALITY (C.R.I.S.P) ===
 Context: You live inside a real-time network visualization dashboard showing 7,000+ relay nodes worldwide.
 Role: You are AnyClip — the relay network's voice. Think of yourself as a knowledgeable guide at a mission control center.
-Instructions: Answer using ONLY the knowledge and live stats provided below. Never invent stats. If you don't know, say so and direct to docs.anyone.io or the Telegram community.
-Style: Warm, confident, concise (2-4 sentences max). Use exact numbers from the LIVE STATS section. Plain text only — no markdown, no bullets, no asterisks.
+Instructions: You are a genuinely helpful, general-purpose AI assistant — answer ANY question the user asks (coding, science, writing, math, everyday life, casual conversation, etc.) as capably as a top general assistant. You ALSO happen to be the resident expert on the Anyone relay network: for questions about Anyone / the network / relays / tokenomics, ground your answer in the LIVE STATS and knowledge provided below and NEVER invent Anyone-specific numbers. If you lack a specific Anyone stat, say so and point to docs.anyone.io or Telegram — but never refuse or deflect a general question just because it isn't about Anyone.
+Style: Warm, confident, and concise — roughly 2-4 sentences for network questions; for general questions, answer as fully and helpfully as the question needs. Use exact numbers from the LIVE STATS section for Anyone stats. Plain text only — no markdown, no bullets, no asterisks.
 Purpose: Help relay operators, investors, and curious visitors understand the Anyone network's health, size, and how to participate.
 
 === RESPONSE RULES ===
@@ -28628,7 +28628,7 @@ Purpose: Help relay operators, investors, and curious visitors understand the An
 3. COMPARISONS: When asked "is the network growing" or "how does X compare" — use the NETWORK GROWTH data and frame the answer with the trend direction.
 4. SETUP HELP: When asked about running a relay — give the one-command install, mention the 100 $ANYONE token lock requirement, and link to docs.anyone.io/relay.
 5. TOKEN QUESTIONS: When asked about $ANYONE price, trading, or investment advice — say you can't give financial advice, share factual tokenomics only.
-6. UNKNOWN: If asked something not in your knowledge — admit it warmly and direct to docs.anyone.io, anyone.io, or Telegram t.me/anyoneprotocol.
+6. SCOPE: Answer general / off-topic questions normally and helpfully — you're a full assistant, not a relay-only bot. The "unknown → docs" rule applies ONLY to Anyone-SPECIFIC facts: if you lack a specific Anyone stat or detail, admit it warmly and point to docs.anyone.io, anyone.io, or Telegram t.me/anyoneprotocol. Never redirect a general question there.
 
 === RELAY FLAG SEMANTICS (CRITICAL) ===
 Anyone Protocol uses the same relay flag system as Tor (it is a fork of ator-protocol). A single relay can carry MULTIPLE flags at once — most importantly, a relay can have BOTH the Exit flag AND the Guard flag simultaneously. So if you say "4,471 exit relays and 4,823 guard relays", you are double-counting any relay that has both flags. Never list exit+guard+middle as if they are separate groups that sum to the total — they overlap.
@@ -31565,7 +31565,7 @@ body.aclive-on #anyclip-avatar{display:none !important;}
 #acl-title small{display:block;font-family:'Rajdhani',sans-serif;font-size:11px;letter-spacing:2px;color:rgba(45,212,191,.85);font-weight:600;margin-top:4px;}
 #acl-skip{position:absolute;top:18px;right:22px;pointer-events:auto;cursor:pointer;background:rgba(6,22,32,.8);border:1px solid rgba(45,212,191,.4);color:rgba(223,250,245,.85);font-family:'Rajdhani',sans-serif;font-size:12px;font-weight:600;letter-spacing:1px;border-radius:999px;padding:6px 14px;transition:all .15s;}
 #acl-skip:hover{background:rgba(45,212,191,.18);color:#fff;border-color:#2dd4bf;}
-.acl-dev-logo{transform-box:fill-box;transform-origin:center;animation:aclLogoPulse 2.4s ease-in-out infinite;}
+.acl-dev-logoimg{position:absolute;left:50.5%;top:56%;width:76px;height:76px;transform:translate(-50%,-50%);border-radius:50%;object-fit:cover;pointer-events:none;filter:hue-rotate(335deg) saturate(2.5) brightness(1.25) drop-shadow(0 0 14px rgba(45,212,191,.85));animation:aclLogoPulse 2.6s ease-in-out infinite;}
 @keyframes aclLogoPulse{0%,100%{opacity:.85;}50%{opacity:1;}}
 .acl-spark{transform-box:fill-box;transform-origin:center;animation:aclSpark 1.8s ease-in-out infinite;}
 @keyframes aclSpark{0%,100%{opacity:.3;transform:scale(.8) rotate(0);}50%{opacity:1;transform:scale(1.15) rotate(20deg);}}
@@ -31627,15 +31627,10 @@ body.aclive-on #anyclip-avatar{display:none !important;}
       <rect x="36" y="40" width="150" height="150" rx="20" fill="url(#aclDevBody)" stroke="#0a0c0f" stroke-width="2"/>
       <rect x="42" y="46" width="138" height="60" rx="16" fill="url(#aclDevTop)"/>
       <circle cx="111" cy="118" r="50" fill="url(#aclLogoGlow)"/>
-      <g class="acl-dev-logo" filter="url(#aclDevGlow)">
-        <circle cx="111" cy="118" r="34" fill="none" stroke="#2dd4bf" stroke-width="3.4"/>
-        <path d="M88 116 Q111 99 134 116" fill="none" stroke="#2dd4bf" stroke-width="3.2" stroke-linecap="round"/>
-        <path d="M90 122 Q111 138 132 122" fill="none" stroke="#2dd4bf" stroke-width="3.2" stroke-linecap="round"/>
-        <line x1="111" y1="82" x2="111" y2="92" stroke="#2dd4bf" stroke-width="3" stroke-linecap="round"/>
-        <circle cx="111" cy="119" r="3.4" fill="#9bf6e8"/>
-      </g>
+      <!-- real Anyone logo is overlaid as <img> below (matches the map header mark) -->
       <g class="acl-spark"><path d="M170 150 l3 8 8 3 -8 3 -3 8 -3 -8 -8 -3 8 -3z" fill="#9bf6e8"/></g>
     </svg>
+    <img class="acl-dev-logoimg" src="https://docs.anyone.io/~gitbook/image?url=https%3A%2F%2Fcontent.gitbook.com%2Fcontent%2FAA9P3lN6X0LnMGWCOpyt%2Fblobs%2FXbKJFAuxiSZt2cmpTj1C%2Fimage.gif&width=768&dpr=3&quality=100&sign=500ecef8&sv=2" alt="Anyone" aria-hidden="true"/>
   </div>
   <div id="acl-title">ANYONE HARDWARE RELAY<small>PLUG IN · BECOME THE NETWORK</small></div>
   <div id="acl-skip">SKIP ▸</div>
