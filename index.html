@@ -31502,6 +31502,276 @@ if(AC.minimized)AC._minUnread=(AC._minUnread||0)+1;return _origAdd.apply(this,ar
   if(document.readyState==='loading') document.addEventListener('DOMContentLoaded', nuke);
 })();</script>
 
+<!-- ════════ AnyClip Live: roaming mascot + hardware keynote (v537) ════════ -->
+<style id="aclive-style">
+#aclive{position:fixed;left:0;bottom:48px;z-index:470;width:84px;height:128px;pointer-events:none;will-change:transform;}
+#aclive.hidden{display:none;}
+#aclive.kn{z-index:9500;}
+body.aclive-on #anyclip-avatar{display:none !important;}
+#aclive .acl-char{position:relative;width:84px;height:128px;pointer-events:auto;cursor:pointer;filter:drop-shadow(0 6px 10px rgba(0,0,0,.45)) drop-shadow(0 0 12px rgba(45,212,191,.35));}
+#aclive.dir-left .acl-char{transform:scaleX(-1);}
+#aclive .acl-char:hover{filter:drop-shadow(0 6px 10px rgba(0,0,0,.5)) drop-shadow(0 0 20px rgba(45,212,191,.7));}
+#aclive svg.acl-svg{width:100%;height:100%;overflow:visible;}
+.acl-svg .acl-body,.acl-svg .arm-l,.acl-svg .arm-r,.acl-svg .leg-l,.acl-svg .leg-r,.acl-svg .acl-eye{transform-box:fill-box;}
+.acl-svg .acl-body{transform-origin:50% 100%;}
+.acl-svg .arm-l,.acl-svg .arm-r{transform-origin:50% 8%;}
+.acl-svg .leg-l,.acl-svg .leg-r{transform-origin:50% 6%;}
+.acl-svg .acl-eye{transform-origin:center;animation:aclBlink 4.2s infinite;}
+@keyframes aclBlink{0%,93%,100%{transform:scaleY(1);}96%{transform:scaleY(.12);}}
+@keyframes aclLegA{0%,100%{transform:rotate(17deg);}50%{transform:rotate(-17deg);}}
+@keyframes aclLegB{0%,100%{transform:rotate(-17deg);}50%{transform:rotate(17deg);}}
+@keyframes aclArmA{0%,100%{transform:rotate(-20deg);}50%{transform:rotate(20deg);}}
+@keyframes aclArmB{0%,100%{transform:rotate(20deg);}50%{transform:rotate(-20deg);}}
+@keyframes aclBob{0%,100%{transform:translateY(0);}50%{transform:translateY(-3px);}}
+.acl-svg.walking .leg-l{animation:aclLegA .52s ease-in-out infinite;}
+.acl-svg.walking .leg-r{animation:aclLegB .52s ease-in-out infinite;}
+.acl-svg.walking .arm-l{animation:aclArmA .52s ease-in-out infinite;}
+.acl-svg.walking .arm-r{animation:aclArmB .52s ease-in-out infinite;}
+.acl-svg.walking .acl-body{animation:aclBob .52s ease-in-out infinite;}
+@keyframes aclWave{0%{transform:rotate(0);}20%{transform:rotate(-120deg);}30%{transform:rotate(-92deg);}40%{transform:rotate(-120deg);}50%{transform:rotate(-92deg);}60%{transform:rotate(-120deg);}100%{transform:rotate(0);}}
+.acl-svg.waving .arm-r{animation:aclWave 1.7s ease-in-out;}
+.acl-svg.presenting .arm-r{animation:none;transform:rotate(-128deg);transition:transform .45s cubic-bezier(.2,.8,.2,1);}
+.acl-svg.presenting .arm-l{animation:none;transform:rotate(10deg);}
+.acl-svg.presenting .leg-l,.acl-svg.presenting .leg-r{animation:none;transform:rotate(0);}
+#aclive .acl-say{position:absolute;left:50%;bottom:118px;transform:translate(-50%,6px);max-width:230px;min-width:60px;padding:8px 12px;border-radius:12px;background:linear-gradient(165deg,rgba(6,22,32,.96),rgba(3,12,20,.94));border:1px solid rgba(45,212,191,.4);border-top:2px solid #2dd4bf;color:#dffaf5;font-family:'Rajdhani','Outfit',sans-serif;font-size:13px;font-weight:600;line-height:1.35;text-align:center;white-space:normal;box-shadow:0 10px 30px rgba(0,0,0,.5),0 0 18px -6px rgba(45,212,191,.6);opacity:0;pointer-events:none;transition:opacity .25s,transform .25s;letter-spacing:.2px;}
+#aclive .acl-say.show{opacity:1;transform:translate(-50%,0);}
+#aclive .acl-say:after{content:"";position:absolute;left:50%;bottom:-7px;transform:translateX(-50%);border:7px solid transparent;border-top-color:rgba(6,22,32,.96);border-bottom:0;}
+#aclive.dir-left .acl-say{transform:translate(-50%,0) scaleX(-1);}
+#aclive.dir-left .acl-say:not(.show){transform:translate(-50%,6px) scaleX(-1);}
+#aclive .acl-chat{position:absolute;right:-6px;top:2px;width:24px;height:24px;border-radius:50%;background:rgba(6,22,32,.92);border:1px solid rgba(45,212,191,.5);color:#2dd4bf;font-size:12px;display:flex;align-items:center;justify-content:center;cursor:pointer;pointer-events:auto;box-shadow:0 0 10px rgba(45,212,191,.4);transition:transform .15s,background .15s;}
+#aclive.dir-left .acl-chat{transform:scaleX(-1);}
+#aclive .acl-chat:hover{background:rgba(45,212,191,.18);transform:scale(1.12);}
+#aclive.dir-left .acl-chat:hover{transform:scaleX(-1) scale(1.12);}
+#aclive .acl-hintring{position:absolute;left:50%;top:54px;width:64px;height:64px;transform:translate(-50%,-50%);border-radius:50%;border:2px solid rgba(45,212,191,.55);opacity:0;pointer-events:none;}
+#aclive.hint .acl-hintring{animation:aclHint 1.6s ease-out 3;}
+@keyframes aclHint{0%{opacity:.7;transform:translate(-50%,-50%) scale(.6);}100%{opacity:0;transform:translate(-50%,-50%) scale(1.7);}}
+#aclive-stage{position:fixed;inset:0;z-index:9400;display:none;}
+#aclive-stage.on{display:block;}
+#acl-catch{position:absolute;inset:0;pointer-events:auto;background:radial-gradient(120% 80% at 50% 100%,rgba(2,10,18,.55),rgba(2,8,14,0) 60%);opacity:0;transition:opacity .5s;}
+#aclive-stage.on #acl-catch{opacity:1;}
+#acl-spot{position:absolute;left:50%;bottom:60px;width:520px;height:520px;transform:translateX(-50%);background:radial-gradient(circle at 50% 60%,rgba(45,212,191,.22),rgba(45,212,191,.06) 38%,transparent 66%);opacity:0;transition:opacity .6s;pointer-events:none;}
+#aclive-stage.on #acl-spot{opacity:1;}
+#acl-device-wrap{position:absolute;left:50%;bottom:150px;transform:translateX(-50%) translateY(46px) scale(.92);opacity:0;transition:transform .9s cubic-bezier(.2,.85,.25,1),opacity .8s;pointer-events:none;filter:drop-shadow(0 22px 30px rgba(0,0,0,.6));}
+#acl-device-wrap.up{transform:translateX(-50%) translateY(0) scale(1);opacity:1;}
+#acl-pedestal{position:absolute;left:50%;bottom:120px;width:230px;height:30px;transform:translateX(-50%);border-radius:50%;background:radial-gradient(ellipse at center,rgba(45,212,191,.28),rgba(45,212,191,.05) 60%,transparent 75%);opacity:0;transition:opacity .6s;pointer-events:none;}
+#aclive-stage.on #acl-pedestal{opacity:1;}
+#acl-title{position:absolute;left:50%;bottom:96px;transform:translateX(-50%) translateY(10px);text-align:center;font-family:'Orbitron','Rajdhani',sans-serif;color:#eafffb;letter-spacing:3px;font-weight:800;font-size:20px;text-shadow:0 0 20px rgba(45,212,191,.7);opacity:0;transition:opacity .5s,transform .5s;pointer-events:none;white-space:nowrap;}
+#acl-title.show{opacity:1;transform:translateX(-50%) translateY(0);}
+#acl-title small{display:block;font-family:'Rajdhani',sans-serif;font-size:11px;letter-spacing:2px;color:rgba(45,212,191,.85);font-weight:600;margin-top:4px;}
+#acl-skip{position:absolute;top:18px;right:22px;pointer-events:auto;cursor:pointer;background:rgba(6,22,32,.8);border:1px solid rgba(45,212,191,.4);color:rgba(223,250,245,.85);font-family:'Rajdhani',sans-serif;font-size:12px;font-weight:600;letter-spacing:1px;border-radius:999px;padding:6px 14px;transition:all .15s;}
+#acl-skip:hover{background:rgba(45,212,191,.18);color:#fff;border-color:#2dd4bf;}
+.acl-dev-logo{transform-box:fill-box;transform-origin:center;animation:aclLogoPulse 2.4s ease-in-out infinite;}
+@keyframes aclLogoPulse{0%,100%{opacity:.85;}50%{opacity:1;}}
+.acl-spark{transform-box:fill-box;transform-origin:center;animation:aclSpark 1.8s ease-in-out infinite;}
+@keyframes aclSpark{0%,100%{opacity:.3;transform:scale(.8) rotate(0);}50%{opacity:1;transform:scale(1.15) rotate(20deg);}}
+@media (max-width:819px){#aclive{display:none !important;}}
+@media (prefers-reduced-motion: reduce){.acl-svg.walking .leg-l,.acl-svg.walking .leg-r,.acl-svg.walking .arm-l,.acl-svg.walking .arm-r,.acl-svg.walking .acl-body{animation:none;}}
+</style>
+
+<div id="aclive" class="hidden" aria-hidden="true">
+  <div class="acl-say" id="acl-say"></div>
+  <div class="acl-char" id="acl-char" title="Tap me for a keynote 🎤" role="button" aria-label="AnyClip — tap for a hardware keynote">
+    <div class="acl-hintring"></div>
+    <div class="acl-chat" id="acl-chat" title="Chat with AnyClip">💬</div>
+    <svg class="acl-svg" viewBox="-6 -10 92 138" xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        <radialGradient id="aclBg2" cx="50%" cy="38%" r="62%"><stop offset="0%" stop-color="#0a3a4a"/><stop offset="100%" stop-color="#020e1a"/></radialGradient>
+        <linearGradient id="aclLimb" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#1b5a59"/><stop offset="100%" stop-color="#0c3030"/></linearGradient>
+        <filter id="aclGlow2"><feGaussianBlur stdDeviation="1.6" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+      </defs>
+      <rect class="leg-l" x="29" y="86" width="8" height="34" rx="4" fill="url(#aclLimb)" stroke="#2dd4bf" stroke-width="1.2"/>
+      <rect class="leg-r" x="43" y="86" width="8" height="34" rx="4" fill="url(#aclLimb)" stroke="#2dd4bf" stroke-width="1.2"/>
+      <rect class="arm-l" x="11" y="44" width="7" height="30" rx="3.5" fill="url(#aclLimb)" stroke="#2dd4bf" stroke-width="1.1"/>
+      <rect class="arm-r" x="62" y="44" width="7" height="30" rx="3.5" fill="url(#aclLimb)" stroke="#2dd4bf" stroke-width="1.1"/>
+      <g class="acl-body">
+        <polygon points="40,6 70,24 70,62 40,80 10,62 10,24" fill="url(#aclBg2)" stroke="#2dd4bf" stroke-width="2.6"/>
+        <polygon points="40,15 62,28 62,58 40,71 18,58 18,28" fill="none" stroke="rgba(0,245,255,.2)" stroke-width="1"/>
+        <line x1="40" y1="6" x2="40" y2="-4" stroke="#2dd4bf" stroke-width="1.6" stroke-linecap="round"/>
+        <circle cx="40" cy="-6" r="2.6" fill="#2dd4bf" filter="url(#aclGlow2)"/>
+        <g filter="url(#aclGlow2)">
+          <ellipse class="acl-eye" cx="31" cy="38" rx="4.6" ry="5.6" fill="#2dd4bf"/>
+          <ellipse class="acl-eye" cx="49" cy="38" rx="4.6" ry="5.6" fill="#2dd4bf"/>
+        </g>
+        <circle cx="32" cy="39" r="2" fill="rgba(0,0,0,.6)"/>
+        <circle cx="50" cy="39" r="2" fill="rgba(0,0,0,.6)"/>
+        <path d="M31 54 Q40 62 49 54" fill="none" stroke="#2dd4bf" stroke-width="2.4" stroke-linecap="round"/>
+      </g>
+    </svg>
+  </div>
+</div>
+
+<div id="aclive-stage" aria-hidden="true">
+  <div id="acl-catch"></div>
+  <div id="acl-spot"></div>
+  <div id="acl-pedestal"></div>
+  <div id="acl-device-wrap">
+    <svg width="220" height="210" viewBox="0 0 220 210" xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        <linearGradient id="aclDevBody" x1="0" y1="0" x2="0.4" y2="1"><stop offset="0%" stop-color="#4a4f55"/><stop offset="45%" stop-color="#2b3036"/><stop offset="100%" stop-color="#14171b"/></linearGradient>
+        <linearGradient id="aclDevTop" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="rgba(255,255,255,.18)"/><stop offset="100%" stop-color="rgba(255,255,255,0)"/></linearGradient>
+        <linearGradient id="aclGold" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="#f4d77a"/><stop offset="100%" stop-color="#b9871f"/></linearGradient>
+        <radialGradient id="aclLogoGlow" cx="50%" cy="50%" r="50%"><stop offset="0%" stop-color="rgba(45,212,191,.55)"/><stop offset="100%" stop-color="rgba(45,212,191,0)"/></radialGradient>
+        <filter id="aclDevGlow"><feGaussianBlur stdDeviation="2.4" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+      </defs>
+      <path d="M150 44 C150 20 168 18 176 6" fill="none" stroke="#1c1f24" stroke-width="6" stroke-linecap="round"/>
+      <path d="M150 44 C150 20 168 18 176 6" fill="none" stroke="#3a3f45" stroke-width="2.4" stroke-linecap="round"/>
+      <rect x="183" y="92" width="14" height="12" rx="2" fill="url(#aclGold)"/>
+      <rect x="195" y="95" width="9" height="6" rx="1.5" fill="#8a661a"/>
+      <rect x="36" y="40" width="150" height="150" rx="20" fill="url(#aclDevBody)" stroke="#0a0c0f" stroke-width="2"/>
+      <rect x="42" y="46" width="138" height="60" rx="16" fill="url(#aclDevTop)"/>
+      <circle cx="111" cy="118" r="50" fill="url(#aclLogoGlow)"/>
+      <g class="acl-dev-logo" filter="url(#aclDevGlow)">
+        <circle cx="111" cy="118" r="34" fill="none" stroke="#2dd4bf" stroke-width="3.4"/>
+        <path d="M88 116 Q111 99 134 116" fill="none" stroke="#2dd4bf" stroke-width="3.2" stroke-linecap="round"/>
+        <path d="M90 122 Q111 138 132 122" fill="none" stroke="#2dd4bf" stroke-width="3.2" stroke-linecap="round"/>
+        <line x1="111" y1="82" x2="111" y2="92" stroke="#2dd4bf" stroke-width="3" stroke-linecap="round"/>
+        <circle cx="111" cy="119" r="3.4" fill="#9bf6e8"/>
+      </g>
+      <g class="acl-spark"><path d="M170 150 l3 8 8 3 -8 3 -3 8 -3 -8 -8 -3 8 -3z" fill="#9bf6e8"/></g>
+    </svg>
+  </div>
+  <div id="acl-title">ANYONE HARDWARE RELAY<small>PLUG IN · BECOME THE NETWORK</small></div>
+  <div id="acl-skip">SKIP ▸</div>
+</div>
+
+<script>
+/* AnyClip Live — strolling mascot + keynote showcase. Self-contained; reuses the
+ * existing #anyclip-avatar click to open chat, never modifies chat internals. */
+(function(){
+  if(window.__acliveInit) return; window.__acliveInit = true;
+  var el, charEl, svg, sayEl, stage, deviceWrap, titleEl, reduced=false;
+  var x=240, dir=1, speed=40, walking=false, presenting=false, raf=0, last=0;
+  var minX=230, maxX=900, kToken=0, sayTimer=0;
+  var QUIPS = ["Exploring the network…","Tap me for a keynote 🎤","Privacy looks good on you.","7,000+ relays and counting.","Stay anonymous out there. ✦"];
+  var LINES = [
+    "Privacy shouldn't be hard.",
+    "So we put the whole network… in your hands.",
+    "Months of work — right here.",
+    "Introducing the Anyone Hardware Relay.",
+    "Plug it in. You ARE the network.",
+    "Anonymity. Beautifully simple. ✦",
+    "…one more thing — yes, it glows. 🛜"
+  ];
+  function $(id){ return document.getElementById(id); }
+  function ready(){
+    el = $('aclive'); charEl = $('acl-char'); sayEl = $('acl-say');
+    stage = $('aclive-stage'); deviceWrap = $('acl-device-wrap'); titleEl = $('acl-title');
+    if(!el || !charEl) return;
+    svg = charEl.querySelector('.acl-svg');
+    try{ reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches; }catch(_){}
+    bounds(); x = minX + 40;
+    charEl.addEventListener('click', function(e){ if(e.target && e.target.id==='acl-chat') return; if(presenting){ endKeynote(); } else { keynote(); } });
+    $('acl-chat').addEventListener('click', function(e){ e.stopPropagation(); openChat(); });
+    $('acl-catch').addEventListener('click', endKeynote);
+    $('acl-skip').addEventListener('click', endKeynote);
+    document.addEventListener('keydown', function(e){ if(e.key==='Escape' && presenting) endKeynote(); });
+    window.addEventListener('resize', bounds);
+    last = performance.now(); raf = requestAnimationFrame(frame);
+    setInterval(visibility, 800);
+    setInterval(function(){ if(walking && !presenting && !el.classList.contains('hidden') && Math.random()<.5) quip(); }, 13000);
+    setTimeout(function(){ if(!el.classList.contains('hidden')){ el.classList.add('hint'); wave(); say("Hi! I'm AnyClip 👋  Tap me.", 4200); } }, 1500);
+    window.acliveKeynote = keynote;
+    visibility();
+  }
+  function bounds(){
+    var left = 230;
+    try{ var sb = document.querySelector('#sidebar, .sidebar, #left-rail, #side-panel'); if(sb){ var r=sb.getBoundingClientRect(); if(r.width>40 && r.left<60) left = r.right + 14; } }catch(_){}
+    minX = left; maxX = Math.max(left+140, window.innerWidth - 104);
+    if(x<minX) x=minX; if(x>maxX) x=maxX;
+  }
+  function setDir(){ el.classList.toggle('dir-left', dir<0); }
+  function apply(){ el.style.transform = 'translateX(' + Math.round(x) + 'px)'; }
+  function frame(now){
+    var dt = Math.min(.05, (now-last)/1000); last = now;
+    if(walking && !presenting && !reduced){
+      x += dir * speed * dt;
+      if(x >= maxX){ x = maxX; dir = -1; setDir(); }
+      else if(x <= minX){ x = minX; dir = 1; setDir(); }
+      apply();
+    }
+    raf = requestAnimationFrame(frame);
+  }
+  function say(text, ms){
+    if(!sayEl) return; sayEl.textContent = text; sayEl.classList.add('show');
+    if(sayTimer) clearTimeout(sayTimer);
+    if(ms){ sayTimer = setTimeout(function(){ sayEl.classList.remove('show'); }, ms); }
+  }
+  function quip(){ say(QUIPS[Math.floor(Math.random()*QUIPS.length)], 3400); }
+  function wave(){ if(reduced||!svg) return; svg.classList.add('waving'); setTimeout(function(){ svg.classList.remove('waving'); }, 1800); }
+  function openChat(){ var av = document.getElementById('anyclip-avatar'); if(av){ try{ av.click(); }catch(_){}} }
+  function sleep(ms){ return new Promise(function(res){ setTimeout(res, ms); }); }
+  function tweenX(target, dur){
+    return new Promise(function(res){
+      var sx=x, d=target-x, t0=performance.now();
+      (function step(t){
+        var k=Math.min(1,(t-t0)/dur);
+        var e = k<.5 ? 4*k*k*k : 1-Math.pow(-2*k+2,3)/2;
+        x = sx + d*e; apply();
+        if(k<1) requestAnimationFrame(step); else res();
+      })(performance.now());
+    });
+  }
+  async function keynote(){
+    if(presenting) return; presenting = true; var my = ++kToken;
+    el.classList.remove('hint');
+    walking = false; svg.classList.remove('walking');
+    sayEl.classList.remove('show');
+    dir = 1; setDir();
+    var target = Math.max(minX, Math.round(window.innerWidth/2) - 200);
+    if(!reduced){ svg.classList.add('walking'); }
+    await tweenX(target, reduced?200:1100);
+    if(kToken!==my) return;
+    svg.classList.remove('walking');
+    el.classList.add('kn');
+    stage.classList.add('on');
+    await sleep(250); if(kToken!==my) return;
+    svg.classList.add('presenting');
+    for(var i=0;i<LINES.length;i++){
+      if(kToken!==my) return;
+      say(LINES[i], 0);
+      if(i===3){ deviceWrap.classList.add('up'); titleEl.classList.add('show'); }
+      await sleep(i===3?2900:2500);
+    }
+    if(kToken!==my) return;
+    sayEl.classList.remove('show');
+    svg.classList.remove('presenting');
+    cleanup();
+    presenting = false;
+    if(shouldShow()){ walking = !reduced; svg.classList.toggle('walking', !reduced); }
+  }
+  function cleanup(){
+    if(stage) stage.classList.remove('on');
+    if(deviceWrap) deviceWrap.classList.remove('up');
+    if(titleEl) titleEl.classList.remove('show');
+    if(svg) svg.classList.remove('presenting');
+    if(el) el.classList.remove('kn');
+  }
+  function endKeynote(){
+    kToken++;
+    cleanup();
+    presenting = false;
+    if(shouldShow()){ walking = !reduced; if(svg) svg.classList.toggle('walking', !reduced); }
+    if(sayEl) sayEl.classList.remove('show');
+  }
+  function shouldShow(){
+    if(window.innerWidth < 820) return false;
+    if(document.body.classList.contains('explore-mode')) return false;
+    var ap = document.getElementById('anychat-panel'); if(ap && ap.classList.contains('open')) return false;
+    var bb = document.getElementById('anyclip-bubble'); if(bb && bb.classList.contains('visible')) return false;
+    return true;
+  }
+  function visibility(){
+    var show = shouldShow();
+    el.classList.toggle('hidden', !show);
+    document.body.classList.toggle('aclive-on', show);
+    if(!show){ walking = false; if(presenting) endKeynote(); }
+    else if(!presenting){ walking = !reduced; if(svg) svg.classList.toggle('walking', !reduced); }
+  }
+  if(document.readyState === 'loading') document.addEventListener('DOMContentLoaded', ready);
+  else ready();
+})();
+</script>
+
 </body>
 </html><!-- ══ MOBILE BOTTOM NAV ══ -->
 <div id="mobile-nav">
