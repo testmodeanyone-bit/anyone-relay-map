@@ -31504,7 +31504,12 @@ if(AC.minimized)AC._minUnread=(AC._minUnread||0)+1;return _origAdd.apply(this,ar
 
 <!-- ════════ AnyClip Live: roaming mascot + hardware keynote (v537) ════════ -->
 <style id="aclive-style">
-#aclive{position:fixed;left:0;bottom:48px;z-index:470;width:84px;height:128px;pointer-events:none;will-change:transform;}
+#aclive{position:fixed;left:0;bottom:20px;z-index:470;width:84px;height:128px;pointer-events:none;will-change:transform;}
+#aclive .acl-shadow{position:absolute;left:50%;bottom:4px;width:52px;height:11px;transform:translateX(-50%);border-radius:50%;background:radial-gradient(ellipse at center,rgba(0,0,0,.5),rgba(0,0,0,0) 72%);pointer-events:none;z-index:-1;transition:opacity .25s,transform .25s;}
+#aclive.climbing .acl-shadow{opacity:.35;transform:translateX(-50%) scale(.78);}
+.acl-svg.climbing .arm-l{animation:none !important;transform:rotate(-46deg);}
+.acl-svg.climbing .arm-r{animation:none !important;transform:rotate(46deg);}
+.acl-svg.climbing .acl-body{animation:none !important;transform:translateY(-1px) rotate(-3deg);}
 #aclive.hidden{display:none;}
 #aclive.kn{z-index:9500;}
 body.aclive-on #anyclip-avatar{display:none !important;}
@@ -31569,6 +31574,7 @@ body.aclive-on #anyclip-avatar{display:none !important;}
 </style>
 
 <div id="aclive" class="hidden" aria-hidden="true">
+  <div class="acl-shadow"></div>
   <div class="acl-say" id="acl-say"></div>
   <div class="acl-char" id="acl-char" title="Tap me for a keynote 🎤" role="button" aria-label="AnyClip — tap for a hardware keynote">
     <div class="acl-hintring"></div>
@@ -31579,10 +31585,8 @@ body.aclive-on #anyclip-avatar{display:none !important;}
         <linearGradient id="aclLimb" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#1b5a59"/><stop offset="100%" stop-color="#0c3030"/></linearGradient>
         <filter id="aclGlow2"><feGaussianBlur stdDeviation="1.6" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
       </defs>
-      <rect class="leg-l" x="29" y="86" width="8" height="34" rx="4" fill="url(#aclLimb)" stroke="#2dd4bf" stroke-width="1.2"/>
-      <rect class="leg-r" x="43" y="86" width="8" height="34" rx="4" fill="url(#aclLimb)" stroke="#2dd4bf" stroke-width="1.2"/>
-      <rect class="arm-l" x="11" y="44" width="7" height="30" rx="3.5" fill="url(#aclLimb)" stroke="#2dd4bf" stroke-width="1.1"/>
-      <rect class="arm-r" x="62" y="44" width="7" height="30" rx="3.5" fill="url(#aclLimb)" stroke="#2dd4bf" stroke-width="1.1"/>
+      <g class="leg-l"><rect x="29" y="86" width="8" height="32" rx="4" fill="url(#aclLimb)" stroke="#2dd4bf" stroke-width="1.2"/><ellipse cx="33" cy="119" rx="7" ry="3.4" fill="#0c3030" stroke="#2dd4bf" stroke-width="1"/></g>
+      <g class="leg-r"><rect x="43" y="86" width="8" height="32" rx="4" fill="url(#aclLimb)" stroke="#2dd4bf" stroke-width="1.2"/><ellipse cx="47" cy="119" rx="7" ry="3.4" fill="#0c3030" stroke="#2dd4bf" stroke-width="1"/></g>
       <g class="acl-body">
         <polygon points="40,6 70,24 70,62 40,80 10,62 10,24" fill="url(#aclBg2)" stroke="#2dd4bf" stroke-width="2.6"/>
         <polygon points="40,15 62,28 62,58 40,71 18,58 18,28" fill="none" stroke="rgba(0,245,255,.2)" stroke-width="1"/>
@@ -31595,7 +31599,10 @@ body.aclive-on #anyclip-avatar{display:none !important;}
         <circle cx="32" cy="39" r="2" fill="rgba(0,0,0,.6)"/>
         <circle cx="50" cy="39" r="2" fill="rgba(0,0,0,.6)"/>
         <path d="M31 54 Q40 62 49 54" fill="none" stroke="#2dd4bf" stroke-width="2.4" stroke-linecap="round"/>
+        <circle cx="40" cy="50" r="1.6" fill="#2dd4bf" opacity=".55"/>
       </g>
+      <g class="arm-l"><rect x="6" y="42" width="7" height="28" rx="3.5" fill="url(#aclLimb)" stroke="#2dd4bf" stroke-width="1.1"/><circle cx="9.5" cy="71" r="4" fill="#1b5a59" stroke="#2dd4bf" stroke-width="1"/></g>
+      <g class="arm-r"><rect x="67" y="42" width="7" height="28" rx="3.5" fill="url(#aclLimb)" stroke="#2dd4bf" stroke-width="1.1"/><circle cx="70.5" cy="71" r="4" fill="#1b5a59" stroke="#2dd4bf" stroke-width="1"/></g>
     </svg>
   </div>
 </div>
@@ -31641,7 +31648,7 @@ body.aclive-on #anyclip-avatar{display:none !important;}
   if(window.__acliveInit) return; window.__acliveInit = true;
   var el, charEl, svg, sayEl, stage, deviceWrap, titleEl, reduced=false;
   var x=240, dir=1, speed=40, walking=false, presenting=false, raf=0, last=0;
-  var minX=230, maxX=900, kToken=0, sayTimer=0;
+  var minX=230, maxX=900, kToken=0, sayTimer=0, obst=null;
   var QUIPS = ["Exploring the network…","Tap me for a keynote 🎤","Privacy looks good on you.","7,000+ relays and counting.","Stay anonymous out there. ✦"];
   var LINES = [
     "Privacy shouldn't be hard.",
@@ -31678,9 +31685,32 @@ body.aclive-on #anyclip-avatar{display:none !important;}
     try{ var sb = document.querySelector('#sidebar, .sidebar, #left-rail, #side-panel'); if(sb){ var r=sb.getBoundingClientRect(); if(r.width>40 && r.left<60) left = r.right + 14; } }catch(_){}
     minX = left; maxX = Math.max(left+140, window.innerWidth - 104);
     if(x<minX) x=minX; if(x>maxX) x=maxX;
+    refreshObstacle();
   }
   function setDir(){ el.classList.toggle('dir-left', dir<0); }
-  function apply(){ el.style.transform = 'translateX(' + Math.round(x) + 'px)'; }
+  function feetBaseline(){ var b=20; try{ b=parseFloat(getComputedStyle(el).bottom)||20; }catch(_){} return b + 6; }
+  function refreshObstacle(){
+    var o = document.getElementById('relay-legend');
+    if(!o){ obst=null; return; }
+    var r = o.getBoundingClientRect();
+    if(!r.width || !r.height){ obst=null; return; }
+    obst = { l:r.left, r:r.right, lift: Math.max(0, (window.innerHeight - r.top) - feetBaseline() + 3) };
+  }
+  function liftAt(cx){
+    if(!obst) return 0;
+    var ramp=22, L=obst.l, R=obst.r, full=obst.lift;
+    if(cx < L-ramp || cx > R+ramp) return 0;
+    if(cx < L) return full * (cx-(L-ramp))/ramp;   // climbing up
+    if(cx > R) return full * (1-(cx-R)/ramp);       // stepping down
+    return full;                                    // standing on top
+  }
+  function apply(){
+    var lift = (walking && !presenting) ? liftAt(x+42) : 0;
+    el.style.transform = 'translateX(' + Math.round(x) + 'px) translateY(' + (-Math.round(lift)) + 'px)';
+    var climbing = lift > 4;
+    if(svg) svg.classList.toggle('climbing', climbing);
+    el.classList.toggle('climbing', climbing);
+  }
   function frame(now){
     var dt = Math.min(.05, (now-last)/1000); last = now;
     if(walking && !presenting && !reduced){
@@ -31717,7 +31747,7 @@ body.aclive-on #anyclip-avatar{display:none !important;}
     walking = false; svg.classList.remove('walking');
     sayEl.classList.remove('show');
     dir = 1; setDir();
-    var target = Math.max(minX, Math.round(window.innerWidth/2) - 200);
+    var target = Math.max(minX, Math.round(window.innerWidth/2) - 300);
     if(!reduced){ svg.classList.add('walking'); }
     await tweenX(target, reduced?200:1100);
     if(kToken!==my) return;
@@ -31761,6 +31791,7 @@ body.aclive-on #anyclip-avatar{display:none !important;}
     return true;
   }
   function visibility(){
+    refreshObstacle();
     var show = shouldShow();
     el.classList.toggle('hidden', !show);
     document.body.classList.toggle('aclive-on', show);
