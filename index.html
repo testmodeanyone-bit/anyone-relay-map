@@ -31802,7 +31802,7 @@ body.aclive-on #anyclip-avatar{display:none !important;}
 </script>
 
 
-<!-- ════════ Compass Utility: orientation + relay finder (v543) ════════ -->
+<!-- ════════ Compass Utility: orientation + relay finder (v544) ════════ -->
 <style>
   #cmp-chip, #cmp-read{
     position:fixed; right:56px; z-index:401;
@@ -31951,6 +31951,7 @@ body.aclive-on #anyclip-avatar{display:none !important;}
                    '. Click compass to fly there. Click chip to cycle.';
         read.style.display='block';
       }
+      c.style.cursor = (st.mode==='north') ? 'grab' : 'pointer';
       c.setAttribute('aria-label', chip.title);
       sync();
     }
@@ -31966,12 +31967,14 @@ body.aclive-on #anyclip-avatar{display:none !important;}
     var dragging=false, moved=false, startAng=0, startB=0;
     function ctr(){ var r=c.getBoundingClientRect(); return {x:r.left+r.width/2, y:r.top+r.height/2}; }
     function ang(e){ var o=ctr(); return deg(Math.atan2(e.clientY-o.y, e.clientX-o.x)); }
-    c.addEventListener('pointerdown', function(e){ if(curMode()!=='north') return;
-      dragging=true; moved=false; startAng=ang(e); startB=M.getBearing()||0;
+    c.addEventListener('pointerdown', function(e){ moved=false; if(curMode()!=='north') return;
+      dragging=true; startAng=ang(e); startB=M.getBearing()||0;
       c.style.cursor='grabbing'; try{ c.setPointerCapture(e.pointerId); }catch(_){}
       e.stopPropagation(); });
     c.addEventListener('pointermove', function(e){ if(!dragging) return;
-      var dd=ang(e)-startAng; if(Math.abs(dd)>3) moved=true; if(moved){ M.setBearing(startB+dd); } });
+      var dd=ang(e)-startAng; dd=((dd+540)%360)-180; /* normalize to (-180,180] */
+      if(Math.abs(dd)>3) moved=true;
+      if(moved){ M.setBearing(startB-dd); } /* grabbed point follows the cursor */ });
     c.addEventListener('pointerup', function(e){ dragging=false; c.style.cursor='grab';
       try{ c.releasePointerCapture(e.pointerId); }catch(_){} });
     c.addEventListener('click', function(e){ e.stopPropagation();
