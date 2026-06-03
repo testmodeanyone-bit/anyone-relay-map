@@ -32161,6 +32161,108 @@ body.aclive-on #anyclip-avatar{display:none !important;}
 })();
 </script>
 
+<!-- ════════ Nearby Relays Radar: 5 nearest relays to map center (v551) ════════ -->
+<script>
+/* v551: compact, collapsible HUD panel (top-right) listing the 5 relays nearest to the
+ * current MAP CENTER (not the user's location — privacy-fine). Updates on moveend/rotate.
+ * Each row: tier color, nickname, city·CC, distance, and a direction arrow (screen-space
+ * bearing from center, so it's rotation-aware). Click a row → selectRelay() flies there and
+ * opens the floating detail card (same single-card flow as v549). Self-contained; guarded by
+ * window.__radarWired; hidden on mobile (<=768px) like the compass/ticker. */
+(function(){
+  if(window.__radarWired) return; window.__radarWired = true;
+  var TIER = { exit:'#ff6b35', guard:'#a78bfa', middle:'#2dd4bf', hw:'#fbbf24' };
+  function tierOf(fp){ fp=(fp||'').toUpperCase();
+    try{ if(window.hwFps && window.hwFps.has(fp)) return 'hw';
+         if(window.exitFps && window.exitFps.has(fp)) return 'exit';
+         if(window.guardFps && window.guardFps.has(fp)) return 'guard'; }catch(_){}
+    return 'middle'; }
+  function hav(la1,lo1,la2,lo2){ var R=6371, tR=Math.PI/180;
+    var dLa=(la2-la1)*tR, dLo=(lo2-lo1)*tR;
+    var s=Math.sin(dLa/2)*Math.sin(dLa/2)+Math.cos(la1*tR)*Math.cos(la2*tR)*Math.sin(dLo/2)*Math.sin(dLo/2);
+    return 2*R*Math.atan2(Math.sqrt(s),Math.sqrt(1-s)); }
+  function fmtKm(km){ return km<1?'<1 km':(km<10?km.toFixed(1)+' km':Math.round(km).toLocaleString()+' km'); }
+  function esc(s){ return String(s==null?'':s).replace(/[&<>]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;'}[c];}); }
+
+  function boot(){
+    var M=window.__anyoneMapLibre; if(!M) return false;
+    if(document.getElementById('radar-panel')) return true;
+    var open=true; try{ open = localStorage.getItem('radar_open')!=='0'; }catch(_){}
+    var p=document.createElement('div'); p.id='radar-panel'; if(!open) p.className='collapsed';
+    p.innerHTML='<div id="radar-head"><span class="radar-ico">◎</span><span class="radar-ttl">NEARBY RELAYS</span><span class="radar-sub">to center</span><span class="radar-chev">▾</span></div><div id="radar-body"><div class="radar-empty">scanning…</div></div>';
+    document.body.appendChild(p);
+    if(!document.getElementById('radar-style')){ var st=document.createElement('style'); st.id='radar-style'; st.textContent=
+       '#radar-panel{position:fixed;top:64px;right:14px;width:236px;z-index:260;font-family:Rajdhani,Outfit,system-ui,sans-serif;'
+      +'background:linear-gradient(165deg,rgba(6,20,32,.92),rgba(2,11,20,.9));border:1px solid rgba(0,245,255,.2);'
+      +'border-radius:12px;box-shadow:0 8px 24px rgba(0,0,0,.5);backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);overflow:hidden;}'
+      +'#radar-head{display:flex;align-items:center;gap:6px;padding:8px 11px;cursor:pointer;user-select:none;border-bottom:1px solid rgba(0,245,255,.1);}'
+      +'#radar-panel.collapsed #radar-head{border-bottom:none;}'
+      +'.radar-ico{color:#00f5ff;font-size:12px;}'
+      +'.radar-ttl{font-family:Orbitron,sans-serif;font-size:9.5px;font-weight:700;letter-spacing:1.4px;color:#d7f4fb;flex:0 0 auto;}'
+      +'.radar-sub{font-size:9px;color:rgba(138,188,196,.6);letter-spacing:.5px;flex:1;}'
+      +'.radar-chev{color:rgba(0,245,255,.6);font-size:10px;transition:transform .2s;}'
+      +'#radar-panel.collapsed .radar-chev{transform:rotate(-90deg);}'
+      +'#radar-body{max-height:300px;overflow:hidden;transition:max-height .25s ease, opacity .2s;opacity:1;}'
+      +'#radar-panel.collapsed #radar-body{max-height:0;opacity:0;}'
+      +'.radar-row{display:flex;align-items:center;gap:8px;padding:6px 11px;cursor:pointer;border-bottom:1px solid rgba(255,255,255,.04);transition:background .12s;}'
+      +'.radar-row:last-child{border-bottom:none;}'
+      +'.radar-row:hover{background:rgba(0,245,255,.06);}'
+      +'.radar-dot{width:8px;height:8px;border-radius:50%;flex:none;box-shadow:0 0 6px currentColor;}'
+      +'.radar-meta{flex:1;min-width:0;display:flex;flex-direction:column;line-height:1.25;}'
+      +'.radar-nm{font-size:12px;font-weight:600;color:#eafff9;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}'
+      +'.radar-loc{font-size:9.5px;color:rgba(138,188,196,.7);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;letter-spacing:.3px;}'
+      +'.radar-right{display:flex;align-items:center;gap:6px;flex:none;}'
+      +'.radar-km{font-size:10px;color:#7fe9ff;font-family:"Share Tech Mono",monospace;white-space:nowrap;}'
+      +'.radar-arr{width:13px;height:13px;flex:none;color:rgba(0,245,255,.75);}'
+      +'.radar-empty{padding:14px 11px;font-size:11px;color:rgba(138,188,196,.6);text-align:center;letter-spacing:.5px;}'
+      +'body.light #radar-panel{background:rgba(245,250,255,.93);border-color:rgba(0,120,160,.3);}'
+      +'body.light .radar-nm{color:#0a2540;} body.light .radar-loc{color:#4a6572;} body.light .radar-km{color:#0e7490;}'
+      +'@media(max-width:768px){#radar-panel{display:none!important;}}';
+      document.head.appendChild(st); }
+    document.getElementById('radar-head').addEventListener('click', function(){
+      p.classList.toggle('collapsed');
+      try{ localStorage.setItem('radar_open', p.classList.contains('collapsed')?'0':'1'); }catch(_){}
+    });
+    var body=document.getElementById('radar-body');
+    function render(){
+      var A=window.allRelays; if(!A || !A.length){ body.innerHTML='<div class="radar-empty">scanning…</div>'; return; }
+      var ct=M.getCenter(), clat=ct.lat, clng=ct.lng;
+      var arr=[];
+      for(var i=0;i<A.length;i++){ var r=A[i]; if(r.lat==null||r.lon==null) continue; arr.push({ r:r, d:hav(clat,clng,r.lat,r.lon) }); }
+      arr.sort(function(a,b){ return a.d-b.d; });
+      var top=arr.slice(0,5);
+      if(!top.length){ body.innerHTML='<div class="radar-empty">no relays</div>'; return; }
+      var p0; try{ p0=M.project([clng,clat]); }catch(_){ p0={x:0,y:0}; }
+      var html='';
+      for(var j=0;j<top.length;j++){ var r=top[j].r, d=top[j].d, t=tierOf(r.fp), col=TIER[t]||TIER.middle;
+        var ang=0; try{ var p1=M.project([r.lon,r.lat]); ang=Math.atan2(p1.y-p0.y, p1.x-p0.x)*180/Math.PI + 90; }catch(_){}
+        var nm=esc(r.nickname || (r.fp ? r.fp.slice(0,10) : 'relay'));
+        var loc=esc([r.cityName, r.countryCode].filter(Boolean).join(', ') || r.countryName || '—');
+        html+='<div class="radar-row" data-fp="'+esc(r.fp)+'" data-lat="'+r.lat+'" data-lon="'+r.lon+'">'
+          +'<span class="radar-dot" style="background:'+col+';color:'+col+'"></span>'
+          +'<span class="radar-meta"><span class="radar-nm">'+nm+'</span><span class="radar-loc">'+loc+'</span></span>'
+          +'<span class="radar-right"><span class="radar-km">'+fmtKm(d)+'</span>'
+          +'<svg class="radar-arr" viewBox="0 0 24 24" style="transform:rotate('+ang.toFixed(1)+'deg)"><path fill="currentColor" d="M12 2l5 9h-3v9h-4v-9H7z"/></svg>'
+          +'</span></div>';
+      }
+      body.innerHTML=html;
+      [].forEach.call(body.querySelectorAll('.radar-row'), function(row){
+        row.addEventListener('click', function(){
+          var fp=row.getAttribute('data-fp'), la=+row.getAttribute('data-lat'), lo=+row.getAttribute('data-lon');
+          if(fp && typeof selectRelay==='function'){ window.__rdAnchor=null; try{ selectRelay(fp, la, lo, true); }catch(_){} }
+        });
+      });
+    }
+    var tmr=null; function schedule(){ if(tmr) clearTimeout(tmr); tmr=setTimeout(render, 180); }
+    M.on('moveend', schedule); M.on('rotate', schedule);
+    render();
+    if(!(window.allRelays && window.allRelays.length)){ var k=0, iv2=setInterval(function(){ k++; if((window.allRelays&&window.allRelays.length)||k>60){ clearInterval(iv2); render(); } }, 500); }
+    return true;
+  }
+  if(!boot()){ var n=0, iv=setInterval(function(){ n++; if(boot()||n>150){ clearInterval(iv); } }, 400); }
+})();
+</script>
+
 </body>
 </html><!-- ══ MOBILE BOTTOM NAV ══ -->
 <div id="mobile-nav">
