@@ -8083,6 +8083,7 @@ let relayData = [], ranked = [], maxCount = 1;
 let exitFps   = new Set();  // fingerprints with Exit flag
 let guardFps  = new Set();  // fingerprints with Guard flag
 let hwFps     = new Set();  // fingerprints with hardware relay flag
+window.exitFps = exitFps; window.guardFps = guardFps; window.hwFps = hwFps; /* v543: expose tier sets for compass relay-finder */
 let stableFps = new Set();  // fingerprints with Stable+Fast flags (tier A uptime)
 let fastFps   = new Set();  // fingerprints with Fast flag only (tier B uptime)
 let geoBoostFps = new Set(); // fingerprints where loc_mult > 1.0 (geo reward boost)
@@ -8360,6 +8361,7 @@ async function fetchFlagIndex(){
       if(type.includes('g')) guardFps.add(FP);
       if(type.includes('h')) hwFps.add(FP);
     }
+    window.exitFps = exitFps; window.guardFps = guardFps; window.hwFps = hwFps; /* v543: keep compass tier sets in sync */
 
     const hwEl = document.getElementById('sHW');
     if(hwEl) hwEl.textContent = hwFps.size.toLocaleString();
@@ -8520,6 +8522,7 @@ async function fetchExitRelays(){
         if(hwEl) hwEl.textContent = hwD.count.toLocaleString();
         if(hwD.fingerprints && hwD.fingerprints.length){
           hwFps = new Set(hwD.fingerprints.map(fp => fp.toUpperCase()));
+          window.hwFps = hwFps; /* v543: keep compass hw set in sync */
           if(relayData.length){
             tagZones(relayData);
             _lastDrawHash = ''; // force redraw
@@ -31799,7 +31802,7 @@ body.aclive-on #anyclip-avatar{display:none !important;}
 </script>
 
 
-<!-- ════════ Compass Utility: orientation + relay finder (v542) ════════ -->
+<!-- ════════ Compass Utility: orientation + relay finder (v543) ════════ -->
 <style>
   #cmp-chip, #cmp-read{
     position:fixed; right:56px; z-index:401;
@@ -31812,22 +31815,26 @@ body.aclive-on #anyclip-avatar{display:none !important;}
     cursor:pointer; user-select:none; pointer-events:auto;
     box-shadow:0 0 10px rgba(0,245,255,.12); transition:background .15s, box-shadow .15s, transform .1s;
   }
-  #cmp-chip:hover{ background:rgba(0,32,52,.92); box-shadow:0 0 14px rgba(0,245,255,.32); }
+  #cmp-chip:hover{ background:rgba(0,32,52,.92); }
   #cmp-chip:active{ transform:scale(.95); }
   #cmp-read{
-    bottom:146px; padding:3px 9px; border:1px solid rgba(45,212,191,.42); border-radius:8px;
-    font:600 10px/1.2 'Helvetica Neue',Arial,sans-serif; letter-spacing:.3px; color:#9ffdf0; display:none;
+    bottom:146px; padding:4px 9px; border:1px solid rgba(45,212,191,.42); border-radius:8px;
+    color:#9ffdf0; display:none; line-height:1.25;
   }
+  #cmp-read .cmp-r1{ font:600 10px/1.25 'Helvetica Neue',Arial,sans-serif; letter-spacing:.3px; }
+  #cmp-read .cmp-r2{ display:block; font:600 8.5px/1.3 'Orbitron','Helvetica Neue',sans-serif; letter-spacing:.6px; opacity:.62; }
   body.light #cmp-chip{ background:rgba(235,248,255,.92); color:#067; border-color:rgba(0,120,160,.4); box-shadow:none; }
   body.light #cmp-read{ background:rgba(235,248,255,.92); color:#067; border-color:rgba(0,150,120,.4); }
   @media (max-width:768px){ #cmp-chip, #cmp-read{ display:none !important; } }
 </style>
 <script>
-/* Compass Utility — turns the decorative compass into two modes:
-   NORTH  : drag to rotate the globe, click to reset north+pitch, double-click toggles 3D tilt.
-   RELAY  : needle points to the nearest relay from the map center (live), readout shows
-            distance + city, tapping the compass flies there.
-   Self-contained; waits for window.__anyoneMapLibre, reads window.allRelays live. */
+/* Compass Utility (v543) — two-in-one HUD compass.
+   One chip cycles: NORTH -> NEAREST -> EXIT -> GUARD -> HARDWARE -> NORTH.
+   NORTH : needle tracks heading; drag to rotate; click resets north+pitch; double-click 3D tilt.
+   FINDER: needle (colored per tier) points to the nearest relay of the chosen tier from the map
+           center; readout shows distance + city and a live "in view" density count; tap the
+           compass to fly there. Tier sets come from window.exitFps / guardFps / hwFps.
+   Self-contained; waits for window.__anyoneMapLibre; reads window.allRelays + tier sets live. */
 (function(){
   if(window.__cmpWired) return;
   var NS='http://www.w3.org/2000/svg';
@@ -31838,6 +31845,16 @@ body.aclive-on #anyclip-avatar{display:none !important;}
     return 2*R*Math.asin(Math.min(1,Math.sqrt(h))); }
   function fmtKm(km){ if(km<1) return '<1 km'; if(km<10) return km.toFixed(1)+' km';
     return Math.round(km).toLocaleString()+' km'; }
+
+  /* cycle states: index 0 = north, 1..4 = finder tiers */
+  var TYPE = {
+    all:  { label:'NEAREST',  noun:'relays', color:'#00f5ff', set:function(){ return null; } },
+    exit: { label:'EXIT',     noun:'exits',  color:'#ff6b35', set:function(){ return window.exitFps; } },
+    guard:{ label:'GUARD',    noun:'guards', color:'#a78bfa', set:function(){ return window.guardFps; } },
+    hw:   { label:'HARDWARE', noun:'hw',     color:'#fbbf24', set:function(){ return window.hwFps; } }
+  };
+  var SEQ = [ {mode:'north'}, {mode:'finder',ft:'all'}, {mode:'finder',ft:'exit'},
+              {mode:'finder',ft:'guard'}, {mode:'finder',ft:'hw'} ];
 
   function start(){
     var M=window.__anyoneMapLibre, c=document.getElementById('compass');
@@ -31863,62 +31880,93 @@ body.aclive-on #anyclip-avatar{display:none !important;}
     var chip=document.getElementById('cmp-chip');
     if(!chip){ chip=document.createElement('div'); chip.id='cmp-chip'; document.body.appendChild(chip); }
     var read=document.getElementById('cmp-read');
-    if(!read){ read=document.createElement('div'); read.id='cmp-read'; document.body.appendChild(read); }
+    if(!read){ read=document.createElement('div'); read.id='cmp-read';
+      read.innerHTML='<span class="cmp-r1"></span><span class="cmp-r2"></span>'; document.body.appendChild(read); }
+    var r1=read.querySelector('.cmp-r1'), r2=read.querySelector('.cmp-r2');
+    function readLines(a,b){ r1.textContent=a||''; r2.textContent=b||''; r2.style.display=b?'block':'none'; }
 
-    var mode='north';
-    try{ var sv=localStorage.getItem('cmp_mode'); if(sv==='finder'||sv==='north') mode=sv; }catch(_){}
+    var si=0;
+    try{ var sv=parseInt(localStorage.getItem('cmp_si'),10); if(sv>=0 && sv<SEQ.length) si=sv; }catch(_){}
     var target=null;
+    function curMode(){ return SEQ[si].mode; }
 
-    function nearest(){
-      var A=window.allRelays; if(!A||!A.length) return null;
-      var ct=M.getCenter(), bd=Infinity, best=null;
-      for(var i=0;i<A.length;i++){ var r=A[i]; if(r.lat==null||r.lon==null) continue;
-        var dd=hav(ct.lat,ct.lng,r.lat,r.lon); if(dd<bd){ bd=dd; best=r; } }
-      return best?{r:best,d:bd}:null;
+    function setNeedleColor(col){
+      if(polys[0]) polys[0].setAttribute('fill', col);
+      if(polys[1]){ polys[1].setAttribute('fill', col); polys[1].setAttribute('fill-opacity','0.30'); }
     }
+    function restoreNeedle(){
+      polys.forEach(function(p,i){ p.setAttribute('fill', origFills[i]); p.removeAttribute('fill-opacity'); });
+    }
+
+    function viewRadiusKm(){
+      try{ var ct=M.getCenter(), el=M.getContainer(), w=el.clientWidth||800;
+        var top=M.unproject([w/2, 0]); var d=hav(ct.lat,ct.lng, top.lat, top.lng);
+        if(isFinite(d) && d>1) return d; }catch(_){}
+      return 2000;
+    }
+
     function syncNorth(){
       var b=M.getBearing()||0, t='rotate('+(-b).toFixed(2)+' 36 36)';
       rotor.setAttribute('transform',t); needle.setAttribute('transform',t);
-      polys.forEach(function(p,i){ p.setAttribute('fill',origFills[i]); });
+      restoreNeedle();
     }
     function syncFinder(){
       var b=M.getBearing()||0;
       rotor.setAttribute('transform','rotate('+(-b).toFixed(2)+' 36 36)');
-      var n=nearest(); target = n?n.r:null;
-      if(!n){ read.textContent='◎ scanning…'; return; }
-      var ct=M.getCenter(), p0=M.project(ct), p1=M.project([n.r.lon,n.r.lat]);
+      var ft=SEQ[si].ft, conf=TYPE[ft], set=conf.set();
+      var A=window.allRelays;
+      if(!A || !A.length || (ft!=='all' && (!set || !set.size))){ target=null; readLines('◎ scanning…',''); return; }
+      var ct=M.getCenter(), bd=Infinity, best=null, cnt=0, R=viewRadiusKm();
+      for(var i=0;i<A.length;i++){ var r=A[i]; if(r.lat==null||r.lon==null) continue;
+        if(set && !set.has((r.fp||'').toUpperCase())) continue;
+        var dd=hav(ct.lat,ct.lng,r.lat,r.lon);
+        if(dd<=R) cnt++;
+        if(dd<bd){ bd=dd; best=r; } }
+      target=best;
+      if(!best){ readLines('◎ no '+conf.noun+' found',''); return; }
+      var p0=M.project(ct), p1=M.project([best.lon,best.lat]);
       var th=deg(Math.atan2(p1.y-p0.y, p1.x-p0.x));
       needle.setAttribute('transform','rotate('+(th+90).toFixed(2)+' 36 36)');
-      polys.forEach(function(p){ p.setAttribute('fill','#00f5ff'); });
-      var loc=[n.r.cityName, n.r.countryCode].filter(Boolean).join(', ');
-      read.textContent='◎ '+fmtKm(n.d)+' · '+(loc || n.r.nickname || 'relay');
+      setNeedleColor(conf.color);
+      var loc=[best.cityName, best.countryCode].filter(Boolean).join(', ');
+      readLines('→ '+fmtKm(bd)+' · '+(loc || best.nickname || 'relay'),
+                cnt.toLocaleString()+' '+conf.noun+' in view');
     }
     var raf=0;
     function sync(){ if(raf) return; raf=requestAnimationFrame(function(){ raf=0;
-      if(mode==='finder') syncFinder(); else syncNorth(); }); }
+      if(curMode()==='finder') syncFinder(); else syncNorth(); }); }
 
     function chrome(){
-      chip.textContent = (mode==='north') ? '⊕ NORTH' : '◎ RELAY';
-      chip.title = (mode==='north')
-        ? 'Compass — drag to rotate, click to reset north, double-click for 3D. Click chip to find relays.'
-        : 'Relay finder — needle points to the nearest relay. Click compass to fly there. Click chip for compass.';
+      var st=SEQ[si];
+      if(st.mode==='north'){
+        chip.textContent='⊕ NORTH';
+        chip.style.color='#00f5ff'; chip.style.borderColor='rgba(0,245,255,.38)';
+        chip.title='Compass — drag to rotate, click to reset north, double-click for 3D. Click chip to cycle relay finder.';
+        read.style.display='none';
+      } else {
+        var conf=TYPE[st.ft];
+        chip.textContent='◎ '+conf.label;
+        chip.style.color=conf.color; chip.style.borderColor=conf.color+'88';
+        chip.title='Relay finder ('+conf.label+') — needle points to the nearest '+conf.noun+
+                   '. Click compass to fly there. Click chip to cycle.';
+        read.style.display='block';
+      }
       c.setAttribute('aria-label', chip.title);
-      read.style.display = (mode==='finder') ? 'block' : 'none';
       sync();
     }
 
     ['rotate','pitch','move','moveend'].forEach(function(ev){ M.on(ev, sync); });
 
     chip.addEventListener('click', function(e){ e.stopPropagation();
-      mode = (mode==='north') ? 'finder' : 'north';
-      try{ localStorage.setItem('cmp_mode', mode); }catch(_){}
+      si = (si+1) % SEQ.length;
+      try{ localStorage.setItem('cmp_si', si); }catch(_){}
       chrome();
     });
 
     var dragging=false, moved=false, startAng=0, startB=0;
     function ctr(){ var r=c.getBoundingClientRect(); return {x:r.left+r.width/2, y:r.top+r.height/2}; }
     function ang(e){ var o=ctr(); return deg(Math.atan2(e.clientY-o.y, e.clientX-o.x)); }
-    c.addEventListener('pointerdown', function(e){ if(mode!=='north') return;
+    c.addEventListener('pointerdown', function(e){ if(curMode()!=='north') return;
       dragging=true; moved=false; startAng=ang(e); startB=M.getBearing()||0;
       c.style.cursor='grabbing'; try{ c.setPointerCapture(e.pointerId); }catch(_){}
       e.stopPropagation(); });
@@ -31928,15 +31976,15 @@ body.aclive-on #anyclip-avatar{display:none !important;}
       try{ c.releasePointerCapture(e.pointerId); }catch(_){} });
     c.addEventListener('click', function(e){ e.stopPropagation();
       if(moved){ moved=false; return; }
-      if(mode==='north'){
+      if(curMode()==='north'){
         if(M.resetNorthPitch){ M.resetNorthPitch({duration:600}); }
         else { M.setBearing(0); if(M.setPitch) M.setPitch(0); }
-      } else {
-        if(target){ M.flyTo({ center:[target.lon,target.lat],
-          zoom:Math.max(M.getZoom()||2, 5), duration:1600, essential:true }); }
+      } else if(target){
+        M.flyTo({ center:[target.lon,target.lat], zoom:Math.max(M.getZoom()||2, 5),
+                  duration:1600, essential:true });
       }
     });
-    c.addEventListener('dblclick', function(e){ if(mode!=='north') return; e.preventDefault();
+    c.addEventListener('dblclick', function(e){ if(curMode()!=='north') return; e.preventDefault();
       var p=M.getPitch()||0;
       if(M.easeTo){ M.easeTo({pitch: p>5?0:50, duration:600}); }
       else if(M.setPitch){ M.setPitch(p>5?0:50); }
@@ -31948,7 +31996,7 @@ body.aclive-on #anyclip-avatar{display:none !important;}
   }
 
   function boot(){
-    if(window.__anyoneMapLibre && document.getElementById('compass')){ try{ start(); }catch(e){} return true; }
+    if(window.__anyoneMapLibre && document.getElementById('compass')){ try{ start(); }catch(e){ window.__cmpErr=String(e); } return true; }
     return false;
   }
   if(!boot()){
