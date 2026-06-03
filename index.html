@@ -32101,6 +32101,50 @@ body.aclive-on #anyclip-avatar{display:none !important;}
 })();
 </script>
 
+<!-- ════════ Relay Hover Halo: highlight relay on hover + pointer cursor (v548) ════════ -->
+<script>
+/* v548: Hover affordance for relay dots. The click-to-inspect card already exists
+ * natively (#relay-detail); dots just had no hover cue. This adds a tier-colored ring +
+ * soft glow around the hovered relay and a pointer cursor, so dots read as interactive.
+ * Self-contained; does not touch the click flow. Cheap: only updates when the hovered
+ * relay changes, no always-on rAF. Guard: window.__relayHoverWired. */
+(function(){
+  if (window.__relayHoverWired) return; window.__relayHoverWired = true;
+  var COLOR = { exit:'#ff6b35', guard:'#a78bfa', middle:'#2dd4bf', hw:'#fbbf24', def:'#38bdf8' };
+  var LAYERS = ['relay-points','relay-points-approx','hw-diamonds'];
+  function tierOf(p){ return p.hw == 1 ? 'hw' : (p.tier || 'def'); }
+  function boot(){
+    var M = window.__anyoneMapLibre; if (!M || !M.getSource) return false;
+    if (!M.getSource('relays')) return false;        /* wait for the relay source */
+    if (M.getSource('relay-hover')) return true;     /* already wired */
+    try {
+      M.addSource('relay-hover', { type:'geojson', data:{ type:'FeatureCollection', features:[] } });
+      var before = M.getLayer('hw-diamonds') ? 'hw-diamonds' : undefined;
+      M.addLayer({ id:'relay-hover-glow', type:'circle', source:'relay-hover', paint:{
+        'circle-radius':['interpolate',['linear'],['zoom'],1,12,4,16,8,22,14,30],
+        'circle-color':['get','hc'], 'circle-blur':1, 'circle-opacity':0.20 } }, before);
+      M.addLayer({ id:'relay-hover-ring', type:'circle', source:'relay-hover', paint:{
+        'circle-radius':['interpolate',['linear'],['zoom'],1,7,4,10,8,14,14,20],
+        'circle-color':'rgba(0,0,0,0)', 'circle-stroke-color':['get','hc'],
+        'circle-stroke-width':2, 'circle-stroke-opacity':0.95 } }, before);
+    } catch(e){ return true; }
+    var src = M.getSource('relay-hover'); var empty = { type:'FeatureCollection', features:[] }; var lastKey = null;
+    function clear(){ if (lastKey !== null){ lastKey = null; try { src.setData(empty); M.getCanvas().style.cursor=''; } catch(_){} } }
+    M.on('mousemove', function(e){
+      var f; try { f = M.queryRenderedFeatures(e.point, { layers: LAYERS })[0]; } catch(_){ return; }
+      if (!f){ clear(); return; }
+      var key = (f.properties && f.properties.fp) || f.geometry.coordinates.join(',');
+      M.getCanvas().style.cursor = 'pointer';
+      if (key === lastKey) return; lastKey = key;
+      src.setData({ type:'FeatureCollection', features:[{ type:'Feature', geometry:f.geometry, properties:{ hc: COLOR[tierOf(f.properties)] || COLOR.def } }] });
+    });
+    M.on('mouseout', clear);
+    return true;
+  }
+  if (!boot()){ var n=0, iv=setInterval(function(){ n++; if (boot() || n>150){ clearInterval(iv); } }, 400); }
+})();
+</script>
+
 </body>
 </html><!-- ══ MOBILE BOTTOM NAV ══ -->
 <div id="mobile-nav">
