@@ -10904,7 +10904,7 @@ function initMapLibre(zones){
       // glow halo (larger, very translucent — gives the luminous "ping" feel)
       // v390: brighter + larger so non-HW relays are easy to spot (were too faint).
       map.addLayer({ id:'relay-glow', type:'circle', source:'relays', filter:['==',['get','hw'],0],
-        paint:{ 'circle-color':['match',['get','tier'],'exit','#ef4444','guard','#a78bfa','middle','#2dd4bf','#888'],
+        paint:{ 'circle-color':['match',['get','tier'],'exit','#ff6b35','guard','#a78bfa','middle','#2dd4bf','#888'],
           'circle-radius':['interpolate',['linear'],['zoom'],1,3.5,4,6,8,12,14,20],
           'circle-blur':1,
           'circle-opacity':['interpolate',['linear'],['zoom'],1,0.3,4,0.42,8,0.55,14,0.6] }});
@@ -10950,8 +10950,8 @@ function initMapLibre(zones){
         }});
       // crisp core dot — v390: bigger + fully opaque sooner so relays read clearly
       map.addLayer({ id:'relay-points', type:'circle', source:'relays', filter:['all',['==',['get','hw'],0],['!=',['get','approx'],1]],
-        paint:{ 'circle-color':['match',['get','tier'],'exit','#fca5a5','guard','#ddd6fe','middle','#99f6e4','#ccc'],
-          'circle-radius':['interpolate',['linear'],['zoom'],1,1.6,4,2.4,8,3.6,14,5.5],
+        paint:{ 'circle-color':['match',['get','tier'],'exit','#ff6b35','guard','#a78bfa','middle','#2dd4bf','#38bdf8'],
+          'circle-radius':['interpolate',['linear'],['zoom'],1,2.2,4,3,8,4.2,14,6],
           'circle-stroke-width':['interpolate',['linear'],['zoom'],1,0,6,0.5,12,1],
           'circle-stroke-color':'rgba(255,255,255,0.5)',
           'circle-opacity':['interpolate',['linear'],['zoom'],1,0.85,4,0.95,8,1,14,1] }});
@@ -10967,7 +10967,7 @@ function initMapLibre(zones){
         paint:{ 'circle-color':'rgba(0,0,0,0)',
           'circle-radius':['interpolate',['linear'],['zoom'],1,2.4,4,3.4,8,5,14,7.5],
           'circle-stroke-width':['interpolate',['linear'],['zoom'],1,1,6,1.4,12,2],
-          'circle-stroke-color':['match',['get','tier'],'exit','#fca5a5','guard','#ddd6fe','middle','#99f6e4','#ccc'],
+          'circle-stroke-color':['match',['get','tier'],'exit','#ff6b35','guard','#a78bfa','middle','#2dd4bf','#38bdf8'],
           'circle-stroke-opacity':['interpolate',['linear'],['zoom'],1,0.65,8,0.8,14,0.9] }});
 
       /* v389: PULSING radar pings. We animate the GLOW layer's radius + opacity with a
@@ -22601,24 +22601,24 @@ function _mlApplyHealthOverlay(m, on){
     if (m.getLayer('relay-glow')) {
       m.setPaintProperty('relay-glow','circle-color',
         ['case', ['has','healthColor'], ['get','healthColor'],
-          ['match',['get','tier'],'exit','#ef4444','guard','#a78bfa','middle','#2dd4bf','#888']]);
+          ['match',['get','tier'],'exit','#ff6b35','guard','#a78bfa','middle','#2dd4bf','#888']]);
     }
     if (m.getLayer('relay-points')) {
       /* Use the same health color for the core dot too (no lighter "tier-bright"
        * variant — the green/amber/red palette is clear enough without a paler tone). */
       m.setPaintProperty('relay-points','circle-color',
         ['case', ['has','healthColor'], ['get','healthColor'],
-          ['match',['get','tier'],'exit','#fca5a5','guard','#ddd6fe','middle','#99f6e4','#ccc']]);
+          ['match',['get','tier'],'exit','#ff6b35','guard','#a78bfa','middle','#2dd4bf','#38bdf8']]);
     }
   } else {
     /* restore original tier coloring */
     if (m.getLayer('relay-glow')) {
       m.setPaintProperty('relay-glow','circle-color',
-        ['match',['get','tier'],'exit','#ef4444','guard','#a78bfa','middle','#2dd4bf','#888']);
+        ['match',['get','tier'],'exit','#ff6b35','guard','#a78bfa','middle','#2dd4bf','#888']);
     }
     if (m.getLayer('relay-points')) {
       m.setPaintProperty('relay-points','circle-color',
-        ['match',['get','tier'],'exit','#fca5a5','guard','#ddd6fe','middle','#99f6e4','#ccc']);
+        ['match',['get','tier'],'exit','#ff6b35','guard','#a78bfa','middle','#2dd4bf','#38bdf8']);
     }
   }
   /* v485: legend swap so users understand what the dot colors mean.
@@ -31531,6 +31531,8 @@ body.aclive-on #anyclip-avatar{display:none !important;}
 @keyframes aclArmA{0%,100%{transform:rotate(-20deg);}50%{transform:rotate(20deg);}}
 @keyframes aclArmB{0%,100%{transform:rotate(20deg);}50%{transform:rotate(-20deg);}}
 @keyframes aclBob{0%,100%{transform:translateY(0);}50%{transform:translateY(-3px);}}
+@keyframes aclIdle{0%,100%{transform:translateY(0);}50%{transform:translateY(-1.6px);}}
+.acl-svg:not(.walking):not(.presenting) .acl-body{animation:aclIdle 3.4s ease-in-out infinite;}
 .acl-svg.walking .leg-l{animation:aclLegA .52s ease-in-out infinite;}
 .acl-svg.walking .leg-r{animation:aclLegB .52s ease-in-out infinite;}
 .acl-svg.walking .arm-l{animation:aclArmA .52s ease-in-out infinite;}
