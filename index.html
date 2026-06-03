@@ -31802,7 +31802,7 @@ body.aclive-on #anyclip-avatar{display:none !important;}
 </script>
 
 
-<!-- ════════ Compass Utility: orientation + relay finder (v544) ════════ -->
+<!-- ════════ Compass Utility: orientation + relay finder (v545) ════════ -->
 <style>
   #cmp-chip, #cmp-read{
     position:fixed; right:56px; z-index:401;
@@ -31898,11 +31898,19 @@ body.aclive-on #anyclip-avatar{display:none !important;}
       polys.forEach(function(p,i){ p.setAttribute('fill', origFills[i]); p.removeAttribute('fill-opacity'); });
     }
 
-    function viewRadiusKm(){
-      try{ var ct=M.getCenter(), el=M.getContainer(), w=el.clientWidth||800;
-        var top=M.unproject([w/2, 0]); var d=hav(ct.lat,ct.lng, top.lat, top.lng);
-        if(isFinite(d) && d>1) return d; }catch(_){}
-      return 2000;
+    var DENSITY_KM = 1000;  /* v545: fixed "nearby" radius so the count stays meaningful at any zoom */
+    /* shared scan: nearest relay of current tier + count within DENSITY_KM. Used by render AND tap. */
+    function scanTier(){
+      var ft=SEQ[si].ft, conf=TYPE[ft], set=conf.set();
+      var A=window.allRelays;
+      if(!A || !A.length || (ft!=='all' && (!set || !set.size))) return null;
+      var ct=M.getCenter(), bd=Infinity, best=null, cnt=0;
+      for(var i=0;i<A.length;i++){ var r=A[i]; if(r.lat==null||r.lon==null) continue;
+        if(set && !set.has((r.fp||'').toUpperCase())) continue;
+        var dd=hav(ct.lat,ct.lng,r.lat,r.lon);
+        if(dd<=DENSITY_KM) cnt++;
+        if(dd<bd){ bd=dd; best=r; } }
+      return { conf:conf, best:best, dist:bd, count:cnt };
     }
 
     function syncNorth(){
@@ -31913,24 +31921,17 @@ body.aclive-on #anyclip-avatar{display:none !important;}
     function syncFinder(){
       var b=M.getBearing()||0;
       rotor.setAttribute('transform','rotate('+(-b).toFixed(2)+' 36 36)');
-      var ft=SEQ[si].ft, conf=TYPE[ft], set=conf.set();
-      var A=window.allRelays;
-      if(!A || !A.length || (ft!=='all' && (!set || !set.size))){ target=null; readLines('◎ scanning…',''); return; }
-      var ct=M.getCenter(), bd=Infinity, best=null, cnt=0, R=viewRadiusKm();
-      for(var i=0;i<A.length;i++){ var r=A[i]; if(r.lat==null||r.lon==null) continue;
-        if(set && !set.has((r.fp||'').toUpperCase())) continue;
-        var dd=hav(ct.lat,ct.lng,r.lat,r.lon);
-        if(dd<=R) cnt++;
-        if(dd<bd){ bd=dd; best=r; } }
-      target=best;
-      if(!best){ readLines('◎ no '+conf.noun+' found',''); return; }
-      var p0=M.project(ct), p1=M.project([best.lon,best.lat]);
+      var s=scanTier();
+      if(!s){ target=null; readLines('◎ scanning…',''); return; }
+      var conf=s.conf; target=s.best;
+      if(!s.best){ readLines('◎ no '+conf.noun+' found',''); return; }
+      var ct=M.getCenter(), p0=M.project(ct), p1=M.project([s.best.lon,s.best.lat]);
       var th=deg(Math.atan2(p1.y-p0.y, p1.x-p0.x));
       needle.setAttribute('transform','rotate('+(th+90).toFixed(2)+' 36 36)');
       setNeedleColor(conf.color);
-      var loc=[best.cityName, best.countryCode].filter(Boolean).join(', ');
-      readLines('→ '+fmtKm(bd)+' · '+(loc || best.nickname || 'relay'),
-                cnt.toLocaleString()+' '+conf.noun+' in view');
+      var loc=[s.best.cityName, s.best.countryCode].filter(Boolean).join(', ');
+      readLines('→ '+fmtKm(s.dist)+' · '+(loc || s.best.nickname || 'relay'),
+                s.count.toLocaleString()+' '+conf.noun+' within '+DENSITY_KM.toLocaleString()+' km');
     }
     var raf=0;
     function sync(){ if(raf) return; raf=requestAnimationFrame(function(){ raf=0;
@@ -31982,9 +31983,10 @@ body.aclive-on #anyclip-avatar{display:none !important;}
       if(curMode()==='north'){
         if(M.resetNorthPitch){ M.resetNorthPitch({duration:600}); }
         else { M.setBearing(0); if(M.setPitch) M.setPitch(0); }
-      } else if(target){
-        M.flyTo({ center:[target.lon,target.lat], zoom:Math.max(M.getZoom()||2, 5),
-                  duration:1600, essential:true });
+      } else {
+        var t = target; if(!t){ var s=scanTier(); t = s && s.best; } /* v545: resolve nearest on tap even before first paint */
+        if(t){ M.flyTo({ center:[t.lon,t.lat], zoom:Math.max(M.getZoom()||2, 5),
+                  duration:1600, essential:true }); }
       }
     });
     c.addEventListener('dblclick', function(e){ if(curMode()!=='north') return; e.preventDefault();
