@@ -11597,6 +11597,11 @@ function initMapLibre(zones){
           });
           /* click → reuse the existing selectCountry flow (Relay Browser focus, dim, etc.) */
           map.on('click','countries-hover-fill',(ev)=>{
+            /* v549 declutter: if a relay dot is under the click, the relay handler owns it
+             * (floating detail card only). Bail here so we don't also selectCountry, which
+             * would open the country drawer + banner and stack 3 panels on one dot click.
+             * Empty-land clicks (no relay under cursor) still select the country as before. */
+            try { if(ev.point && map.queryRenderedFeatures(ev.point,{layers:['relay-points','relay-points-approx','hw-diamonds']}).length){ return; } } catch(_){}
             if(!ev.features || !ev.features.length) return;
             const f = ev.features[0];
             try {
