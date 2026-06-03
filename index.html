@@ -1595,6 +1595,7 @@ document.addEventListener('keydown', function(e){
       + '<div style="display:grid;grid-template-columns:60px 1fr;gap:6px 12px;">'
       + '<kbd style="color:var(--an-teal,#2dd4bf);font-family:monospace">Esc</kbd><span>Close panel</span>'
       + '<kbd style="color:var(--an-teal,#2dd4bf);font-family:monospace">+ / -</kbd><span>Zoom in / out</span>'
+      + '<kbd style="color:var(--an-teal,#2dd4bf);font-family:monospace">N</kbd><span>Reset to world view</span>'
       + '<kbd style="color:var(--an-teal,#2dd4bf);font-family:monospace">S</kbd><span>Toggle Signals</span>'
       + '<kbd style="color:var(--an-teal,#2dd4bf);font-family:monospace">H</kbd><span>Health panel</span>'
       + '<kbd style="color:var(--an-teal,#2dd4bf);font-family:monospace">R</kbd><span>Relay Browser</span>'
@@ -2869,6 +2870,11 @@ body.light .clabel{ fill:rgba(180,220,235,0.9); stroke:rgba(5,15,30,0.8); }
 }
 #tk{
   flex:1;overflow:hidden;position:relative;height:100%;display:flex;align-items:center;
+  /* v550: fade the scrolling ticker text at both edges so items ease in/out instead of
+   * hard-cutting against the chrome. Masks only #tk (the scroll track), so the LIVE
+   * badge in .tk-badge stays fully crisp. */
+  -webkit-mask-image:linear-gradient(90deg, transparent 0, #000 36px, #000 calc(100% - 36px), transparent 100%);
+  mask-image:linear-gradient(90deg, transparent 0, #000 36px, #000 calc(100% - 36px), transparent 100%);
 }
 #tktext{
   position:absolute;white-space:nowrap;
@@ -13401,6 +13407,11 @@ document.addEventListener('keydown', function(e){
       e.preventDefault();
       toggleDomainPanel();
       showShortcutHint('D — Domains ' + (DOM_PANEL.open ? 'OPEN' : 'CLOSED'));
+      break;
+    case 'N':
+      e.preventDefault();
+      try { var __mN = window.__anyoneMapLibre; if(__mN){ try{__mN.stop();}catch(_){} __mN.easeTo({ center:[3.383,16.02], zoom:2, bearing:0, pitch:0, duration:600 }); } } catch(_){}
+      showShortcutHint('N — Reset to world view');
       break;
 case 'ESCAPE':
       e.preventDefault();
