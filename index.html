@@ -32013,6 +32013,94 @@ body.aclive-on #anyclip-avatar{display:none !important;}
 })();
 </script>
 
+<!-- ════════ First-Load Map Loader: initializing overlay + dot reveal (v547) ════════ -->
+<style id="map-loader-style">
+#map-loader{position:fixed;z-index:850;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:20px;background:radial-gradient(ellipse at 45% 42%,#001830 0%,#001225 45%,#000a18 80%,#000610 100%);transition:opacity .62s ease;}
+#map-loader.ml-hide{opacity:0;pointer-events:none;}
+#map-loader .ml-logo{width:116px;height:116px;position:relative;display:flex;align-items:center;justify-content:center;}
+#map-loader .ml-hex{filter:drop-shadow(0 0 14px rgba(0,245,255,.55));animation:mlPulse 1.8s ease-in-out infinite;}
+#map-loader .ml-ring{position:absolute;inset:0;animation:mlSpin 3.4s linear infinite;}
+#map-loader .ml-title{font-family:'Orbitron',sans-serif;font-size:13px;font-weight:800;letter-spacing:3px;color:#7fe9ff;text-shadow:0 0 12px rgba(0,245,255,.4);text-align:center;}
+#map-loader .ml-bar{width:200px;height:3px;border-radius:3px;background:rgba(0,245,255,.12);overflow:hidden;position:relative;}
+#map-loader .ml-bar i{position:absolute;top:0;left:-40%;height:100%;width:40%;border-radius:3px;background:linear-gradient(90deg,transparent,#00f5ff,#2dd4bf,transparent);animation:mlBar 1.3s ease-in-out infinite;}
+#map-loader .ml-sub{font-family:'Rajdhani','Outfit',sans-serif;font-size:12px;letter-spacing:1px;color:rgba(127,233,255,.62);}
+#map-loader .ml-sub b{color:#9bedf0;font-family:'Orbitron',sans-serif;}
+@keyframes mlPulse{0%,100%{transform:scale(1);opacity:.85;}50%{transform:scale(1.09);opacity:1;}}
+@keyframes mlSpin{to{transform:rotate(360deg);}}
+@keyframes mlBar{0%{left:-40%;}100%{left:100%;}}
+@media(prefers-reduced-motion:reduce){#map-loader .ml-hex,#map-loader .ml-ring,#map-loader .ml-bar i{animation:none;}#map-loader .ml-bar i{left:0;width:100%;opacity:.5;}}
+</style>
+<script>
+/* v547: First-load experience. A self-contained overlay scoped to #map-wrap shows a
+ * branded "initializing relay network" state until the relay layer has actually painted,
+ * then fades out — the fade IS the reveal, so it never touches the dot opacity/pulse system.
+ * Hard 30s timeout so it can never stick. Respects prefers-reduced-motion. */
+(function(){
+  if (window.__mapLoaderWired) return; window.__mapLoaderWired = true;
+  function init(){
+    var mw = document.getElementById('map-wrap');
+    if (!mw) { return false; }
+    if (document.getElementById('map-loader')) return true;
+    var el = document.createElement('div');
+    el.id = 'map-loader';
+    el.setAttribute('aria-hidden','true');
+    el.innerHTML =
+      '<div class="ml-logo">'
+      + '<svg class="ml-ring" viewBox="0 0 116 116" width="116" height="116" fill="none">'
+      + '<circle cx="58" cy="58" r="54" stroke="rgba(0,245,255,.15)" stroke-width="1"/>'
+      + '<circle cx="58" cy="4" r="3" fill="#00f5ff"/><circle cx="112" cy="58" r="2" fill="#2dd4bf"/>'
+      + '<circle cx="58" cy="112" r="2.4" fill="#a78bfa"/></svg>'
+      + '<svg class="ml-hex" viewBox="0 0 64 64" width="64" height="64" fill="none">'
+      + '<path d="M32 4 L56 18 L56 46 L32 60 L8 46 L8 18 Z" stroke="#00f5ff" stroke-width="2" fill="rgba(0,245,255,.06)"/>'
+      + '<path d="M32 18 L44 25 L44 39 L32 46 L20 39 L20 25 Z" stroke="#2dd4bf" stroke-width="1.5"/>'
+      + '<circle cx="32" cy="32" r="4" fill="#00f5ff"/></svg></div>'
+      + '<div class="ml-title">INITIALIZING RELAY NETWORK</div>'
+      + '<div class="ml-bar"><i></i></div>'
+      + '<div class="ml-sub">routing topology · <b id="ml-count">···</b> relays</div>';
+    document.body.appendChild(el);
+    function syncRect(){ try { var r = mw.getBoundingClientRect(); el.style.top=r.top+'px'; el.style.left=r.left+'px'; el.style.width=r.width+'px'; el.style.height=r.height+'px'; } catch(_){} }
+    syncRect(); window.addEventListener('resize', syncRect); var rectIv = setInterval(syncRect, 500);
+
+    /* count-up to the live relay total once it's known (setInterval — survives bg/throttled tabs) */
+    var countEl = el.querySelector('#ml-count'), target = 0, shown = 0;
+    var countIv = setInterval(function(){
+      var t = (window.allRelays && window.allRelays.length) || target;
+      if (t > target) target = t;
+      if (target === 0){ try { countEl.textContent = '···'; } catch(_){} return; }
+      if (shown < target){ shown += Math.max(1, Math.ceil((target - shown) / 6)); if (shown > target) shown = target;
+        try { countEl.textContent = shown.toLocaleString(); } catch(_){ countEl.textContent = shown; } }
+    }, 55);
+
+    var done = false;
+    function hide(){
+      if (done) return; done = true;
+      try { clearInterval(countIv); clearInterval(rectIv); window.removeEventListener('resize', syncRect); } catch(_){}
+      var t = (window.allRelays && window.allRelays.length) || target;
+      try { if (t) countEl.textContent = t.toLocaleString(); } catch(_){}
+      el.classList.add('ml-hide');
+      setTimeout(function(){ try { el.remove(); var s=document.getElementById('map-loader-style'); if(s) s.remove(); } catch(_){} }, 700);
+    }
+    function ready(){
+      var M = window.__anyoneMapLibre; if (!M) return false;
+      try {
+        var src = M.getSource('relays');
+        var hasData = !!(src && src._data && src._data.features && src._data.features.length > 0);
+        if (!hasData) return false;
+        var painted = (M.queryRenderedFeatures({layers:['relay-points']}).length > 0)
+          || (M.getLayer('hw-diamonds') && M.queryRenderedFeatures({layers:['hw-diamonds']}).length > 0);
+        return !!painted;
+      } catch(_){ return false; }
+    }
+    var poll = setInterval(function(){ if (ready()){ clearInterval(poll); hide(); } }, 250);
+    setTimeout(function(){ clearInterval(poll); hide(); }, 30000); /* safety: never stick */
+    return true;
+  }
+  if (!init()){
+    var n=0, iv=setInterval(function(){ n++; if (init() || n>120){ clearInterval(iv); } }, 200);
+  }
+})();
+</script>
+
 </body>
 </html><!-- ══ MOBILE BOTTOM NAV ══ -->
 <div id="mobile-nav">
