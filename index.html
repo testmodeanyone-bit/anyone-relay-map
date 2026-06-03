@@ -31798,6 +31798,166 @@ body.aclive-on #anyclip-avatar{display:none !important;}
 })();
 </script>
 
+
+<!-- ════════ Compass Utility: orientation + relay finder (v542) ════════ -->
+<style>
+  #cmp-chip, #cmp-read{
+    position:fixed; right:56px; z-index:401;
+    background:rgba(0,10,22,.82); -webkit-backdrop-filter:blur(3px); backdrop-filter:blur(3px);
+    white-space:nowrap; pointer-events:none;
+  }
+  #cmp-chip{
+    bottom:118px; padding:3px 9px; border:1px solid rgba(0,245,255,.38); border-radius:11px;
+    font:700 9px/1 'Orbitron','Helvetica Neue',Arial,sans-serif; letter-spacing:1.5px; color:#00f5ff;
+    cursor:pointer; user-select:none; pointer-events:auto;
+    box-shadow:0 0 10px rgba(0,245,255,.12); transition:background .15s, box-shadow .15s, transform .1s;
+  }
+  #cmp-chip:hover{ background:rgba(0,32,52,.92); box-shadow:0 0 14px rgba(0,245,255,.32); }
+  #cmp-chip:active{ transform:scale(.95); }
+  #cmp-read{
+    bottom:146px; padding:3px 9px; border:1px solid rgba(45,212,191,.42); border-radius:8px;
+    font:600 10px/1.2 'Helvetica Neue',Arial,sans-serif; letter-spacing:.3px; color:#9ffdf0; display:none;
+  }
+  body.light #cmp-chip{ background:rgba(235,248,255,.92); color:#067; border-color:rgba(0,120,160,.4); box-shadow:none; }
+  body.light #cmp-read{ background:rgba(235,248,255,.92); color:#067; border-color:rgba(0,150,120,.4); }
+  @media (max-width:768px){ #cmp-chip, #cmp-read{ display:none !important; } }
+</style>
+<script>
+/* Compass Utility — turns the decorative compass into two modes:
+   NORTH  : drag to rotate the globe, click to reset north+pitch, double-click toggles 3D tilt.
+   RELAY  : needle points to the nearest relay from the map center (live), readout shows
+            distance + city, tapping the compass flies there.
+   Self-contained; waits for window.__anyoneMapLibre, reads window.allRelays live. */
+(function(){
+  if(window.__cmpWired) return;
+  var NS='http://www.w3.org/2000/svg';
+  function deg(r){ return r*180/Math.PI; }
+  function hav(la1,lo1,la2,lo2){ var d=Math.PI/180, R=6371;
+    var s1=Math.sin((la2-la1)*d/2), s2=Math.sin((lo2-lo1)*d/2);
+    var h=s1*s1 + Math.cos(la1*d)*Math.cos(la2*d)*s2*s2;
+    return 2*R*Math.asin(Math.min(1,Math.sqrt(h))); }
+  function fmtKm(km){ if(km<1) return '<1 km'; if(km<10) return km.toFixed(1)+' km';
+    return Math.round(km).toLocaleString()+' km'; }
+
+  function start(){
+    var M=window.__anyoneMapLibre, c=document.getElementById('compass');
+    if(!M || !c) return false;
+    window.__cmpWired = true;
+
+    var rotor=document.getElementById('compass-rotor');
+    if(!rotor){ rotor=document.createElementNS(NS,'g'); rotor.id='compass-rotor';
+      while(c.firstChild) rotor.appendChild(c.firstChild); c.appendChild(rotor); }
+    var needle=document.getElementById('compass-needle');
+    if(!needle){ needle=document.createElementNS(NS,'g'); needle.id='compass-needle';
+      var ps=rotor.querySelectorAll('polygon'); for(var i=0;i<ps.length;i++) needle.appendChild(ps[i]);
+      var cs=rotor.querySelectorAll('circle');
+      for(var j=0;j<cs.length;j++){ if((+cs[j].getAttribute('r'))<=6) needle.appendChild(cs[j]); }
+      c.appendChild(needle); }
+    var polys=[].slice.call(needle.querySelectorAll('polygon'));
+    var origFills=polys.map(function(p){ return p.getAttribute('fill'); });
+
+    c.removeAttribute('aria-hidden');
+    c.style.pointerEvents='auto'; c.style.cursor='grab';
+    c.setAttribute('role','button');
+
+    var chip=document.getElementById('cmp-chip');
+    if(!chip){ chip=document.createElement('div'); chip.id='cmp-chip'; document.body.appendChild(chip); }
+    var read=document.getElementById('cmp-read');
+    if(!read){ read=document.createElement('div'); read.id='cmp-read'; document.body.appendChild(read); }
+
+    var mode='north';
+    try{ var sv=localStorage.getItem('cmp_mode'); if(sv==='finder'||sv==='north') mode=sv; }catch(_){}
+    var target=null;
+
+    function nearest(){
+      var A=window.allRelays; if(!A||!A.length) return null;
+      var ct=M.getCenter(), bd=Infinity, best=null;
+      for(var i=0;i<A.length;i++){ var r=A[i]; if(r.lat==null||r.lon==null) continue;
+        var dd=hav(ct.lat,ct.lng,r.lat,r.lon); if(dd<bd){ bd=dd; best=r; } }
+      return best?{r:best,d:bd}:null;
+    }
+    function syncNorth(){
+      var b=M.getBearing()||0, t='rotate('+(-b).toFixed(2)+' 36 36)';
+      rotor.setAttribute('transform',t); needle.setAttribute('transform',t);
+      polys.forEach(function(p,i){ p.setAttribute('fill',origFills[i]); });
+    }
+    function syncFinder(){
+      var b=M.getBearing()||0;
+      rotor.setAttribute('transform','rotate('+(-b).toFixed(2)+' 36 36)');
+      var n=nearest(); target = n?n.r:null;
+      if(!n){ read.textContent='◎ scanning…'; return; }
+      var ct=M.getCenter(), p0=M.project(ct), p1=M.project([n.r.lon,n.r.lat]);
+      var th=deg(Math.atan2(p1.y-p0.y, p1.x-p0.x));
+      needle.setAttribute('transform','rotate('+(th+90).toFixed(2)+' 36 36)');
+      polys.forEach(function(p){ p.setAttribute('fill','#00f5ff'); });
+      var loc=[n.r.cityName, n.r.countryCode].filter(Boolean).join(', ');
+      read.textContent='◎ '+fmtKm(n.d)+' · '+(loc || n.r.nickname || 'relay');
+    }
+    var raf=0;
+    function sync(){ if(raf) return; raf=requestAnimationFrame(function(){ raf=0;
+      if(mode==='finder') syncFinder(); else syncNorth(); }); }
+
+    function chrome(){
+      chip.textContent = (mode==='north') ? '⊕ NORTH' : '◎ RELAY';
+      chip.title = (mode==='north')
+        ? 'Compass — drag to rotate, click to reset north, double-click for 3D. Click chip to find relays.'
+        : 'Relay finder — needle points to the nearest relay. Click compass to fly there. Click chip for compass.';
+      c.setAttribute('aria-label', chip.title);
+      read.style.display = (mode==='finder') ? 'block' : 'none';
+      sync();
+    }
+
+    ['rotate','pitch','move','moveend'].forEach(function(ev){ M.on(ev, sync); });
+
+    chip.addEventListener('click', function(e){ e.stopPropagation();
+      mode = (mode==='north') ? 'finder' : 'north';
+      try{ localStorage.setItem('cmp_mode', mode); }catch(_){}
+      chrome();
+    });
+
+    var dragging=false, moved=false, startAng=0, startB=0;
+    function ctr(){ var r=c.getBoundingClientRect(); return {x:r.left+r.width/2, y:r.top+r.height/2}; }
+    function ang(e){ var o=ctr(); return deg(Math.atan2(e.clientY-o.y, e.clientX-o.x)); }
+    c.addEventListener('pointerdown', function(e){ if(mode!=='north') return;
+      dragging=true; moved=false; startAng=ang(e); startB=M.getBearing()||0;
+      c.style.cursor='grabbing'; try{ c.setPointerCapture(e.pointerId); }catch(_){}
+      e.stopPropagation(); });
+    c.addEventListener('pointermove', function(e){ if(!dragging) return;
+      var dd=ang(e)-startAng; if(Math.abs(dd)>3) moved=true; if(moved){ M.setBearing(startB+dd); } });
+    c.addEventListener('pointerup', function(e){ dragging=false; c.style.cursor='grab';
+      try{ c.releasePointerCapture(e.pointerId); }catch(_){} });
+    c.addEventListener('click', function(e){ e.stopPropagation();
+      if(moved){ moved=false; return; }
+      if(mode==='north'){
+        if(M.resetNorthPitch){ M.resetNorthPitch({duration:600}); }
+        else { M.setBearing(0); if(M.setPitch) M.setPitch(0); }
+      } else {
+        if(target){ M.flyTo({ center:[target.lon,target.lat],
+          zoom:Math.max(M.getZoom()||2, 5), duration:1600, essential:true }); }
+      }
+    });
+    c.addEventListener('dblclick', function(e){ if(mode!=='north') return; e.preventDefault();
+      var p=M.getPitch()||0;
+      if(M.easeTo){ M.easeTo({pitch: p>5?0:50, duration:600}); }
+      else if(M.setPitch){ M.setPitch(p>5?0:50); }
+    });
+
+    chrome();
+    [800,2000,5000].forEach(function(ms){ setTimeout(sync, ms); });
+    return true;
+  }
+
+  function boot(){
+    if(window.__anyoneMapLibre && document.getElementById('compass')){ try{ start(); }catch(e){} return true; }
+    return false;
+  }
+  if(!boot()){
+    var tries=0, iv=setInterval(function(){ tries++;
+      if(boot() || tries>150){ clearInterval(iv); } }, 400);
+  }
+})();
+</script>
+
 </body>
 </html><!-- ══ MOBILE BOTTOM NAV ══ -->
 <div id="mobile-nav">
