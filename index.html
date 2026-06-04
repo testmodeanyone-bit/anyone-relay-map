@@ -32234,7 +32234,7 @@ body.aclive-on #anyclip-avatar{display:none !important;}
     p.innerHTML='<div id="radar-head"><span class="radar-ico">◎</span><span class="radar-ttl">NEARBY RELAYS</span><span class="radar-sub">to center</span><span class="radar-chev">▾</span></div><div id="radar-body"><div class="radar-empty">scanning…</div></div>';
     document.body.appendChild(p);
     if(!document.getElementById('radar-style')){ var st=document.createElement('style'); st.id='radar-style'; st.textContent=
-       '#radar-panel{position:fixed;top:64px;right:14px;width:236px;z-index:260;font-family:Rajdhani,Outfit,system-ui,sans-serif;'
+       '#radar-panel{position:fixed;display:none;z-index:260;font-family:Rajdhani,Outfit,system-ui,sans-serif;'
       +'background:linear-gradient(165deg,rgba(6,20,32,.92),rgba(2,11,20,.9));border:1px solid rgba(0,245,255,.2);'
       +'border-radius:12px;box-shadow:0 8px 24px rgba(0,0,0,.5);backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);overflow:hidden;}'
       +'#radar-head{display:flex;align-items:center;gap:6px;padding:8px 11px;cursor:pointer;user-select:none;border-bottom:1px solid rgba(0,245,255,.1);}'
@@ -32299,6 +32299,21 @@ body.aclive-on #anyclip-avatar{display:none !important;}
     M.on('moveend', schedule); M.on('rotate', schedule);
     render();
     if(!(window.allRelays && window.allRelays.length)){ var k=0, iv2=setInterval(function(){ k++; if((window.allRelays&&window.allRelays.length)||k>60){ clearInterval(iv2); render(); } }, 500); }
+    /* v554: dock the radar under the Signals "CONNECTION WEB" panel (#sig-counts), left-aligned
+     * + matching width, and show it ONLY while Signals is on (body.signals-active). Moves it off
+     * the top-right where it collided with the Domains panel. The Signals panel's height changes
+     * as link counts update live, so we re-pin to its bottom on a light interval + on resize, and
+     * react immediately to the Signals toggle via a body-class MutationObserver. */
+    function _signalsOn(){ return document.body.classList.contains('signals-active'); }
+    function _dockPos(){ var s=document.getElementById('sig-counts'); if(!s) return false;
+      var r=s.getBoundingClientRect(); if(r.width<=0) return false;
+      p.style.left=Math.round(r.left)+'px'; p.style.width=Math.round(r.width)+'px';
+      p.style.top=Math.round(r.bottom+10)+'px'; p.style.right='auto'; return true; }
+    function _radarUpdate(){ if(_signalsOn() && _dockPos()){ p.style.display='block'; } else { p.style.display='none'; } }
+    try{ new MutationObserver(_radarUpdate).observe(document.body,{attributes:true,attributeFilter:['class']}); }catch(_){}
+    window.addEventListener('resize', _radarUpdate);
+    setInterval(_radarUpdate, 600);
+    _radarUpdate();
     return true;
   }
   if(!boot()){ var n=0, iv=setInterval(function(){ n++; if(boot()||n>150){ clearInterval(iv); } }, 400); }
