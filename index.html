@@ -5301,6 +5301,31 @@ body.light .rs-btn.active{background:rgba(0,180,255,.1);border-color:rgba(0,180,
 .cb-bar-wrap{flex:1;background:rgba(0,245,255,.08);border-radius:4px;height:8px;overflow:hidden;}
 .cb-bar{height:100%;border-radius:4px;transition:width .5s cubic-bezier(.4,0,.2,1);background:linear-gradient(90deg,rgba(0,245,255,.6),rgba(0,245,255,.3));}
 .cb-count{font-size:9px;color:#00f5ff;width:32px;text-align:right;flex-shrink:0;font-family:"Share Tech Mono",monospace;font-weight:700;}
+
+/* ============================================================
+   v1.3 Relay Browser deep-polish. Scoped under #relay-panel so
+   it wins on specificity without !important; stays in the cyan/
+   role palette. Additive — no layout reflow. NOTE: relay-card
+   (.rl-item) hover is intentionally NOT touched here — it already
+   has a meaningful tier-coloured left accent (green tier-a /
+   amber tier-b) + bg tint + padding shift that a generic accent
+   would obscure. Verified live in-browser (bars + pills).
+   (1) Filter pills: lift instead of scale on hover, border/bg
+       brighten — matches the lift-based hover language used in
+       the sidebar + onboarding passes. Role-coloured active
+       states untouched. (2) Sort pills: light hover fill.
+       (3) Top Countries: glossier bar fill + leading glow, plus
+       a row hover that brightens the bar and glows the count
+       (cb-row had no hover state before).
+   ============================================================ */
+#relay-panel .rf-btn:hover{transform:translateY(-1px) translateZ(0);border-color:rgba(138,188,196,.4);background:rgba(138,188,196,.1);}
+#relay-panel .rf-btn:active{transform:translateY(0) scale(.97) translateZ(0);}
+#relay-panel .rs-btn:hover{background:rgba(0,245,255,.06);}
+#relay-panel .cb-row{border-radius:5px;padding:1px 3px;transition:background .15s;}
+#relay-panel .cb-row:hover{background:rgba(0,245,255,.06);}
+#relay-panel .cb-bar{background:linear-gradient(90deg,rgba(0,245,255,.4),rgba(0,245,255,.8));box-shadow:0 0 6px rgba(0,245,255,.2);transition:width .5s cubic-bezier(.4,0,.2,1),background .15s,box-shadow .15s;}
+#relay-panel .cb-row:hover .cb-bar{background:linear-gradient(90deg,rgba(0,245,255,.6),rgba(0,245,255,1));box-shadow:0 0 10px rgba(0,245,255,.45);}
+#relay-panel .cb-row:hover .cb-count{text-shadow:0 0 8px rgba(0,245,255,.55);}
 #relay-detail{margin-top:10px;padding:12px 14px;background:rgba(0,245,255,.03);border:1px solid rgba(0,245,255,.12);border-radius:10px;display:none;font-size:11px;backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);}
 .rd-actions{display:flex;gap:6px;margin-top:10px;}
 .rd-btn{flex:1;display:flex;align-items:center;justify-content:center;gap:5px;padding:7px 10px;border-radius:8px;font-size:9px;font-family:Orbitron,sans-serif;font-weight:700;letter-spacing:.05em;cursor:pointer;border:none;transition:all .2s cubic-bezier(.4,0,.2,1);text-decoration:none;transform:translateZ(0);}
