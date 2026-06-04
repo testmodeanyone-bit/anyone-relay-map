@@ -2765,6 +2765,29 @@ body.light #sidebar{background:rgba(240,244,248,0.98);border-color:rgba(0,40,80,
 body.light .sb-section{color:rgba(0,100,160,.85);}
 body.light .sb-stat-label{color:rgba(10,37,64,.75);}
 body.light .sb-legend-row{color:#1a3a5c;}
+
+/* ============================================================
+   v1.3 sidebar deep-polish — refined section headers (leading
+   tick + gradient hairline), stat-row left-accent + value glow,
+   and a lift-based button hover. Scoped under #sidebar so it wins
+   on specificity without !important; stays in the cyan HUD palette
+   to match the donut + map markers. Additive — no layout reflow.
+   Verified live in-browser (sections, stat rows, buttons).
+   ============================================================ */
+#sidebar .sb-section{border-bottom:none;padding-left:11px;position:relative;}
+#sidebar .sb-section::before{content:'';position:absolute;left:3px;top:calc(50% - 1px);transform:translateY(-50%);width:3px;height:11px;border-radius:2px;background:linear-gradient(180deg,#00f5ff,rgba(0,245,255,.35));box-shadow:0 0 8px rgba(0,245,255,.45);}
+#sidebar .sb-section::after{content:'';position:absolute;left:0;right:0;bottom:0;height:1px;background:linear-gradient(90deg,rgba(0,245,255,.45),rgba(0,245,255,.08) 60%,transparent);transition:background .2s;}
+#sidebar .sb-section:hover::after{background:linear-gradient(90deg,rgba(0,245,255,.8),rgba(0,245,255,.18) 60%,transparent);}
+#sidebar .sb-stat::before{content:'';position:absolute;left:0;top:50%;transform:translateY(-50%) scaleY(0);width:2px;height:58%;border-radius:2px;background:#00f5ff;box-shadow:0 0 8px rgba(0,245,255,.6);transition:transform .18s cubic-bezier(.4,0,.2,1);}
+#sidebar .sb-stat:hover::before{transform:translateY(-50%) scaleY(1);}
+#sidebar .sb-stat:hover{background:rgba(0,245,255,.08);}
+#sidebar .sb-stat:hover .sb-stat-val{text-shadow:0 0 10px rgba(0,245,255,.45);}
+#sidebar .sb-btn:hover{transform:translateY(-1px) translateZ(0);box-shadow:0 6px 18px -6px rgba(0,245,255,.28),inset 0 0 0 1px rgba(0,245,255,.12);}
+#sidebar .sb-btn:active{transform:translateY(0) scale(.985) translateZ(0);}
+#sidebar .sb-btn:hover svg{transform:translateX(2px);}
+body.light #sidebar .sb-section::before{background:linear-gradient(180deg,#0a6e9a,rgba(10,110,154,.35));box-shadow:0 0 8px rgba(10,110,154,.3);}
+body.light #sidebar .sb-section::after{background:linear-gradient(90deg,rgba(10,110,154,.45),rgba(10,110,154,.08) 60%,transparent);}
+body.light #sidebar .sb-stat::before{background:#0a6e9a;box-shadow:0 0 8px rgba(10,110,154,.45);}
 body.light .sb-btn{background:rgba(0,100,160,.05);color:#006aaa;border-color:rgba(0,100,160,.2);}
 body.light .sb-btn:hover{background:rgba(0,100,160,.12);}
 body.light #sb-toggle{background:rgba(240,244,248,0.98);border-color:rgba(0,40,80,.15);color:#006aaa;}
