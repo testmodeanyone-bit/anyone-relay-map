@@ -5627,6 +5627,25 @@ body.light #dp-search{ background:rgba(0,100,160,.04);color:#0a2540; }
 .alert-icon.zone{background:rgba(167,139,250,.1);color:var(--an-purple,#a78bfa);}
 .alert-icon.milestone{background:rgba(251,191,36,.1);color:var(--an-amber,#fbbf24);}
 .alert-icon.isp{background:rgba(244,114,182,.1);color:#f472b6;}
+
+/* ============================================================
+   v1.3 consistency sweep — Alerts (#alert-panel). Applies the
+   app-standard vocabulary: filter-button lift (not zoom), row
+   left-accent on hover, and bordered icon chips with a category-
+   coloured hover glow. Row accent scoped to :not(.unread) since
+   unread items already carry a persistent cyan left border; the
+   active filter keeps its look (brighten only on :not(.active)).
+   Verified live in-browser.
+   ============================================================ */
+#alert-panel .alert-filter:hover{transform:translateY(-1px) translateZ(0);}
+#alert-panel .alert-filter:not(.active):hover{border-color:rgba(0,245,255,.35);background:rgba(0,245,255,.06);}
+#alert-panel .alert-filter:active{transform:translateY(0) scale(.96) translateZ(0);}
+#alert-panel .alert-item:not(.unread){position:relative;}
+#alert-panel .alert-item:not(.unread)::before{content:'';position:absolute;left:0;top:50%;transform:translateY(-50%) scaleY(0);width:2px;height:60%;border-radius:2px;background:#00f5ff;box-shadow:0 0 8px rgba(0,245,255,.6);transition:transform .16s cubic-bezier(.4,0,.2,1);}
+#alert-panel .alert-item:not(.unread):hover::before{transform:translateY(-50%) scaleY(1);}
+#alert-panel .alert-icon{border:1px solid rgba(255,255,255,.08);box-shadow:inset 0 1px 0 rgba(255,255,255,.07);transition:transform .16s cubic-bezier(.4,0,.2,1),box-shadow .16s;}
+#alert-panel .alert-item:hover .alert-icon{transform:scale(1.08);box-shadow:inset 0 1px 0 rgba(255,255,255,.1),0 0 10px -2px currentColor;}
+body.light #alert-panel .alert-item:not(.unread)::before{background:#0a6e9a;box-shadow:0 0 8px rgba(10,110,154,.45);}
 .alert-body{flex:1;min-width:0;}
 .alert-msg{font-size:9px;color:#e0f4ff;line-height:1.3;}
 .alert-msg b{color:#00f5ff;font-weight:700;}
