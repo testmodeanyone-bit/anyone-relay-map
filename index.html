@@ -236,6 +236,27 @@ function obShouldShow(){
 
 function obStart(){
   if(!obShouldShow()) return;
+  /* v553: same fix as v552's showOnboarding — don't start the spotlight tour until the
+   * first-load map loader has finished. Otherwise the first coach card ("Glowing dots are
+   * relay zones… Tap any zone to inspect it") shows over "INITIALIZING RELAY NETWORK",
+   * pointing at dots that haven't rendered yet. Defer until #map-loader is gone AND
+   * relay-points are painted, with a ~40s safety cap. Manual invocations (command palette)
+   * run immediately since the map is already loaded by then. */
+  if(!window.__obTourMapReady){
+    function _tReady(){ try{ var M=window.__anyoneMapLibre;
+      return !document.getElementById('map-loader') && M && M.getLayer && M.getLayer('relay-points')
+        && M.queryRenderedFeatures({layers:['relay-points']}).length>0; }catch(_){ return false; } }
+    if(!_tReady()){
+      if(!window.__obTourWaiting){
+        window.__obTourWaiting=true; var _tt=0;
+        var _tiv=setInterval(function(){ _tt++;
+          if(_tReady() || _tt>80){ clearInterval(_tiv); window.__obTourWaiting=false; window.__obTourMapReady=true; obStart(); }
+        }, 500);
+      }
+      return; // defer the tour until the map is ready
+    }
+    window.__obTourMapReady=true;
+  }
   _obCurrentStep = 0;
   var overlay = document.getElementById('ob-tour-overlay');
   if(overlay) overlay.classList.add('active');
