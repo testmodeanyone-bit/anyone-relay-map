@@ -11069,9 +11069,37 @@ async function buildAndCacheRegistry(env, ctx) {
 async function buildAndStoreIndex(env) {
   const t0 = Date.now();
   /* v47: timeouts on every outbound fetch (matches buildAndStoreUptimes pattern). */
-  const r0 = await fetch(`${WALLET_LOOKUP}&page=1`, { signal: AbortSignal.timeout(8e3) });
-  if (!r0.ok) throw new Error("upstream error: " + r0.status);
-  const d0 = await r0.json();
+  /* v58 FIX (slow-upstream tolerance + cache preservation): the page-1 fetch was
+   * the build's single point of failure. The old `if (!r0.ok) throw` (with a tight
+   * 8s timeout) bubbled straight past ALL the degraded-build / keep-previous-cache
+   * logic below and into a 502 — so a merely *sluggish* WALLET_LOOKUP (observed
+   * hanging right around 8s) blanked the whole map. Now: a 15s budget gives a slow
+   * upstream room to answer, and on failure we return the last-good cached index
+   * instead of throwing — so a slow/flaky page-1 degrades to STALE rather than
+   * wiping enrichment. Single attempt (no retry loop) to stay well inside the
+   * Worker request budget; the handler's stale path + the cron warm cover repeats. */
+  let d0;
+  try {
+    const r0 = await fetch(`${WALLET_LOOKUP}&page=1`, { signal: AbortSignal.timeout(15e3) });
+    if (!r0.ok) throw new Error("upstream error: " + r0.status);
+    d0 = await r0.json();
+  } catch (e) {
+    if (env.FP_INDEX) {
+      try {
+        const prev = await env.FP_INDEX.get(KV_KEY, { type: "json" });
+        if (prev && prev.index) {
+          /* Annotate so callers/telemetry can see the rebuild failed without
+           * losing the good data — mirrors the dropRate>2% degraded path below. */
+          prev.lastFailedBuildAt = Date.now();
+          prev.lastBuildError = (e && e.name) || "page1_failed";
+          return prev;
+        }
+      } catch (_) {}
+    }
+    /* No previous cache to fall back to — let the caller's handler return its
+     * stale-on-error path or, ultimately, a 502. */
+    throw e instanceof Error ? e : new Error("page1 failed");
+  }
   const totalPages = d0.pages || 1;
   const walletRows = [...d0.wallets || []];
   for (let p = 2; p <= totalPages; p += 20) {
