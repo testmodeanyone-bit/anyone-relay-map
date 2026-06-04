@@ -5472,6 +5472,25 @@ body.light .sig-close-btn:hover{color:rgba(10,70,120,1);background:rgba(10,70,12
 body.light .sc-title{color:#00d4e8;}
 body.light .sc-row{color:#e0f4ff;}
 body.light .sc-row span{color:#e0f4ff;}
+
+/* ============================================================
+   v1.3 Signals deep-polish — Connection Web (#sig-counts) + Radar
+   (#radar-panel) panels. Cyan HUD palette, consistent with the
+   sidebar/health section treatment. Additive; radar base CSS
+   (hover tint, dot glow) lives in the JS-built stylesheet and is
+   left intact — only the left-accent is added here. Verified live.
+   ============================================================ */
+#sig-counts .sc-title{position:relative;padding-left:11px;}
+#sig-counts .sc-title::before{content:'';position:absolute;left:0;top:50%;transform:translateY(-50%);width:3px;height:10px;border-radius:2px;background:linear-gradient(180deg,#00f5ff,rgba(0,245,255,.35));box-shadow:0 0 8px rgba(0,245,255,.45);}
+#sig-counts .sc-divider{border:none;height:1px;background:linear-gradient(90deg,rgba(0,245,255,.4),rgba(0,245,255,.06) 70%,transparent);}
+@keyframes sigDotPulse{0%,100%{transform:scale(1);opacity:1}50%{transform:scale(1.18);opacity:.6}}
+#sig-counts .sc-dot{animation:sigDotPulse 2.4s ease-in-out infinite;box-shadow:0 0 5px rgba(255,255,255,.22);}
+#radar-panel .radar-row{position:relative;}
+#radar-panel .radar-row::before{content:'';position:absolute;left:0;top:50%;transform:translateY(-50%) scaleY(0);width:2px;height:58%;border-radius:2px;background:#00f5ff;box-shadow:0 0 8px rgba(0,245,255,.6);transition:transform .16s cubic-bezier(.4,0,.2,1);}
+#radar-panel .radar-row:hover::before{transform:translateY(-50%) scaleY(1);}
+body.light #sig-counts .sc-title::before{background:linear-gradient(180deg,#0a6e9a,rgba(10,110,154,.35));box-shadow:0 0 8px rgba(10,110,154,.3);}
+body.light #sig-counts .sc-divider{background:linear-gradient(90deg,rgba(10,110,154,.4),rgba(10,110,154,.06) 70%,transparent);}
+body.light #radar-panel .radar-row::before{background:#0a6e9a;box-shadow:0 0 8px rgba(10,110,154,.45);}
 /* ── COMPASS ── */
 #compass{
   position:fixed;bottom:40px;right:60px;z-index:400;
