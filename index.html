@@ -5552,6 +5552,22 @@ body.light #compass{ filter:drop-shadow(0 0 6px rgba(0,100,180,0.25)); }
 .dp-info{ flex:1;min-width:0; }
 .dp-name{ font-size:11px;font-weight:700;color:#e0f4ff;white-space:nowrap;overflow:hidden;text-overflow:ellipsis; }
 .dp-name em{ color:#00f5ff;font-style:normal; }
+
+/* ============================================================
+   v1.3 Domains deep-polish (#domain-panel). Cyan HUD palette,
+   consistent with the row-accent + branded-chip language used
+   across the app. Additive; existing hover bg-tint and stat
+   dividers left intact. Verified live in-browser.
+   ============================================================ */
+#domain-panel .dp-item{position:relative;}
+#domain-panel .dp-item::before{content:'';position:absolute;left:0;top:50%;transform:translateY(-50%) scaleY(0);width:2px;height:60%;border-radius:2px;background:#00f5ff;box-shadow:0 0 8px rgba(0,245,255,.6);transition:transform .16s cubic-bezier(.4,0,.2,1);}
+#domain-panel .dp-item:hover::before{transform:translateY(-50%) scaleY(1);}
+#domain-panel .dp-icon{background:linear-gradient(180deg,rgba(0,245,255,.16),rgba(0,245,255,.05));border:1px solid rgba(0,245,255,.28);box-shadow:inset 0 1px 0 rgba(255,255,255,.08);transition:transform .16s cubic-bezier(.4,0,.2,1),box-shadow .16s;}
+#domain-panel .dp-item:hover .dp-icon{transform:scale(1.08);box-shadow:inset 0 1px 0 rgba(255,255,255,.12),0 0 12px -2px rgba(0,245,255,.5);}
+#domain-panel .dp-item:hover .dp-name em{text-shadow:0 0 8px rgba(0,245,255,.5);}
+#domain-panel #dp-search:focus{box-shadow:inset 0 -2px 0 rgba(0,245,255,.5);}
+body.light #domain-panel .dp-item::before{background:#0a6e9a;box-shadow:0 0 8px rgba(10,110,154,.45);}
+body.light #domain-panel .dp-icon{background:linear-gradient(180deg,rgba(10,110,154,.14),rgba(10,110,154,.05));border-color:rgba(10,110,154,.3);}
 .dp-owner{ font-size:8px;color:rgba(138,188,196,.45);letter-spacing:.3px;font-family:'Share Tech Mono',monospace; }
 .dp-new-tag{ font-size:7px;background:rgba(0,255,136,.15);border:1px solid rgba(0,255,136,.35);color:var(--an-green,#00ff88);padding:1px 5px;border-radius:3px;letter-spacing:.5px;flex-shrink:0; }
 #dp-footer{ padding:7px 14px;border-top:1px solid rgba(0,245,255,.07);display:flex;justify-content:space-between;align-items:center;flex-shrink:0; }
