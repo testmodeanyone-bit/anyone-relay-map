@@ -32291,7 +32291,16 @@ body.aclive-on #anyclip-avatar{display:none !important;}
       [].forEach.call(body.querySelectorAll('.radar-row'), function(row){
         row.addEventListener('click', function(){
           var fp=row.getAttribute('data-fp'), la=+row.getAttribute('data-lat'), lo=+row.getAttribute('data-lon');
-          if(fp && typeof selectRelay==='function'){ window.__rdAnchor=null; try{ selectRelay(fp, la, lo, true); }catch(_){} }
+          if(fp && typeof selectRelay==='function'){
+            /* v555: open the detail card to the RIGHT of the Signals/radar column so it
+             * doesn't overlap them. The default anchor (top-left {80,120}) collided with
+             * the docked Signals + radar panels — the "collapsing in top" bug. Anchor beside
+             * the Signals panel; fall back to a fixed clear spot if it's not measurable. */
+            var _ax=540, _ay=70;
+            try{ var _s=document.getElementById('sig-counts'); if(_s){ var _sr=_s.getBoundingClientRect(); if(_sr.width>0){ _ax=Math.round(_sr.right+30); _ay=Math.round(_sr.top+14); } } }catch(_){}
+            window.__rdAnchor={x:_ax, y:_ay};
+            try{ selectRelay(fp, la, lo, true); }catch(_){}
+          }
         });
       });
     }
