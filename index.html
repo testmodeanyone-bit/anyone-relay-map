@@ -5180,6 +5180,37 @@ body:not(.light) #onboarding #ob-close:hover { color: var(--p1-type-0) !importan
 }
 #onboarding #ob-close:hover { transform: rotate(90deg) !important; }
 
+/* ============================================================
+   v1.3 onboarding deep-polish — layered on the Phase 1 design.
+   Adds: (1) staggered entrance choreography, (2) richer card
+   depth + a real hover (lift, teal edge, accent-line wipe),
+   (3) a branded icon chip. CSS-only; HTML structure unchanged.
+   Dark-surface tweaks scoped to body:not(.light) to match the
+   Phase 1 architecture. Entrance uses fill-mode `backwards` (NOT
+   forwards) so the filled end-state never locks the :hover
+   transform once the animation completes. The global v1.3
+   prefers-reduced-motion layer collapses these to instant.
+   ============================================================ */
+@keyframes obRise{from{opacity:0;transform:translateY(14px)}to{opacity:1;transform:translateY(0)}}
+#onboarding #ob-logo{animation:obRise .45s cubic-bezier(.4,0,.2,1) backwards}
+#onboarding #ob-title{animation:obRise .45s cubic-bezier(.4,0,.2,1) .05s backwards}
+#onboarding #ob-sub{animation:obRise .45s cubic-bezier(.4,0,.2,1) .10s backwards}
+#onboarding #phase1-stats{animation:obRise .45s cubic-bezier(.4,0,.2,1) .15s backwards}
+#onboarding .ob-item{animation:obRise .45s cubic-bezier(.4,0,.2,1) backwards;position:relative !important;overflow:hidden !important}
+#onboarding #ob-grid .ob-item:nth-child(1){animation-delay:.20s}
+#onboarding #ob-grid .ob-item:nth-child(2){animation-delay:.25s}
+#onboarding #ob-grid .ob-item:nth-child(3){animation-delay:.30s}
+#onboarding #ob-grid .ob-item:nth-child(4){animation-delay:.35s}
+#onboarding #ob-grid .ob-item:nth-child(5){animation-delay:.40s}
+#onboarding #ob-grid .ob-item:nth-child(6){animation-delay:.45s}
+#onboarding #ob-footer{animation:obRise .45s cubic-bezier(.4,0,.2,1) .50s backwards}
+body:not(.light) #onboarding .ob-item{background:linear-gradient(180deg,rgba(94,234,212,.045) 0%,rgba(18,26,36,.55) 42%,#121A24 100%) !important;border:1px solid rgba(148,163,184,.14) !important;box-shadow:inset 0 1px 0 rgba(255,255,255,.025) !important}
+body:not(.light) #onboarding .ob-item:hover{transform:translateY(-3px) !important;border-color:rgba(94,234,212,.45) !important;box-shadow:0 14px 32px -12px rgba(0,0,0,.6),0 0 0 1px rgba(94,234,212,.12),0 0 24px -6px rgba(94,234,212,.18) !important}
+#onboarding .ob-item::after{content:'';position:absolute;top:0;left:0;right:0;height:1px;background:linear-gradient(90deg,transparent,#5EEAD4,transparent);opacity:0;transition:opacity 200ms cubic-bezier(.4,0,.2,1);pointer-events:none}
+#onboarding .ob-item:hover::after{opacity:.75}
+body:not(.light) #onboarding .ob-item .ob-icon{background:linear-gradient(180deg,rgba(94,234,212,.14),rgba(94,234,212,.05)) !important;border:1px solid rgba(94,234,212,.22) !important;box-shadow:inset 0 1px 0 rgba(255,255,255,.06) !important;transition:transform 200ms cubic-bezier(.4,0,.2,1),box-shadow 200ms cubic-bezier(.4,0,.2,1) !important}
+#onboarding .ob-item:hover .ob-icon{transform:translateY(-1px) scale(1.06) !important;box-shadow:inset 0 1px 0 rgba(255,255,255,.08),0 0 18px -4px rgba(94,234,212,.35) !important}
+
 /* ── CONNECTION WEB ── */
 .conn-line{fill:none;pointer-events:none;}
 /* ── SIGNAL ARCS ── */
