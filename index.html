@@ -24504,14 +24504,14 @@ function _scoreGeo(allRelays, total){
   /* v246 (Bug #1): guard against empty cEntries (no relay had a countryCode). */
   /* Without this, cEntries[0][1] throws TypeError and the whole panel breaks. */
   if(cEntries.length === 0){
-    return { score:0, max:20, label:_i18t('geographicSpread','Geographic Spread'), icon:'🌍',
+    return { score:0, max:20, iconKey:'geo', label:_i18t('geographicSpread','Geographic Spread'), icon:'🌍',
       detail:_i18t('awaitingGeo','Awaiting geographic data…'), sub:'',
       color:'#ef4444', _risk:null, _countries:0, _top3C:0 };
   }
   const top1C = cEntries[0][1]/total, top3C = cEntries.slice(0,3).reduce((s,[,v])=>s+v,0)/total;
   const countries = cEntries.length;
   const score = Math.min(20, Math.round((countries/60)*12 + Math.max(0,(1-top1C/0.35))*4 + Math.max(0,(1-top3C/0.60))*4));
-  return { score, max:20, label:_i18t('geographicSpread','Geographic Spread'), icon:'🌍',
+  return { score, max:20, iconKey:'geo', label:_i18t('geographicSpread','Geographic Spread'), icon:'🌍',
     detail:`${countries} ${_i18t('countries','countries').toLowerCase()} · top: ${_aoEscHtml(cEntries[0][0])} ${(top1C*100).toFixed(0)}%`,
     sub:`${_i18t('top3','Top 3')} ${_i18t('countries','countries').toLowerCase()} ${_i18t('hold','hold')} ${(top3C*100).toFixed(0)}% ${_i18t('ofAllRelays','of all relays')}`,
     color: score>=16?'#2dd4bf':score>=11?'#f59e0b':'#ef4444',
@@ -24524,14 +24524,14 @@ function _scoreIsp(allRelays, total){
   const iEntries = Object.entries(iCounts).sort((a,b)=>b[1]-a[1]);
   /* v246 (Bug #2): guard against empty iEntries (no relay had asName populated yet). */
   if(iEntries.length === 0){
-    return { score:0, max:20, label:_i18t('ispDiversity','ISP Diversity'), icon:'🏢',
+    return { score:0, max:20, iconKey:'isp', label:_i18t('ispDiversity','ISP Diversity'), icon:'🏢',
       detail:_i18t('awaitingIsp','Awaiting ISP data…'), sub:'',
       color:'#ef4444', _risk:null, _isps:0 };
   }
   const top1I = iEntries[0][1]/total, top3I = iEntries.slice(0,3).reduce((s,[,v])=>s+v,0)/total;
   const isps = iEntries.length;
   const score = Math.min(20, Math.round(Math.min(isps/300,1)*8 + Math.max(0,(1-top1I/0.40))*8 + Math.max(0,(1-top3I/0.55))*4));
-  return { score, max:20, label:_i18t('ispDiversity','ISP Diversity'), icon:'🏢',
+  return { score, max:20, iconKey:'isp', label:_i18t('ispDiversity','ISP Diversity'), icon:'🏢',
     detail:`${isps} ISPs · top: ${_aoEscHtml(iEntries[0][0].slice(0,20))} ${(top1I*100).toFixed(0)}%`,
     sub:`${_i18t('top3','Top 3')} ISPs ${_i18t('hold','hold')} ${(top3I*100).toFixed(0)}% ${_i18t('ofAllRelays','of all relays')}`,
     color: score>=16?'#2dd4bf':score>=11?'#f59e0b':'#ef4444',
@@ -24543,7 +24543,7 @@ function _scoreExit(total){
   const totalR = parseInt((document.getElementById('sR')?.textContent||'0').replace(/[^0-9]/g,''),10)||total;
   const ratio = exitCount/totalR;
   const score = Math.min(15, Math.round(ratio>=0.40&&ratio<=0.65?15:ratio>=0.30&&ratio<=0.75?10:5));
-  return { score, max:15, label:_i18t('exitRelayRatio','Exit Relay Ratio'), icon:'🟠',
+  return { score, max:15, iconKey:'exit', label:_i18t('exitRelayRatio','Exit Relay Ratio'), icon:'🟠',
     detail:`${(ratio*100).toFixed(0)}% exits · ${exitCount.toLocaleString()} ${_i18t('relays','relays').toLowerCase()}`,
     sub: ratio>=0.40&&ratio<=0.65?_i18t('idealRange','Ideal range (40–65%)'):ratio>=0.30?_i18t('acceptableRange','Acceptable range'):_i18t('outsideRange','Outside ideal range'),
     color: score>=13?'#2dd4bf':score>=9?'#f59e0b':'#ef4444' };
@@ -24553,7 +24553,7 @@ function _scoreBandwidth(relayData, total){
   if(totalBW===0){ const m=(document.getElementById('sBW')?.textContent||'').match(/([\d.]+)\s*GB/); if(m) totalBW=parseFloat(m[1])*1024; }
   const bwPerNode = totalBW/total;
   const score = Math.min(15, Math.round(Math.min(bwPerNode/12,1)*15));
-  return { score, max:15, label:_i18t('bandwidthStrength','Bandwidth Strength'), icon:'⚡',
+  return { score, max:15, iconKey:'bw', label:_i18t('bandwidthStrength','Bandwidth Strength'), icon:'⚡',
     detail:`${(totalBW/1024).toFixed(1)} GB/s total · ${bwPerNode.toFixed(1)} MB/s ${_i18t('perRelay','per relay')}`,
     sub: bwPerNode>=10?_i18t('excellentThroughput','Excellent throughput per relay'):bwPerNode>=5?_i18t('goodThroughput','Good throughput'):_i18t('lowThroughput','Low throughput per relay'),
     color: score>=12?'#2dd4bf':score>=8?'#f59e0b':'#ef4444',
@@ -24574,7 +24574,7 @@ function _scoreUptime(allRelays, total){
   window._uptimeHistory={up7,up30,up90,upAvgDays,total};
   /* v246 (Bug #4): _kind tag lets renderHealthPanel detect this metric without */
   /* string-comparing label, which broke for non-English languages. */
-  return { score, max:15, _kind:'uptime', label:_i18t('uptimeHistory','Uptime History'), icon:'⬆',
+  return { score, max:15, _kind:'uptime', iconKey:'uptime', label:_i18t('uptimeHistory','Uptime History'), icon:'⬆',
     detail:`${(qualityPct*100).toFixed(0)}% ${_i18t('stable','stable')} · ${up30.toLocaleString()} ${_i18t('relays','relays').toLowerCase()} 30d+ · ${up90.toLocaleString()} ${_i18t('relays','relays').toLowerCase()} 90d+`,
     sub: qualityPct>=0.70?`${_i18t('majorityStable','Majority stable')} · ${_i18t('avgUptime','avg uptime')} ${upAvgDays}d · ${up90.toLocaleString()} ${_i18t('veterans','veterans')} 90d+`
        : qualityPct>=0.50?`${_i18t('mostReliable','Most relays reliable')} · ${up30.toLocaleString()} ${_i18t('running','running')} 30d+ · ${_i18t('avgUptime','avg uptime')} ${upAvgDays}d`
@@ -24585,7 +24585,7 @@ function _scoreHardware(total){
   const hwCount=hwFps&&hwFps.size>0?hwFps.size:0;
   const hwPct=hwCount/total;
   const score=Math.min(10,Math.round(Math.min(hwPct/0.18,1)*10));
-  return { score, max:10, label:_i18t('hardwareRelayRatio','Hardware Relay Ratio'), icon:'🔧',
+  return { score, max:10, iconKey:'hw', label:_i18t('hardwareRelayRatio','Hardware Relay Ratio'), icon:'🔧',
     detail:hwCount>0?`${(hwPct*100).toFixed(1)}% ${_i18t('hardware','hardware').toLowerCase()} · ${hwCount.toLocaleString()} ${_i18t('verifiedRouters','verified routers')}`:_i18t('loadingHW','Loading hardware data…'),
     sub: hwPct>=0.15?_i18t('excellentHardware','Excellent hardware infrastructure'):hwPct>=0.08?_i18t('goodHardware','Good hardware relay presence'):hwPct>0?_i18t('growingHardware','Growing hardware infrastructure'):_i18t('awaitingHW','Awaiting hardware data'),
     color: score>=8?'#2dd4bf':score>=5?'#f59e0b':'#ef4444',
@@ -24593,7 +24593,7 @@ function _scoreHardware(total){
 }
 function _scoreSize(total, zoneCount){
   const score=Math.min(5,Math.round(Math.min(total/9000,1)*5));
-  return { score, max:5, label:_i18t('networkSize','Network Size'), icon:'⬡',
+  return { score, max:5, iconKey:'size', label:_i18t('networkSize','Network Size'), icon:'⬡',
     detail:`${total.toLocaleString()} ${_i18t('relays','relays').toLowerCase()} · ${zoneCount} ${_i18t('zones','zones').toLowerCase()}`,
     sub:total>=7000?_i18t('largeNetwork','Large network — good capacity'):total>=4000?_i18t('mediumNetwork','Medium network'):_i18t('growingNetwork','Growing network'),
     color: score>=4?'#2dd4bf':score>=3?'#f59e0b':'#ef4444' };
@@ -24678,6 +24678,24 @@ function openHealthPanel(){
   repositionAnyClip();
 }
 
+/* v1.3: custom Anyone-Protocol health icons (replaces the old emoji glyphs).
+ * Geometric line-art, 24x24 viewBox, stroke=currentColor so each icon inherits
+ * its row's score colour. Keyed by the iconKey tagged onto each dimension. */
+const _HP_ICONS = {
+  geo:'<circle cx="12" cy="12" r="9"/><line x1="3" y1="12" x2="21" y2="12"/><path d="M12 3c3 3 3 15 0 18M12 3c-3 3-3 15 0 18"/>',
+  isp:'<rect x="4" y="4.5" width="16" height="6.5" rx="1.5"/><rect x="4" y="13" width="16" height="6.5" rx="1.5"/><line x1="7" y1="7.75" x2="9" y2="7.75"/><line x1="7" y1="16.25" x2="9" y2="16.25"/>',
+  exit:'<circle cx="8.5" cy="12" r="4.5"/><line x1="13" y1="12" x2="20" y2="12"/><polyline points="17 9 20 12 17 15"/>',
+  bw:'<path d="M13 2 4 14h6l-1 8 9-12h-6l1-8z"/>',
+  uptime:'<polyline points="3 16 9 11 13 14 21 6"/><polyline points="21 11 21 6 16 6"/>',
+  hw:'<rect x="7" y="7" width="10" height="10" rx="1.5"/><rect x="10.5" y="10.5" width="3" height="3" rx="0.5"/><line x1="10" y1="7" x2="10" y2="4"/><line x1="14" y1="7" x2="14" y2="4"/><line x1="10" y1="20" x2="10" y2="17"/><line x1="14" y1="20" x2="14" y2="17"/><line x1="7" y1="10" x2="4" y2="10"/><line x1="7" y1="14" x2="4" y2="14"/><line x1="20" y1="10" x2="17" y2="10"/><line x1="20" y1="14" x2="17" y2="14"/>',
+  size:'<path d="M12 2.5 20 7v10l-8 4.5L4 17V7z"/><circle cx="12" cy="12" r="1.8" fill="currentColor" stroke="none"/><line x1="12" y1="10.2" x2="12" y2="4.5"/><line x1="13.6" y1="13" x2="18.5" y2="15.8"/><line x1="10.4" y1="13" x2="5.5" y2="15.8"/>'
+};
+function _hpIconChip(key, color){
+  const c = color || '#2dd4bf';
+  const inner = _HP_ICONS[key];
+  if(!inner) return '<span style="font-size:12px;line-height:1">\u00b7</span>';
+  return '<span style="display:inline-grid;place-items:center;width:24px;height:24px;border-radius:7px;background:'+c+'1f;border:1px solid '+c+'3d;color:'+c+';flex-shrink:0;"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'+inner+'</svg></span>';
+}
 function renderHealthPanel(){
   /* v249: gate on _enrichmentComplete. Without it, computeHealthScore returns a */
   /* meaningless score (0 or near-zero) because countryCode/asName/exitFps/hwFps haven't */
@@ -24757,8 +24775,8 @@ function renderHealthPanel(){
 
     return `<div style="margin-bottom:11px;padding-bottom:11px;border-bottom:1px solid rgba(0,245,255,.05);">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:5px;">
-        <span style="font-size:10px;color:#cce8ee;letter-spacing:.5px;font-weight:700;display:flex;align-items:center;gap:5px;">
-          <span style="font-size:12px;line-height:1">${s.icon||'·'}</span>${s.label}
+        <span style="font-size:10px;color:#cce8ee;letter-spacing:.5px;font-weight:700;display:flex;align-items:center;gap:8px;">
+          ${_hpIconChip(s.iconKey, barColor)}${s.label}
         </span>
         <span style="font-family:var(--ac-font,Outfit,system-ui);font-size:12px;font-weight:900;color:${barColor};">
           ${s.score}<span style="font-size:9px;color:rgba(180,220,235,.4);font-weight:400;font-family:'Share Tech Mono',monospace"> / ${s.max}</span>
