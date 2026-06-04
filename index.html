@@ -24723,6 +24723,8 @@ function renderHealthPanel(){
   document.getElementById('health-arc').style.strokeDasharray = '188';
   document.getElementById('health-arc').style.strokeDashoffset = offset;
   document.getElementById('hg1-s1').setAttribute('stop-color', vividColor);
+  document.getElementById('hg1-s2').setAttribute('stop-color', vividColor);
+  document.getElementById('health-arc').style.filter = 'drop-shadow(0 0 3px '+vividColor+'aa) drop-shadow(0 0 6px '+vividColor+'55)';
 
   const gradeEl = document.getElementById('health-grade');
   gradeEl.textContent = h.grade;
@@ -24782,9 +24784,9 @@ function renderHealthPanel(){
           ${s.score}<span style="font-size:9px;color:rgba(180,220,235,.4);font-weight:400;font-family:'Share Tech Mono',monospace"> / ${s.max}</span>
         </span>
       </div>
-      <div style="height:6px;background:rgba(0,245,255,.06);border-radius:3px;overflow:hidden;margin-bottom:5px;position:relative;">
-        <div style="height:100%;width:${pct}%;background:${barColor};border-radius:3px;
-          box-shadow:0 0 6px ${barColor}55;transition:width 1.2s cubic-bezier(.4,0,.2,1);"></div>
+      <div style="height:6px;background:rgba(0,245,255,.06);border-radius:3px;overflow:hidden;margin-bottom:5px;position:relative;box-shadow:inset 0 1px 2px rgba(0,0,0,.25);">
+        <div style="height:100%;width:${pct}%;background:linear-gradient(90deg,${barColor}80,${barColor});border-radius:3px;
+          box-shadow:0 0 8px ${barColor}66,inset 0 1px 0 rgba(255,255,255,.25);transition:width 1.2s cubic-bezier(.4,0,.2,1);"></div>
       </div>
       <div style="font-size:9px;color:#8bbfc9;letter-spacing:.3px;margin-bottom:2px;">${s.detail}</div>
       ${s.sub ? `<div style="font-size:9px;color:${barColor};opacity:.75;letter-spacing:.2px;">${s.sub}</div>` : ''}
@@ -30012,7 +30014,7 @@ IMPORTANT: The user's preferred language is ${activeLang.name}. You MUST respond
         <defs>
           <linearGradient id="hg1" x1="0%" y1="0%" x2="100%" y2="100%">
             <stop offset="0%"   id="hg1-s1" stop-color="#2dd4bf"/>
-            <stop offset="100%" id="hg1-s2" stop-color="#8b5cf6"/>
+            <stop offset="100%" id="hg1-s2" stop-color="#2dd4bf" stop-opacity="0.55"/>
           </linearGradient>
         </defs>
         <circle cx="40" cy="40" r="30" fill="none" stroke="rgba(0,245,255,.07)" stroke-width="7"/>
