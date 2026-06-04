@@ -2807,7 +2807,18 @@ var IPS_BASE = "https://dev.anyone-wallet-lookup.info/ips?format=json&wallet=";
 var AO_CU = "https://cu.anyone.tech/dry-run?process-id=W5XIwvQ6pJBtL_Hhvx9KH4fj4LNoyHDLtbAILMM_lCs";
 var AO_REGISTRY_ID = "W5XIwvQ6pJBtL_Hhvx9KH4fj4LNoyHDLtbAILMM_lCs";
 var KV_KEY = "fp_index_v1";
-var KV_TTL_SECS = 3600;
+/* v57 FIX (map-blanking 502s): fp-index was cached with a 1-hour TTL while
+ * nothing on the cron kept it warm. When the WALLET_LOOKUP upstream went slow,
+ * every on-demand build threw at the page-1 fetch, no new copy was written, and
+ * after exactly 1 hour the last-good copy expired — so every subsequent request
+ * was a cache MISS -> build -> throw -> 502, blanking the relay map's enrichment
+ * (flags / marker colours / health) for ~1h straight (confirmed in proxy logs:
+ * 397/397 fp-index requests 502'd over a 1h window). The cached copy is the only
+ * fallback during an upstream outage, so it MUST outlive the outage. 7 days lets
+ * the handler's existing STALE path keep serving last-good data while a background
+ * build retries. Logical freshness is still governed by STALE_MS (55min) + the
+ * cron warm added below — not by KV eviction. */
+var KV_TTL_SECS = 7 * 24 * 3600;
 var STALE_MS = 55 * 60 * 1e3;
 var GROWTH_PREFIX = "growth:";
 var GROWTH_DAYS = 30;
@@ -5593,7 +5604,7 @@ var worker_source_default = {
           if (cached && cached.index) {
             const age = Date.now() - (cached.builtAt || 0);
             const isStale = age > STALE_MS;
-            if (isStale) ctx.waitUntil(buildAndStoreIndex(env));
+            if (isStale) ctx.waitUntil(buildAndStoreIndex(env).catch((e) => console.warn("[fp-index] bg rebuild failed:", e && e.message)));
             return new Response(JSON.stringify(cached), {
               headers: jsonHeaders({
                 "X-Cache": isStale ? "STALE" : "HIT",
@@ -5616,6 +5627,27 @@ var worker_source_default = {
           })
         });
       } catch (err) {
+        /* v57 FIX (stale-on-error): a build failure (typically a WALLET_LOOKUP
+         * upstream timeout) must NOT blank the relay map. If ANY previous index
+         * exists in KV, serve it — at any age — rather than 502'ing. With the
+         * 7-day TTL above this copy reliably survives an outage, so the map keeps
+         * its flags/colours/health from the last good build until upstream
+         * recovers. Only when there is genuinely no copy at all do we 502. */
+        if (env.FP_INDEX) {
+          try {
+            const lastGood = await env.FP_INDEX.get(KV_KEY, { type: "json" });
+            if (lastGood && lastGood.index) {
+              const age = Date.now() - (lastGood.builtAt || 0);
+              return new Response(JSON.stringify(lastGood), {
+                headers: jsonHeaders({
+                  "X-Cache": "STALE-ERROR",
+                  "X-Age": (age / 1e3).toFixed(0) + "s",
+                  "Cache-Control": "max-age=60"
+                })
+              });
+            }
+          } catch (_) {}
+        }
         return cors(JSON.stringify({ error: "Upstream error" }), 502);
       }
     }
@@ -10913,6 +10945,40 @@ Issued: ${(/* @__PURE__ */ new Date()).toISOString()}
     /* Incremental non-wallet enrichment: one slice per tick (cursor-based). Fire-
      * and-forget; a failure here must not affect snapshot/registry/uptimes warms. */
     ctx.waitUntil(warmNonWalletEnrichment(env).then(() => recordCronOutcome(env, "enrich", true)).catch(e => { console.warn("[cron] non-wallet enrich failed:", e.message); return recordCronOutcome(env, "enrich", false, e.message); }));
+    /* v57 FIX: warm fp-index on the cron. Previously NOTHING warmed fp-index —
+     * it was (re)built only by organic cache-MISS traffic, and combined with the
+     * old 1h TTL a transient upstream slowdown evicted the only copy and blanked
+     * the map. We warm it here, but ONLY when the copy is missing or already past
+     * STALE_MS, so we don't pile a second heavy ~250-fetch build onto the same
+     * upstream on every tick. Fire-and-forget; the 7-day TTL keeps the last-good
+     * copy servable if this build fails. */
+    ctx.waitUntil((async () => {
+      if (!env.FP_INDEX) return;
+      try {
+        let needWarm = true;
+        const raw = await env.FP_INDEX.get(KV_KEY).catch(() => null);
+        if (raw) {
+          try {
+            const cached = JSON.parse(raw);
+            const age = Date.now() - (cached.builtAt || 0);
+            if (cached.index && age < STALE_MS) {
+              console.log(`[cron] fp-index fresh (age=${Math.round(age / 6e4)}min) \u2014 skip warm`);
+              needWarm = false;
+            }
+          } catch (_) {}
+        } else {
+          console.log("[cron] fp-index missing \u2014 warming from cold");
+        }
+        if (needWarm) {
+          await buildAndStoreIndex(env);
+          console.log("[cron] fp-index warm complete");
+        }
+        await recordCronOutcome(env, "fpindex", true);
+      } catch (e) {
+        console.error("[cron] fp-index warm failed:", e.message);
+        await recordCronOutcome(env, "fpindex", false, e.message);
+      }
+    })());
     ctx.waitUntil((async () => {
       if (!env.FP_INDEX) {
         console.warn("[cron] no FP_INDEX binding \u2014 cannot warm uptimes cache");
