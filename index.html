@@ -13338,6 +13338,27 @@ function _p3ResetCounter(){
 function showOnboarding(){
   // Respect both dismissal layers so stray callers cannot resurrect it.
   if(_obSessionDismissed() || _obPersistentDismissed()) return;
+  /* v552: don't surface the welcome modal until the first-load map loader has
+   * finished — otherwise it stacks over the "INITIALIZING RELAY NETWORK" screen
+   * (the 1200ms / post-tour triggers fire before the map renders on a slow load).
+   * Defer until #map-loader is gone AND relay-points are painted, with a ~40s
+   * safety cap so a stalled load still shows the modal. Once ready, the flag lets
+   * later/manual invocations open it immediately. */
+  if(!window.__obMapReady){
+    function _mapReady(){ try{ var M=window.__anyoneMapLibre;
+      return !document.getElementById('map-loader') && M && M.getLayer && M.getLayer('relay-points')
+        && M.queryRenderedFeatures({layers:['relay-points']}).length>0; }catch(_){ return false; } }
+    if(!_mapReady()){
+      if(!window.__obReadyWaiting){
+        window.__obReadyWaiting=true; var _t=0;
+        var _iv=setInterval(function(){ _t++;
+          if(_mapReady() || _t>80){ clearInterval(_iv); window.__obReadyWaiting=false; window.__obMapReady=true; showOnboarding(); }
+        }, 500);
+      }
+      return; // defer this invocation until the map is ready
+    }
+    window.__obMapReady=true;
+  }
   const ob = document.getElementById('onboarding');
   if(ob) {
     _p1InjectWelcomeStats();
