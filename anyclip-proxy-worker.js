@@ -9856,6 +9856,19 @@ I confirm I control this wallet.`;
       try {
         const body = await request.json();
         const { nick, hash, tier, wallet, password } = body;
+        /* SEC (register-rl): /api/user/register was the only auth endpoint without
+         * a rate limiter (login has the v31 two-tier limiter). Unthrottled
+         * registration enabled account-creation abuse: lounge spam, nick-namespace
+         * exhaustion, and registry bloat (get/saveUserRegistry read+rewrite the
+         * WHOLE registry per register, so junk accounts slow every future op).
+         * Per-IP only (per-nick is meaningless here: each register is a new nick).
+         * 5/hr/IP is generous for humans, throttles bots. Fails OPEN on D1 outage
+         * (same posture as login's limiter; _atomicIncrCounter returns null then). */
+        const _regIp = request.headers.get("CF-Connecting-IP") || "unknown";
+        const _regCount = await _atomicIncrCounter(env, `register-rl:${_regIp}`, 3600);
+        if (_regCount !== null && _regCount > 5) {
+          return cors(JSON.stringify({ ok: false, error: "Too many accounts created. Try again later." }), 429);
+        }
         /* Mitnick #10: accept raw password (v3) OR pre-hashed (v2 backward compat).
          * New clients send { password }, old clients send { hash }. */
         const useRawPassword = typeof password === "string" && password.length > 0;
