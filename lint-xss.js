@@ -41,11 +41,13 @@ const SAFE_HELPERS = ['_i18t(', '.toLocaleString(', '.toFixed(', '.length',
                       '.count', '? ' /* short ternaries of literals, low risk */];
 
 // Attacker-controlled fields that MUST be escaped before hitting an HTML sink.
-// (Keep this tight to stay low-noise — these are the real injection vectors.)
+// These are the raw DATA-FIELD accessors where untrusted input enters — NOT
+// local variable names (a local that holds _aoEscHtml(...) is already safe; the
+// escaper is recognised below). Keep this tight to stay low-noise.
 const SENSITIVE_FIELDS = [
   '.name', '.owner', '.nickname', '.asName', '.as_name', '.isp', '.contact',
   '.host', '.hostname', '.domain', '.platform', '.operator', 'topIsps',
-  'namePart', 'shortOwner', 'rawName', '.message', '.body', '.text'
+  '.message', '.body', '.text'
 ];
 // Relay nickname is accessed as `.n` in the raw enriched data — match `.n`
 // only when it is a complete property (followed by a non-word char).
@@ -165,36 +167,43 @@ function findInterpsForFile(src) {
   let m;
   while ((m = sinkTokenRe.exec(src)) !== null) {
     // From the sink, find the first backtick that starts the HTML template.
-    let j = m.index + m[0].length, tick = -1, semi = -1;
-    const limit = Math.min(src.length, j + 400);
+    /* Walk the sink's RHS tracking bracket depth so we find template literals
+     * even when the RHS is `arr.map(d => { const x = …; return `…` }).join('')`
+     * — i.e. don't mistake a `;` *inside* the expression for the statement end.
+     * Collect every template literal found; only treat the RHS as a bare
+     * variable when NO template appears before the depth-0 statement terminator. */
+    const rhsStart = m.index + m[0].length;
+    const limit = Math.min(src.length, rhsStart + 20000);
+    let j = rhsStart, depth = 0, foundTemplate = false, breakPos = limit;
     while (j < limit) {
       const c = src[j];
-      if (c === '`') { tick = j; break; }
-      if (c === ';') { semi = j; break; }   // statement ended, no template
+      if (c === '\\') { j += 2; continue; }
+      if (c === '`') {
+        foundTemplate = true;
+        const tpl = scanTemplate(src, j);
+        /* Auditable suppression: an `xss-ok` marker between the sink token and
+         * the template's end skips it. Use ONLY for provably developer-
+         * controlled data (e.g. a hardcoded constant array). Greppable. */
+        if (!src.slice(m.index, tpl.end).includes('xss-ok')) collect(tpl.interps, lineOf(j), null);
+        j = tpl.end + 1; continue;
+      }
+      if (c === '"' || c === "'") { j = skipString(src, j, c); continue; }
+      if (c === '(' || c === '{' || c === '[') { depth++; j++; continue; }
+      if (c === ')' || c === '}' || c === ']') { depth--; if (depth < 0) { breakPos = j; break; } j++; continue; }
+      if (c === ';' && depth === 0) { breakPos = j; break; }   // real statement end
       j++;
     }
+    if (foundTemplate) continue;       // template sink(s) handled above
 
-    if (tick !== -1) {
-      // Direct template literal at the sink (incl. inline .map(r=>`...`)).
-      const tpl = scanTemplate(src, tick);
-      /* Auditable suppression: a sink whose template (or its line) carries an
-       * `xss-ok` marker is skipped. Use ONLY for provably developer-controlled
-       * data (e.g. a hardcoded constant array). Greppable for review. */
-      if (src.slice(m.index, tpl.end).includes('xss-ok')) continue;
-      collect(tpl.interps, lineOf(tick), null);
-      continue;
-    }
-
-    /* No template at the sink — RHS may be a VARIABLE holding one (one-level
+    /* No template in the RHS — it may be a VARIABLE holding one (one-level
      * trace). Resolve the variable's `VAR = `…`` / `VAR += `…`` template
-     * assignments, but SCOPE the search to the window between the variable's
-     * nearest preceding declaration (let/const/var VAR) and this sink. That
-     * keeps a common name like `html` from pulling in unrelated same-named vars
-     * in other functions, while still capturing a full
-     * `let html=''; html+=…; html+=…` accumulation block. Reported at the
-     * ASSIGNMENT's line (where the fix goes), annotated `via VAR`. */
+     * assignments, SCOPED to the window between the variable's nearest preceding
+     * declaration (let/const/var VAR) and this sink. That keeps a common name
+     * like `html` from pulling in unrelated same-named vars in other functions,
+     * while still capturing a full `let html=''; html+=…; html+=…` accumulation
+     * block. Reported at the ASSIGNMENT's line, annotated `via VAR`. */
     if (lineText(m.index).includes('xss-ok')) continue;
-    const rhs = src.slice(m.index + m[0].length, semi === -1 ? limit : semi);
+    const rhs = src.slice(rhsStart, breakPos);
     const varName = extractRhsVar(rhs);
     if (!varName) continue;            // call/property/literal — out of one-level scope
     let declIdx = 0, dm;
