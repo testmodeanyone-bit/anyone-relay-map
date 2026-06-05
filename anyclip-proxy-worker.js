@@ -5165,6 +5165,190 @@ async function warmNonWalletEnrichment(env) {
   console.log(`[enrich-nonwallet] slice ${cursor}-${cursor + slice.length}/${gap.length} — ok=${ok} fail=${fail} pruned=${pruned} accumulated=${Object.keys(acc).length}`);
 }
 
+/* ---- v63: incremental fp-index warmer ------------------------------------
+ * The synchronous buildAndStoreIndex fetches IPs for all ~660 wallets in one
+ * shot (~265s wall, ~660 subrequests) - far beyond any cron/background
+ * waitUntil budget, so fp-index only ever rebuilt on a SYNCHRONOUS request
+ * (cache MISS / authenticated bust). On the cron/stale paths the heavy build
+ * was killed before it could write, so the cache went stale and the map relied
+ * on manual rebuilds. This warms ONE SLICE of wallets per 15-min tick at low
+ * concurrency, accumulating into a draft, and publishes a fresh fp_index_v1
+ * only when a full pass completes. Properties:
+ *   - each published copy is COMPLETE (a mid-pass draft is never published);
+ *   - gentle concurrency keeps the flaky dev /ips endpoint from timing out;
+ *   - one slice fits the cron budget, so the index self-heals unattended;
+ *   - the pass-level degraded guard (>2% wallet failure) keeps the previous
+ *     good copy rather than overwriting with a noisy partial.
+ * Mirrors warmNonWalletEnrichment's cursor/accumulator/wrap pattern. The
+ * synchronous buildAndStoreIndex path is unchanged for on-demand full rebuilds. */
+var FP_WARM_WALLETS_KEY = "fp_index_warm_wallets";  // sorted wallet-list snapshot for the in-progress pass
+var FP_WARM_CURSOR_KEY = "fp_index_warm_cursor";    // index into that list
+var FP_WARM_DRAFT_KEY = "fp_index_warm_draft";      // accumulating { fps:{FP:code}, failed:N }
+var FP_WARM_SLICE = 100;   // wallets per tick (~7 ticks per pass for ~660 wallets)
+var FP_WARM_CONC = 8;      // gentle concurrency vs the flaky dev /ips endpoint
+
+function _fpMergeCode(existing, add) {
+  const has = (s, c) => typeof s === "string" && s.indexOf(c) !== -1;
+  return (has(existing, "e") || has(add, "e") ? "e" : "") + (has(existing, "g") || has(add, "g") ? "g" : "");
+}
+
+/* Same retry/timeout semantics as buildAndStoreIndex's inner fetchWalletIps,
+ * extracted to module scope so the warmer can reuse it without touching the
+ * synchronous build. */
+async function _fpWarmFetchWalletIps(wallet, attempt) {
+  attempt = attempt || 1;
+  try {
+    const r = await fetch(`${IPS_BASE}${encodeURIComponent(wallet)}`, { signal: AbortSignal.timeout(8e3) });
+    if (!r.ok) {
+      if (attempt < 3 && (r.status >= 500 || r.status === 429)) {
+        await new Promise((res) => setTimeout(res, 500 * attempt));
+        return _fpWarmFetchWalletIps(wallet, attempt + 1);
+      }
+      return { ok: false, wallet };
+    }
+    const d = await r.json();
+    return { ok: true, wallet, ips: d.ips || [] };
+  } catch (e) {
+    if (attempt < 3) {
+      await new Promise((res) => setTimeout(res, 500 * attempt));
+      return _fpWarmFetchWalletIps(wallet, attempt + 1);
+    }
+    return { ok: false, wallet };
+  }
+}
+
+/* Fetch the full consensus wallet list (page-1 then remaining pages), sorted for
+ * a stable cursor. Throws on page-1 failure so the caller records a cron miss. */
+async function _fpWarmFetchWalletList() {
+  const r0 = await fetch(`${WALLET_LOOKUP}&page=1`, { signal: AbortSignal.timeout(15e3) });
+  if (!r0.ok) throw new Error("page1 " + r0.status);
+  const d0 = await r0.json();
+  const totalPages = d0.pages || 1;
+  const walletRows = [...(d0.wallets || [])];
+  for (let p = 2; p <= totalPages; p += 20) {
+    const batch = Array.from({ length: Math.min(20, totalPages - p + 1) }, (_, i) => p + i);
+    const results = await Promise.all(
+      batch.map((pg) => fetch(`${WALLET_LOOKUP}&page=${pg}`, { signal: AbortSignal.timeout(8e3) })
+        .then((r) => r.json()).then((d) => d.wallets || []).catch(() => []))
+    );
+    for (const rows of results) walletRows.push(...rows);
+  }
+  const wallets = walletRows
+    .filter((w) => w.wallet && (w.in_consensus_ips || 0) > 0)
+    .map((w) => w.wallet)
+    .sort();   // stable order so the cursor means the same thing across ticks
+  return { wallets, walletRows: walletRows.length };
+}
+
+async function warmFpIndexIncremental(env) {
+  if (!env.FP_INDEX) return;
+
+  let cursor = 0;
+  try { const c = await env.FP_INDEX.get(FP_WARM_CURSOR_KEY); if (c) cursor = parseInt(c, 10) || 0; } catch (_) {}
+
+  let snap = null;
+  if (cursor > 0) {
+    try { const s = await env.FP_INDEX.get(FP_WARM_WALLETS_KEY); if (s) snap = JSON.parse(s); } catch (_) {}
+    if (!snap || !Array.isArray(snap.wallets) || !snap.wallets.length) cursor = 0;  // snapshot lost mid-pass -> restart cleanly
+  }
+
+  if (cursor === 0) {
+    /* Between passes: only start a new pass if the published index is missing,
+     * flagged partial, or older than STALE_MS - otherwise leave a fresh copy be
+     * (avoids hammering the upstream when nothing needs refreshing). */
+    try {
+      const pub = await env.FP_INDEX.get(KV_KEY, { type: "json" });
+      if (pub && pub.index && !pub.partial && (Date.now() - (pub.builtAt || 0)) < STALE_MS) {
+        console.log("[fp-warm] published index fresh - no new pass");
+        return;
+      }
+    } catch (_) {}
+    const built = await _fpWarmFetchWalletList();
+    if (!built.wallets.length) { console.warn("[fp-warm] empty wallet list - skip tick"); return; }
+    snap = { wallets: built.wallets, walletRows: built.walletRows, startedAt: Date.now() };
+    await env.FP_INDEX.put(FP_WARM_WALLETS_KEY, JSON.stringify(snap), { expirationTtl: 86400 }).catch(() => {});
+    await env.FP_INDEX.put(FP_WARM_DRAFT_KEY, JSON.stringify({ fps: {}, failed: 0 }), { expirationTtl: 86400 }).catch(() => {});
+  }
+
+  const wallets = snap.wallets;
+
+  let draft = { fps: {}, failed: 0 };
+  try { const d = await env.FP_INDEX.get(FP_WARM_DRAFT_KEY); if (d) { const p = JSON.parse(d); draft.fps = p.fps || {}; draft.failed = p.failed || 0; } } catch (_) {}
+
+  const slice = wallets.slice(cursor, cursor + FP_WARM_SLICE);
+  let sliceFailed = 0;
+  for (let i = 0; i < slice.length; i += FP_WARM_CONC) {
+    const batch = slice.slice(i, i + FP_WARM_CONC);
+    const results = await Promise.all(batch.map((w) => _fpWarmFetchWalletIps(w)));
+    for (const res of results) {
+      if (!res.ok) { sliceFailed++; continue; }
+      for (const relay of res.ips) {
+        const fp = (relay.fingerprint || "").toUpperCase();
+        if (!fp || relay.in_consensus === false) continue;  // same in-consensus filter as the sync build
+        const fl = relay.flags || [];
+        let code = "";
+        if (fl.includes("Exit")) code += "e";
+        if (fl.includes("Guard")) code += "g";
+        if (code) draft.fps[fp] = _fpMergeCode(draft.fps[fp], code);
+        else if (!(fp in draft.fps)) draft.fps[fp] = "";   // middle-only: tracked so `total` is accurate
+      }
+    }
+  }
+  draft.failed += sliceFailed;
+
+  const nextCursor = cursor + FP_WARM_SLICE;
+  if (nextCursor < wallets.length) {
+    await env.FP_INDEX.put(FP_WARM_DRAFT_KEY, JSON.stringify(draft), { expirationTtl: 86400 }).catch(() => {});
+    await env.FP_INDEX.put(FP_WARM_CURSOR_KEY, String(nextCursor), { expirationTtl: 86400 }).catch(() => {});
+    console.log(`[fp-warm] slice ${cursor}-${cursor + slice.length}/${wallets.length} failed=${sliceFailed} accFps=${Object.keys(draft.fps).length}`);
+    return;
+  }
+
+  /* ---- pass complete: assemble + publish (or keep prev if degraded) ---- */
+  const totalWallets = wallets.length;
+  const dropRate = totalWallets > 0 ? draft.failed / totalWallets : 0;
+
+  const index = {};
+  let exits = 0, guards = 0, total = 0;
+  for (const fp in draft.fps) {
+    total++;
+    const code = draft.fps[fp];
+    if (code) { index[fp] = code; if (code.indexOf("e") !== -1) exits++; if (code.indexOf("g") !== -1) guards++; }
+  }
+  const middles = Math.max(0, total - Object.keys(index).length);
+
+  const result = {
+    index, exits, guards, middles, total,
+    wallets: snap.walletRows, topN: totalWallets, coverage: "100%",
+    builtAt: Date.now(),
+    elapsed: ((Date.now() - (snap.startedAt || Date.now())) / 1e3).toFixed(1),  // pass wall-clock (spans several ticks)
+    failedWallets: draft.failed,
+    dropRate: Math.round(dropRate * 10000) / 10000,
+    builtBy: "incremental-warm"
+  };
+
+  // reset pass state regardless of outcome so the next tick starts a clean pass
+  await env.FP_INDEX.put(FP_WARM_CURSOR_KEY, "0", { expirationTtl: 86400 }).catch(() => {});
+  await env.FP_INDEX.delete(FP_WARM_WALLETS_KEY).catch(() => {});
+  await env.FP_INDEX.delete(FP_WARM_DRAFT_KEY).catch(() => {});
+
+  if (dropRate > 0.02) {
+    console.warn(`[fp-warm] pass degraded: ${draft.failed}/${totalWallets} wallets failed (${(dropRate * 100).toFixed(1)}%). Keeping previous fp_index_v1.`);
+    try {
+      const prev = await env.FP_INDEX.get(KV_KEY, { type: "json" });
+      if (prev && prev.index) {
+        prev.lastDegradedAttempt = { ts: Date.now(), failedWallets: draft.failed, dropRate: result.dropRate, via: "incremental-warm" };
+        await env.FP_INDEX.put(KV_KEY, JSON.stringify(prev), { expirationTtl: KV_TTL_SECS }).catch(() => {});
+        return;
+      }
+    } catch (_) {}
+    result.partial = true;   // no good previous copy: publish the flagged partial rather than nothing
+  }
+
+  await env.FP_INDEX.put(KV_KEY, JSON.stringify(result), { expirationTtl: KV_TTL_SECS }).catch(() => {});
+  console.log(`[fp-warm] pass COMPLETE -> fp_index_v1: total=${total} exits=${exits} guards=${guards} drop=${(dropRate * 100).toFixed(1)}% wall=${result.elapsed}s`);
+}
+
 /* #14 (observability): track cron task outcomes so a silent stall is detectable.
  * Each task (snapshot/registry/enrich/uptimes) reports success or failure here;
  * the /health endpoint reads it and goes 503 when something has been failing.
@@ -5648,7 +5832,13 @@ var worker_source_default = {
           if (cached && cached.index) {
             const age = Date.now() - (cached.builtAt || 0);
             const isStale = age > STALE_MS;
-            if (isStale) ctx.waitUntil(buildAndStoreIndex(env).catch((e) => console.warn("[fp-index] bg rebuild failed:", e && e.message)));
+            /* v63: background refresh is owned by the cron incremental warmer
+             * (warmFpIndexIncremental). The old per-request stale rebuild fired a
+             * full ~265s wallet fanout that never finished in a waitUntil budget
+             * AND, during a warm pass, competed with it for the flaky /ips
+             * upstream — spiking the warmer's drop rate. Serve last-good here; the
+             * warmer refreshes in budget-friendly slices. (A truly absent cache
+             * still triggers the synchronous MISS build below.) */
             return new Response(JSON.stringify(cached), {
               headers: jsonHeaders({
                 "X-Cache": isStale ? "STALE" : "HIT",
@@ -5915,8 +6105,9 @@ var worker_source_default = {
                 middleCount = Math.max(0, cached.total - cached.exits - cached.guards);
               }
               const age = Date.now() - (cached.builtAt || 0);
-              if (age > STALE_MS) ctx.waitUntil(buildAndStoreIndex(env).catch(() => {
-              }));
+              /* v63: stale refresh handled by the cron incremental warmer
+               * (warmFpIndexIncremental); no per-request full rebuild here -
+               * see the /api/fp-index handler note. */
             } else {
               ctx.waitUntil(buildAndStoreIndex(env).catch(() => {
               }));
@@ -11009,27 +11200,15 @@ Issued: ${(/* @__PURE__ */ new Date()).toISOString()}
     ctx.waitUntil((async () => {
       if (!env.FP_INDEX) return;
       try {
-        let needWarm = true;
-        const raw = await env.FP_INDEX.get(KV_KEY).catch(() => null);
-        if (raw) {
-          try {
-            const cached = JSON.parse(raw);
-            const age = Date.now() - (cached.builtAt || 0);
-            if (cached.index && age < STALE_MS) {
-              console.log(`[cron] fp-index fresh (age=${Math.round(age / 6e4)}min) \u2014 skip warm`);
-              needWarm = false;
-            }
-          } catch (_) {}
-        } else {
-          console.log("[cron] fp-index missing \u2014 warming from cold");
-        }
-        if (needWarm) {
-          await buildAndStoreIndex(env);
-          console.log("[cron] fp-index warm complete");
-        }
+        /* v63: advance the incremental warmer one slice. It self-gates (no-op
+         * when the published index is fresh and no pass is mid-flight) and
+         * publishes a fresh fp_index_v1 only when a full pass completes. This
+         * replaced a synchronous buildAndStoreIndex(env) call that could never
+         * finish inside the cron budget (~265s build) so never refreshed. */
+        await warmFpIndexIncremental(env);
         await recordCronOutcome(env, "fpindex", true);
       } catch (e) {
-        console.error("[cron] fp-index warm failed:", e.message);
+        console.error("[cron] fp-index incremental warm failed:", e.message);
         await recordCronOutcome(env, "fpindex", false, e.message);
       }
     })());
