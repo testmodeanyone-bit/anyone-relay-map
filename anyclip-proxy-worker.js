@@ -5186,6 +5186,7 @@ var FP_WARM_CURSOR_KEY = "fp_index_warm_cursor";    // index into that list
 var FP_WARM_DRAFT_KEY = "fp_index_warm_draft";      // accumulating { fps:{FP:code}, failed:N }
 var FP_WARM_SLICE = 100;   // wallets per tick (~7 ticks per pass for ~660 wallets)
 var FP_WARM_CONC = 8;      // gentle concurrency vs the flaky dev /ips endpoint
+var FP_WARM_RETRY = 25;    // pending wallets re-attempted per tick (clears transient timeouts)
 
 function _fpMergeCode(existing, add) {
   const has = (s, c) => typeof s === "string" && s.indexOf(c) !== -1;
@@ -5272,41 +5273,61 @@ async function warmFpIndexIncremental(env) {
 
   const wallets = snap.wallets;
 
-  let draft = { fps: {}, failed: 0 };
-  try { const d = await env.FP_INDEX.get(FP_WARM_DRAFT_KEY); if (d) { const p = JSON.parse(d); draft.fps = p.fps || {}; draft.failed = p.failed || 0; } } catch (_) {}
+  let draft = { fps: {}, pending: [] };
+  try { const d = await env.FP_INDEX.get(FP_WARM_DRAFT_KEY); if (d) { const p = JSON.parse(d); draft.fps = p.fps || {}; draft.pending = Array.isArray(p.pending) ? p.pending : []; } } catch (_) {}
 
+  /* merge one wallet's relay list into the draft accumulator */
+  const _ingest = (ips) => {
+    for (const relay of ips) {
+      const fp = (relay.fingerprint || "").toUpperCase();
+      if (!fp || relay.in_consensus === false) continue;  // same in-consensus filter as the sync build
+      const fl = relay.flags || [];
+      let code = "";
+      if (fl.includes("Exit")) code += "e";
+      if (fl.includes("Guard")) code += "g";
+      if (code) draft.fps[fp] = _fpMergeCode(draft.fps[fp], code);
+      else if (!(fp in draft.fps)) draft.fps[fp] = "";   // middle-only: tracked so `total` is accurate
+    }
+  };
+
+  // 1. process this tick's new-wallet slice; failures join the retry queue
   const slice = wallets.slice(cursor, cursor + FP_WARM_SLICE);
-  let sliceFailed = 0;
   for (let i = 0; i < slice.length; i += FP_WARM_CONC) {
     const batch = slice.slice(i, i + FP_WARM_CONC);
     const results = await Promise.all(batch.map((w) => _fpWarmFetchWalletIps(w)));
-    for (const res of results) {
-      if (!res.ok) { sliceFailed++; continue; }
-      for (const relay of res.ips) {
-        const fp = (relay.fingerprint || "").toUpperCase();
-        if (!fp || relay.in_consensus === false) continue;  // same in-consensus filter as the sync build
-        const fl = relay.flags || [];
-        let code = "";
-        if (fl.includes("Exit")) code += "e";
-        if (fl.includes("Guard")) code += "g";
-        if (code) draft.fps[fp] = _fpMergeCode(draft.fps[fp], code);
-        else if (!(fp in draft.fps)) draft.fps[fp] = "";   // middle-only: tracked so `total` is accurate
-      }
-    }
+    for (const res of results) { if (res.ok) _ingest(res.ips); else draft.pending.push(res.wallet); }
   }
-  draft.failed += sliceFailed;
+
+  /* 2. carry-forward retry: the flaky /ips upstream drops a meaningful fraction
+   * of wallets per attempt even at low concurrency (transient timeouts), so a
+   * single linear pass finishes ~20% short and would trip the degraded guard,
+   * never publishing. Re-attempt a bounded chunk of the pending queue each tick;
+   * transient failures clear on a later attempt, and only wallets that fail
+   * every attempt across the pass remain - driving the residual drop toward the
+   * upstream's true unreachable floor. Bounded per tick so the budget that
+   * already fits a 100-wallet slice still holds. */
+  const toRetry = draft.pending.slice(0, FP_WARM_RETRY);
+  const rest = draft.pending.slice(FP_WARM_RETRY);
+  const stillFailed = [];
+  for (let i = 0; i < toRetry.length; i += FP_WARM_CONC) {
+    const batch = toRetry.slice(i, i + FP_WARM_CONC);
+    const results = await Promise.all(batch.map((w) => _fpWarmFetchWalletIps(w)));
+    for (const res of results) { if (res.ok) _ingest(res.ips); else stillFailed.push(res.wallet); }
+  }
+  draft.pending = stillFailed.concat(rest);
 
   const nextCursor = cursor + FP_WARM_SLICE;
   if (nextCursor < wallets.length) {
     await env.FP_INDEX.put(FP_WARM_DRAFT_KEY, JSON.stringify(draft), { expirationTtl: 86400 }).catch(() => {});
     await env.FP_INDEX.put(FP_WARM_CURSOR_KEY, String(nextCursor), { expirationTtl: 86400 }).catch(() => {});
-    console.log(`[fp-warm] slice ${cursor}-${cursor + slice.length}/${wallets.length} failed=${sliceFailed} accFps=${Object.keys(draft.fps).length}`);
+    console.log(`[fp-warm] slice ${cursor}-${cursor + slice.length}/${wallets.length} pending=${draft.pending.length} accFps=${Object.keys(draft.fps).length}`);
     return;
   }
 
-  /* ---- pass complete: assemble + publish (or keep prev if degraded) ---- */
+  /* ---- pass complete: assemble + publish (improvement-gated) ---- */
   const totalWallets = wallets.length;
-  const dropRate = totalWallets > 0 ? draft.failed / totalWallets : 0;
+  const residualFailed = draft.pending.length;
+  const dropRate = totalWallets > 0 ? residualFailed / totalWallets : 0;
 
   const index = {};
   let exits = 0, guards = 0, total = 0;
@@ -5322,7 +5343,7 @@ async function warmFpIndexIncremental(env) {
     wallets: snap.walletRows, topN: totalWallets, coverage: "100%",
     builtAt: Date.now(),
     elapsed: ((Date.now() - (snap.startedAt || Date.now())) / 1e3).toFixed(1),  // pass wall-clock (spans several ticks)
-    failedWallets: draft.failed,
+    failedWallets: residualFailed,
     dropRate: Math.round(dropRate * 10000) / 10000,
     builtBy: "incremental-warm"
   };
@@ -5332,21 +5353,33 @@ async function warmFpIndexIncremental(env) {
   await env.FP_INDEX.delete(FP_WARM_WALLETS_KEY).catch(() => {});
   await env.FP_INDEX.delete(FP_WARM_DRAFT_KEY).catch(() => {});
 
-  if (dropRate > 0.02) {
-    console.warn(`[fp-warm] pass degraded: ${draft.failed}/${totalWallets} wallets failed (${(dropRate * 100).toFixed(1)}%). Keeping previous fp_index_v1.`);
+  /* Publish policy: a clean pass (<=2% residual) always publishes and is marked
+   * complete. Otherwise publish ONLY if this pass is better than what's already
+   * live (monotonic improvement toward the upstream's floor), flagged partial so
+   * the pass-start gate keeps trying to improve it. If it's not an improvement,
+   * keep the previous good copy. (The legacy synchronous partial sits at ~42%,
+   * so the first decent warm pass replaces it immediately.) */
+  result.partial = dropRate > 0.02;
+  let prevDrop = 1, prevHasIndex = false;
+  try {
+    const prev = await env.FP_INDEX.get(KV_KEY, { type: "json" });
+    if (prev && prev.index) { prevHasIndex = true; prevDrop = (typeof prev.dropRate === "number") ? prev.dropRate : (prev.partial ? 1 : 0); }
+  } catch (_) {}
+  const shouldPublish = dropRate <= 0.02 || dropRate < prevDrop || !prevHasIndex;
+  if (!shouldPublish) {
+    console.warn(`[fp-warm] pass not an improvement: drop=${(dropRate * 100).toFixed(1)}% vs live ${(prevDrop * 100).toFixed(1)}%. Keeping previous fp_index_v1.`);
     try {
       const prev = await env.FP_INDEX.get(KV_KEY, { type: "json" });
       if (prev && prev.index) {
-        prev.lastDegradedAttempt = { ts: Date.now(), failedWallets: draft.failed, dropRate: result.dropRate, via: "incremental-warm" };
+        prev.lastWarmAttempt = { ts: Date.now(), residualFailed, dropRate: result.dropRate, published: false, via: "incremental-warm" };
         await env.FP_INDEX.put(KV_KEY, JSON.stringify(prev), { expirationTtl: KV_TTL_SECS }).catch(() => {});
-        return;
       }
     } catch (_) {}
-    result.partial = true;   // no good previous copy: publish the flagged partial rather than nothing
+    return;
   }
 
   await env.FP_INDEX.put(KV_KEY, JSON.stringify(result), { expirationTtl: KV_TTL_SECS }).catch(() => {});
-  console.log(`[fp-warm] pass COMPLETE -> fp_index_v1: total=${total} exits=${exits} guards=${guards} drop=${(dropRate * 100).toFixed(1)}% wall=${result.elapsed}s`);
+  console.log(`[fp-warm] pass PUBLISHED fp_index_v1: total=${total} exits=${exits} guards=${guards} drop=${(dropRate * 100).toFixed(1)}% (prev ${(prevDrop * 100).toFixed(1)}%) partial=${result.partial} wall=${result.elapsed}s`);
 }
 
 /* #14 (observability): track cron task outcomes so a silent stall is detectable.
@@ -5825,7 +5858,7 @@ var worker_source_default = {
       } catch (_) { out.pass = null; }
       try {
         const d = await env.FP_INDEX.get(FP_WARM_DRAFT_KEY);
-        out.draft = d ? (() => { const dr = JSON.parse(d); return { accFps: Object.keys(dr.fps || {}).length, failed: dr.failed || 0 }; })() : null;
+        out.draft = d ? (() => { const dr = JSON.parse(d); return { accFps: Object.keys(dr.fps || {}).length, pending: (dr.pending || []).length }; })() : null;
       } catch (_) { out.draft = null; }
       try {
         const pub = await env.FP_INDEX.get(KV_KEY, { type: "json" });
