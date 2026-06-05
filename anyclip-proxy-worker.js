@@ -5598,6 +5598,19 @@ var worker_source_default = {
     }
     if (url.pathname === "/api/fp-index" && request.method === "GET") {
       const bust = url.searchParams.get("bust") === "1";
+      /* v59 SECURITY (cost-amplification / DoS): ?bust=1 skips the cache and
+       * forces a synchronous buildAndStoreIndex() — a ~250-subrequest upstream
+       * fanout plus a KV write. Left unauthenticated this is a DoS lever: a few
+       * req/s of /api/fp-index?bust=1 multiplies into hundreds of outbound
+       * requests against dev.anyone-wallet-lookup.info (the very upstream whose
+       * slowness already blanks the map) and burns Worker subrequest/CPU budget.
+       * Same class the team already gated on growth (v49) and wallet-relay-count
+       * (v20 per-IP cap). Require an authenticated admin to FORCE a rebuild; the
+       * normal (unbusted) cached path stays fully public. */
+      if (bust) {
+        const authFail = await _checkGrowthAdminAuth(request, env);
+        if (authFail) return authFail;
+      }
       if (!bust && env.FP_INDEX) {
         try {
           const cached = await env.FP_INDEX.get(KV_KEY, { type: "json" });
