@@ -1,0 +1,15 @@
+{
+  "name": "anyonemap-worker",
+  "version": "1.3.0",
+  "private": true,
+  "description": "AnyoneMap Cloudflare Worker build + security tooling. `npm run build` is the only blessed build path: it fails closed on any HIGH XSS-sink finding and writes no artifact until the front end is clean.",
+  "scripts": {
+    "build": "node build-worker.js worker-shell.js kv-schema.js index.html anyonemap-worker.js",
+    "build:force": "node build-worker.js worker-shell.js kv-schema.js index.html anyonemap-worker.js --no-lint",
+    "lint": "node lint-xss.js index.html worker-shell.js",
+    "lint:strict": "node lint-xss.js --strict index.html worker-shell.js"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
