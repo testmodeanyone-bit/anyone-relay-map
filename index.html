@@ -8514,18 +8514,16 @@ async function fetchFlagIndex(){
 
     exitFps  = new Set();
     guardFps = new Set();
-    hwFps    = new Set();
     for(const [fp, type] of Object.entries(data.index || {})){
       const FP = fp.toUpperCase();
       if(type.includes('e')) exitFps.add(FP);
       if(type.includes('g')) guardFps.add(FP);
-      if(type.includes('h')) hwFps.add(FP);
     }
-    window.exitFps = exitFps; window.guardFps = guardFps; window.hwFps = hwFps; /* v543: keep compass tier sets in sync */
-
-    const hwEl = document.getElementById('sHW');
-    if(hwEl) hwEl.textContent = hwFps.size.toLocaleString();
-    if(data.hardware > 0 && hwEl) hwEl.textContent = data.hardware.toLocaleString();
+    /* v61: HW set + count are sourced solely from /api/hw-relays (AO registry).
+       fp-index no longer carries an 'h' code, so this path must NOT reset or
+       populate hwFps, nor write the HW count - doing so zeroes the HW display
+       after the hw-relays fetch has correctly set it. */
+    window.exitFps = exitFps; window.guardFps = guardFps; window.hwFps = hwFps;
     if(_ll) _ll.style.display = 'none';
 
     if(relayData.length){
