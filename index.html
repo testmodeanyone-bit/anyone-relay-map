@@ -79,7 +79,7 @@ function checkDashStates(){
   targets.forEach(function(t){
     var el = document.getElementById(t.id);
     if(el && el.textContent.trim() === '—'){
-      el.innerHTML = '<span style="color:var(--an-red,#f87171);font-size:9px;opacity:.7" title="' + t.label + ' data unavailable — API may be down">—</span>';
+      /* xss-ok: t.label is a hardcoded constant ('Health'/'APY'/'Staked'/'HW'), not user input */ el.innerHTML = '<span style="color:var(--an-red,#f87171);font-size:9px;opacity:.7" title="' + t.label + ' data unavailable — API may be down">—</span>';
     }
   });
 }
@@ -16242,7 +16242,7 @@ function acSendVoice(){
   var duration = Math.floor((Date.now() - _acRecStart) / 1000);
   var url = URL.createObjectURL(blob);
   var dStr = Math.floor(duration / 60) + ':' + (duration % 60 < 10 ? '0' : '') + (duration % 60);
-  var voiceHtml = '<div class="ac-voice-msg"><button class="ac-voice-play" data-url="' + url + '" onclick="acPlayVoice(this)">▶</button><div class="ac-voice-playbar"><div class="ac-voice-playbar-fill"></div></div><span class="ac-voice-duration">' + dStr + '</span></div>';
+  /* xss-ok: url is a local blob: URL from URL.createObjectURL, no attacker-controllable chars */ var voiceHtml = '<div class="ac-voice-msg"><button class="ac-voice-play" data-url="' + url + '" onclick="acPlayVoice(this)">▶</button><div class="ac-voice-playbar"><div class="ac-voice-playbar-fill"></div></div><span class="ac-voice-duration">' + dStr + '</span></div>';
   acAddMessage(_acUser?.nick || 'You', _acUser?.tier || 'op', voiceHtml, Date.now(), acGetAvatar(_acUser?.nick));
   _acAudioChunks = [];
   var bar = document.getElementById('ac-voice-bar');
