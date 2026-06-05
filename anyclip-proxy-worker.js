@@ -2822,7 +2822,18 @@ var KV_TTL_SECS = 7 * 24 * 3600;
 var STALE_MS = 55 * 60 * 1e3;
 var GROWTH_PREFIX = "growth:";
 var GROWTH_DAYS = 30;
-var IPS_BATCH_SIZE = 50;
+/* v62: per-wallet IPS fetch concurrency. Was 50, which overwhelmed the flaky
+ * dev.anyone-wallet-lookup.info /ips endpoint: 50 simultaneous requests drove a
+ * ~42% TimeoutError rate (dropRate 0.42), tripping the degraded-build guard
+ * (>2%) into partial builds, and ballooning build time to ~265s (each timed-out
+ * wallet burns 3x8s of retries) — far beyond any cron/background waitUntil
+ * budget, so fresh builds only ever landed via a synchronous request. A single
+ * request to the upstream returns in ~0.4s, so the timeouts are contention, not
+ * a dead endpoint. Lower concurrency is gentler: fewer timeouts -> lower
+ * dropRate -> complete (non-partial) builds, and far less retry waste ->
+ * shorter builds the background warm can actually finish. Shared by the
+ * fp-index and all-uptimes builds. Tune up if the upstream proves capable. */
+var IPS_BATCH_SIZE = 15;
 async function hashWallet(wallet) {
   const data = new TextEncoder().encode(wallet.toLowerCase().trim());
   const hash = await crypto.subtle.digest("SHA-256", data);
