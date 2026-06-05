@@ -5811,6 +5811,29 @@ var worker_source_default = {
         note: "PoC manual enrichment — uptime(up) and bandwidth(bw) intentionally 0 (unavailable for non-wallet relays)"
       }), { headers: jsonHeaders({ "Cache-Control": "no-store" }) });
     }
+    if (url.pathname === "/api/fp-warm-status" && request.method === "GET") {
+      /* v63 (observability): read-only view of the incremental fp-index warmer's
+       * progress so a pass can be verified without waiting ~105min for builtBy
+       * to flip. No upstream calls, no rebuild trigger - just reflects KV state.
+       * cursor/pass/draft are null between passes; progressPct shows how far the
+       * current pass has walked the wallet list. */
+      const out = { now: new Date().toISOString() };
+      try { const cur = await env.FP_INDEX.get(FP_WARM_CURSOR_KEY); out.cursor = cur ? parseInt(cur, 10) : 0; } catch (_) { out.cursor = null; }
+      try {
+        const s = await env.FP_INDEX.get(FP_WARM_WALLETS_KEY);
+        out.pass = s ? (() => { const snap = JSON.parse(s); return { wallets: (snap.wallets || []).length, startedAt: snap.startedAt || null, startedAgoMin: snap.startedAt ? Math.round((Date.now() - snap.startedAt) / 6e4) : null }; })() : null;
+      } catch (_) { out.pass = null; }
+      try {
+        const d = await env.FP_INDEX.get(FP_WARM_DRAFT_KEY);
+        out.draft = d ? (() => { const dr = JSON.parse(d); return { accFps: Object.keys(dr.fps || {}).length, failed: dr.failed || 0 }; })() : null;
+      } catch (_) { out.draft = null; }
+      try {
+        const pub = await env.FP_INDEX.get(KV_KEY, { type: "json" });
+        if (pub) out.published = { builtAt: pub.builtAt || null, ageMin: pub.builtAt ? Math.round((Date.now() - pub.builtAt) / 6e4) : null, builtBy: pub.builtBy || "(legacy)", total: pub.total, exits: pub.exits, guards: pub.guards, partial: !!pub.partial, dropRate: pub.dropRate, lastDegradedAttempt: pub.lastDegradedAttempt || null };
+      } catch (_) {}
+      if (out.pass && typeof out.cursor === "number" && out.pass.wallets) out.progressPct = Math.min(100, Math.round((out.cursor / out.pass.wallets) * 100));
+      return new Response(JSON.stringify(out, null, 1), { headers: jsonHeaders({ "Cache-Control": "no-store" }) });
+    }
     if (url.pathname === "/api/fp-index" && request.method === "GET") {
       const bust = url.searchParams.get("bust") === "1";
       /* v59 SECURITY (cost-amplification / DoS): ?bust=1 skips the cache and
