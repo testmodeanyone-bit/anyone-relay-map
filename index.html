@@ -18383,7 +18383,7 @@ function acShowAvatarPicker(){
   }
   html += '</div>';
   html += '<div style="text-align:center;margin-top:12px;"><button onclick="document.getElementById(\'ac-avatar-picker\').remove();document.getElementById(\'ac-avatar-backdrop\')?.remove()" style="background:' + (isLight ? '#f1f5f9' : 'none') + ';border:1px solid ' + borderColor + ';border-radius:8px;padding:6px 20px;color:' + btnColor + ';cursor:pointer;font-family:inherit;font-size:11px;font-weight:500;">Close</button></div>';
-  picker.innerHTML = html;
+  picker.innerHTML = html; /* xss-ok: AC_AVATARS is a hardcoded constant array */
   document.body.appendChild(picker);
 
   const backdrop = document.createElement('div');
