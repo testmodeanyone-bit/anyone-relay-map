@@ -118,9 +118,26 @@ function classify(expr) {
   return { level: 'WARN', field: null };
 }
 
+function escapeRe(s) { return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
+
+/* When a sink's RHS is a bare variable (el.innerHTML = html;) rather than a
+ * template literal, pull out that variable name so we can resolve its assignment.
+ * Returns null for function calls (renderCard(d)), property access (data.html),
+ * and literals — those are out of this one-level scope. */
+function extractRhsVar(rhs) {
+  const cleaned = rhs.replace(/'[^']*'|"[^"]*"/g, "''"); // drop string args (e.g. insertAdjacentHTML position)
+  const mm = cleaned.match(/(?:[=,(]|^)\s*([A-Za-z_$][\w$]*)\s*([);.,]|\+|$)/);
+  if (!mm) return null;
+  const name = mm[1], after = mm[2];
+  if (after === '(' || after === '.') return null;           // call / property — out of scope
+  if (['true', 'false', 'null', 'undefined', 'this'].includes(name)) return null;
+  return name;
+}
+
 /* ----- locate sinks & their template literals ---------------------------- */
 function findInterpsForFile(src) {
   const findings = [];
+  const seen = new Set();              // dedupe (a var feeding several sinks)
   const lineStarts = [0];
   for (let i = 0; i < src.length; i++) if (src[i] === '\n') lineStarts.push(i + 1);
   const lineOf = idx => { // binary search
@@ -128,32 +145,71 @@ function findInterpsForFile(src) {
     while (lo < hi) { const m = (lo + hi + 1) >> 1; if (lineStarts[m] <= idx) lo = m; else hi = m - 1; }
     return lo + 1;
   };
+  const lineText = idx => {
+    const s = src.lastIndexOf('\n', idx) + 1;
+    const e = src.indexOf('\n', idx);
+    return src.slice(s, e === -1 ? src.length : e);
+  };
+  const collect = (interps, line, via) => {
+    for (const expr of interps) {
+      const verdict = classify(expr);
+      if (verdict === 'safe') continue;
+      const key = line + '|' + expr;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      findings.push({ line, expr: expr.slice(0, 80), via, ...verdict });
+    }
+  };
 
   const sinkTokenRe = /\.innerHTML|\.outerHTML|insertAdjacentHTML\s*\(|document\.write\s*\(/g;
   let m;
   while ((m = sinkTokenRe.exec(src)) !== null) {
     // From the sink, find the first backtick that starts the HTML template.
-    // Bail if a ';' or newline-with-no-backtick suggests a non-template RHS.
-    let j = m.index + m[0].length;
-    let tick = -1;
+    let j = m.index + m[0].length, tick = -1, semi = -1;
     const limit = Math.min(src.length, j + 400);
     while (j < limit) {
       const c = src[j];
       if (c === '`') { tick = j; break; }
-      if (c === ';') break;            // statement ended, no template
+      if (c === ';') { semi = j; break; }   // statement ended, no template
       j++;
     }
-    if (tick === -1) continue;         // RHS isn't a template literal — skip
-    const tpl = scanTemplate(src, tick);
-    /* Auditable suppression: a sink whose template (or its line) carries an
-     * `xss-ok` marker is skipped. Use ONLY for provably developer-controlled
-     * data (e.g. a hardcoded constant array like AC_STICKERS). Greppable, so
-     * suppressions can be reviewed: `grep -n xss-ok index.html`. */
-    if (src.slice(m.index, tpl.end).includes('xss-ok')) continue;
-    for (const expr of tpl.interps) {
-      const verdict = classify(expr);
-      if (verdict === 'safe') continue;
-      findings.push({ line: lineOf(tick), expr: expr.slice(0, 80), ...verdict });
+
+    if (tick !== -1) {
+      // Direct template literal at the sink (incl. inline .map(r=>`...`)).
+      const tpl = scanTemplate(src, tick);
+      /* Auditable suppression: a sink whose template (or its line) carries an
+       * `xss-ok` marker is skipped. Use ONLY for provably developer-controlled
+       * data (e.g. a hardcoded constant array). Greppable for review. */
+      if (src.slice(m.index, tpl.end).includes('xss-ok')) continue;
+      collect(tpl.interps, lineOf(tick), null);
+      continue;
+    }
+
+    /* No template at the sink — RHS may be a VARIABLE holding one (one-level
+     * trace). Resolve the variable's `VAR = `…`` / `VAR += `…`` template
+     * assignments, but SCOPE the search to the window between the variable's
+     * nearest preceding declaration (let/const/var VAR) and this sink. That
+     * keeps a common name like `html` from pulling in unrelated same-named vars
+     * in other functions, while still capturing a full
+     * `let html=''; html+=…; html+=…` accumulation block. Reported at the
+     * ASSIGNMENT's line (where the fix goes), annotated `via VAR`. */
+    if (lineText(m.index).includes('xss-ok')) continue;
+    const rhs = src.slice(m.index + m[0].length, semi === -1 ? limit : semi);
+    const varName = extractRhsVar(rhs);
+    if (!varName) continue;            // call/property/literal — out of one-level scope
+    let declIdx = 0, dm;
+    const declRe = new RegExp('(?:let|const|var)\\s+' + escapeRe(varName) + '\\b', 'g');
+    while ((dm = declRe.exec(src)) !== null) { if (dm.index < m.index) declIdx = dm.index; else break; }
+    const asgRe = new RegExp('(?:^|[^\\w$.])' + escapeRe(varName) + '\\s*\\+?=\\s*`', 'g');
+    asgRe.lastIndex = declIdx;
+    let a;
+    while ((a = asgRe.exec(src)) !== null) {
+      if (a.index >= m.index) break;   // only assignments before this sink, in scope
+      const tk = src.indexOf('`', a.index);
+      if (tk === -1) continue;
+      const tpl = scanTemplate(src, tk);
+      if (src.slice(a.index, tpl.end).includes('xss-ok')) continue;
+      collect(tpl.interps, lineOf(tk), varName);
     }
   }
   return findings;
@@ -174,12 +230,13 @@ function main() {
     if (!findings.length) { console.log(`\x1b[32m✓\x1b[0m ${file}: no unescaped sensitive interpolations`); continue; }
     console.log(`\n\x1b[1m${file}\x1b[0m`);
     for (const f of findings) {
+      const via = f.via ? ` \x1b[36m(via ${f.via})\x1b[0m` : '';
       if (f.level === 'HIGH') {
         high++;
-        console.log(`  \x1b[31mHIGH\x1b[0m  L${f.line}  unescaped \x1b[33m${f.field}\x1b[0m → \${${f.expr}}`);
+        console.log(`  \x1b[31mHIGH\x1b[0m  L${f.line}  unescaped \x1b[33m${f.field}\x1b[0m → \${${f.expr}}${via}`);
       } else {
         warn++;
-        console.log(`  \x1b[90mwarn\x1b[0m  L${f.line}  review → \${${f.expr}}`);
+        console.log(`  \x1b[90mwarn\x1b[0m  L${f.line}  review → \${${f.expr}}${via}`);
       }
     }
   }
