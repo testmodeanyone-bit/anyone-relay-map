@@ -5103,6 +5103,11 @@ async function warmNonWalletEnrichment(env) {
   for (let i = 0; i < slice.length; i += ENRICH_CONC) {
     const batch = slice.slice(i, i + ENRICH_CONC);
     await Promise.all(batch.map(async (fp) => {
+      /* v60 SECURITY (defense-in-depth): fps here come from upstream lists, not
+       * direct request input, but validate before interpolating into the upstream
+       * URL so a malformed/compromised feed can't smuggle path segments
+       * (e.g. "../admin") into api.ec.anyone.tech/relays/${fp}. */
+      if (!/^[A-Fa-f0-9]{40}$/.test(fp)) return;
       try {
         const r = await fetch(`https://api.ec.anyone.tech/relays/${fp}`, { signal: AbortSignal.timeout(8000) });
         if (r.status === 200) {
@@ -5559,6 +5564,11 @@ var worker_source_default = {
       for (let i = 0; i < fps.length; i += ENRICH_CONC) {
         const batch = fps.slice(i, i + ENRICH_CONC);
         await Promise.all(batch.map(async (fp) => {
+          /* v60 SECURITY (defense-in-depth): validate before interpolating fp into
+           * the upstream URL / KV key — fps originate from upstream lists, not
+           * direct request input, but a malformed feed must not smuggle path
+           * segments or skew KV lookups. */
+          if (!/^[A-Fa-f0-9]{40}$/.test(fp)) return;
           // per-fp KV cache first
           if (env.FP_INDEX) {
             try {
@@ -5666,6 +5676,16 @@ var worker_source_default = {
     }
     if (url.pathname === "/api/hw-relays" && request.method === "GET") {
       const bust = url.searchParams.get("bust") === "1";
+      /* v59 SECURITY: same forced-rebuild class as fp-index — require admin auth
+       * to bust the hardware-relay cache. Lighter fanout (AO registry) than the
+       * fp-index 250-wallet build, but gated for consistency. Public cached path
+       * unchanged. (The operator-detect _opBust path is already protected by the
+       * verify-rl 10/hr/IP limit and only does a single-page fetch, so it's left
+       * as-is.) */
+      if (bust) {
+        const authFail = await _checkGrowthAdminAuth(request, env);
+        if (authFail) return authFail;
+      }
       if (!bust && env.FP_INDEX) {
         try {
           const cached = await env.FP_INDEX.get("hw_relays_v1", { type: "json" });
@@ -11081,6 +11101,29 @@ async function buildAndCacheRegistry(env, ctx) {
 }
 async function buildAndStoreIndex(env) {
   const t0 = Date.now();
+  /* v60 (thundering-herd guard): a cold or just-expired cache can have many
+   * concurrent callers at once — an organic MISS plus each STALE request firing
+   * its own ctx.waitUntil(buildAndStoreIndex) background refresh — and every call
+   * here is a ~250-subrequest upstream fanout. Best-effort single-flight via a
+   * short KV lock (same pattern as cron:lock:warm). KV is eventually consistent,
+   * so this collapses the common burst rather than being a hard mutex. If a build
+   * is already in flight AND we have a last-good copy, serve that instead of
+   * launching a parallel fanout; only when there is no copy at all do we build
+   * despite the lock (we can't serve nothing). The lock auto-expires (60s) — no
+   * explicit release — and during that window callers receive the fresh copy. */
+  const BUILD_LOCK_KEY = "fp_index:build_lock";
+  if (env.FP_INDEX) {
+    try {
+      const inFlight = await env.FP_INDEX.get(BUILD_LOCK_KEY);
+      if (inFlight) {
+        const prev = await env.FP_INDEX.get(KV_KEY, { type: "json" }).catch(() => null);
+        if (prev && prev.index) { prev.buildCoalesced = true; return prev; }
+        /* no cache to serve — fall through and build despite the lock */
+      } else {
+        await env.FP_INDEX.put(BUILD_LOCK_KEY, String(Date.now()), { expirationTtl: 60 }).catch(() => {});
+      }
+    } catch (_) {}
+  }
   /* v47: timeouts on every outbound fetch (matches buildAndStoreUptimes pattern). */
   /* v58 FIX (slow-upstream tolerance + cache preservation): the page-1 fetch was
    * the build's single point of failure. The old `if (!r0.ok) throw` (with a tight
