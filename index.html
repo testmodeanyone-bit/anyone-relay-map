@@ -18251,7 +18251,7 @@ function acToggleStickerPicker(){
   if(!toolbar) return;
   picker = document.createElement('div');
   picker.className = 'ac-sticker-picker open';
-  picker.innerHTML = `<div class="ac-sticker-header">Anyone Protocol Stickers</div><div class="ac-sticker-grid">${
+  picker.innerHTML = /* xss-ok: AC_STICKERS is a hardcoded constant array */ `<div class="ac-sticker-header">Anyone Protocol Stickers</div><div class="ac-sticker-grid">${
     AC_STICKERS.map(s => `<button type="button" class="ac-sticker-item" onclick="acSendSticker('${s.id}')" title="${s.name}"><img src="${s.url}" alt="${s.name}" loading="lazy"/></button>`).join('')
   }</div>`;
   toolbar.appendChild(picker);
@@ -23802,7 +23802,7 @@ function renderComparison(){
         <div class="rc-card-name">${flag} ${_aoEscHtml(c.nickname || c.fp.slice(0,8))}</div>
         <div class="rc-row"><span class="rc-k">${_i18t('rdType','Type')}</span><span class="rc-v" style="color:${typeColor}">${typeName}</span></div>
         <div class="rc-row"><span class="rc-k">${_i18t('rdLocation','Location')}</span><span class="rc-v">${c.country}</span></div>
-        <div class="rc-row"><span class="rc-k">${_i18t('rdIsp','ISP')}</span><span class="rc-v">${c.isp.slice(0,18)}</span></div>
+        <div class="rc-row"><span class="rc-k">${_i18t('rdIsp','ISP')}</span><span class="rc-v">${_aoEscHtml(c.isp.slice(0,18))}</span></div>
         <div class="rc-row"><span class="rc-k">${_i18t('rdBW','BW')}</span><span class="rc-v ${c.bwKBs>0&&c.bwKBs>=bestBW?'best':''}">${bwStr}</span></div>
         <div class="rc-row"><span class="rc-k">${_i18t('rdUptime','Uptime')}</span><span class="rc-v ${c.uptimeSecs>0&&c.uptimeSecs>=bestUp?'best':''}">${upStr}</span></div>
         <div class="rc-row"><span class="rc-k">${_i18t('rdWeight','Weight')}</span><span class="rc-v ${c.cw>0&&c.cw>=bestCW?'best':''}">${cwStr}</span></div>
