@@ -5586,7 +5586,7 @@ var worker_source_default = {
           const body = lines.join("\n");
           return new Response(body, {
             status: 200,
-            headers: { "Content-Type": "text/csv; charset=utf-8", "Access-Control-Allow-Origin": "*" }
+            headers: { "Content-Type": "text/csv; charset=utf-8", "Access-Control-Allow-Origin": ALLOWED_ORIGIN }
           });
         }
         return cors(JSON.stringify({
