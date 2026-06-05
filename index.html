@@ -15919,6 +15919,13 @@ function acDetectAndPreviewLinks(msgDiv, text, tier){
   if(!urlMatch) return;
   var url = urlMatch[1];
   if(url.match(/\.(png|jpg|jpeg|gif|webp|svg)$/i) || url.startsWith('data:')) return;
+  /* SECURITY/PRIVACY: rich previews are fetched through a third-party reader
+   * (allorigins). Only do so for known-trusted domains, so an arbitrary URL
+   * shared by another operator is never forwarded to that third party (and a
+   * malicious link can't use us to make it fetch attacker-chosen URLs). The
+   * link itself stays clickable in the message regardless. */
+  var _previewHost; try { _previewHost = new URL(url).hostname.toLowerCase(); } catch(e){ return; }
+  if(!AC_TRUSTED_DOMAINS.some(function(d){ return _previewHost === d || _previewHost.endsWith('.' + d); })) return;
   var card = document.createElement('a');
   card.className = 'ac-link-preview';
   card.href = url;
@@ -18592,7 +18599,7 @@ function acHighlightInNode(el, query){
     node.parentNode.replaceChild(span, node);
   });
 }
-function acEscHTML(s){ return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+function acEscHTML(s){ return String(s == null ? '' : s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;'); }
 
 function acSearchClearHighlights(){
   const feed = document.getElementById('anychat-feed');
