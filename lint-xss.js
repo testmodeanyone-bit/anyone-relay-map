@@ -53,6 +53,12 @@ const SENSITIVE_FIELDS = [
 // only when it is a complete property (followed by a non-word char).
 const NICKNAME_RE = /\.n\b/;
 
+/* External-input hints for the concatenation-into-attribute detector below: a
+ * regex capture (m[1]), or an identifier that commonly carries untrusted data.
+ * An unescaped attribute-value concatenation of such an operand is escalated to
+ * HIGH; other unescaped attribute concatenations are WARN (review by eye). */
+const EXTERNAL_HINT_RE = /\[\d+\]|\b(url|src|href|img|image|text|msg|message|nick|content|val|value|input|name|host|hostname|domain|owner|isp|body|title|desc|description|label|comment|user|avatar|gif)\b/i;
+
 /* ----- template-literal scanner ------------------------------------------ */
 /* Given source `s` and the index of an opening backtick, return the end index
  * and every ${...} interpolation expression (recursing into nested templates). */
@@ -224,6 +230,47 @@ function findInterpsForFile(src) {
   return findings;
 }
 
+/* ----- concatenation-into-attribute scanner ------------------------------
+ * The template scanner above only sees ${...} inside template literals. The
+ * acRenderImage stored XSS (a URL concatenated into src="...") was written as
+ * '<img src="' + url + '"' — plain string concatenation — so it slipped past
+ * the gate entirely. This pass catches that class: a string literal that opens
+ * an HTML attribute value (... =" or ... =') and is then concatenated (+) with
+ * an expression. Escaped operands are safe; operands that look like untrusted
+ * input are HIGH; other unescaped ones are WARN. Honors `xss-ok` on the line. */
+function classifyAttrConcat(op) {
+  op = op.trim();
+  const hasEscaper = ESCAPERS.some(e => op.includes(e)) ||
+    (op.includes('.replace(') && op.includes('&') && op.includes('<'));
+  if (hasEscaper) return null;                                   // escaped -> safe
+  const external = EXTERNAL_HINT_RE.test(op) ||
+    SENSITIVE_FIELDS.some(f => op.includes(f)) || NICKNAME_RE.test(op);
+  return { level: external ? 'HIGH' : 'WARN', field: 'attr-concat', expr: op.slice(0, 60) };
+}
+function findAttrConcat(src) {
+  const findings = [];
+  const lineStarts = [0];
+  for (let i = 0; i < src.length; i++) if (src[i] === '\n') lineStarts.push(i + 1);
+  const lineOf = idx => { let lo = 0, hi = lineStarts.length - 1; while (lo < hi) { const mid = (lo + hi + 1) >> 1; if (lineStarts[mid] <= idx) lo = mid; else hi = mid - 1; } return lo + 1; };
+  const lineText = idx => { const ln = lineOf(idx) - 1; return src.slice(lineStarts[ln], lineStarts[ln + 1] || src.length); };
+  /* =<quote><quote> + <operand> : an attribute opened by a string literal that
+   * immediately closes and concatenates. No space after `=` (HTML attrs are
+   * attr="...", never attr = "..."), which rules out JS assignments like
+   * `s = "" + x`. The operand must be a clean identifier / member / index /
+   * call expression — this rules out string-literal operands ('<div ...) and
+   * punctuation captured across statement boundaries, the two false-positive
+   * classes seen on real code. */
+  const RE = /=\\?["']\s*\\?["']\s*\+\s*([A-Za-z_$][\w$.\[\]()]*)/g;
+  let m;
+  while ((m = RE.exec(src)) !== null) {
+    const verdict = classifyAttrConcat(m[1]);
+    if (!verdict) continue;
+    if (lineText(m.index).includes('xss-ok')) continue;          // honor suppression
+    findings.push({ line: lineOf(m.index), via: 'concat', ...verdict });
+  }
+  return findings;
+}
+
 /* ----- runner ------------------------------------------------------------ */
 function main() {
   const args = process.argv.slice(2);
@@ -235,7 +282,7 @@ function main() {
   for (const file of files) {
     if (!fs.existsSync(file)) { console.error(`! skip (not found): ${file}`); continue; }
     const src = fs.readFileSync(file, 'utf8');
-    const findings = findInterpsForFile(src);
+    const findings = findInterpsForFile(src).concat(findAttrConcat(src));
     if (!findings.length) { console.log(`\x1b[32m✓\x1b[0m ${file}: no unescaped sensitive interpolations`); continue; }
     console.log(`\n\x1b[1m${file}\x1b[0m`);
     for (const f of findings) {
