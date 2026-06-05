@@ -9883,7 +9883,8 @@ I confirm I control this wallet.`;
         let authVersion = 2;
         if (useRawPassword) {
           const cleanedPw = cleanPassword(password);
-          if (!cleanedPw) return cors(JSON.stringify({ ok: false, error: "Password must be 4-128 characters" }), 400);
+          if (!cleanedPw) return cors(JSON.stringify({ ok: false, error: "Password must be 8-128 characters" }), 400);
+          if (cleanedPw.length < 8) return cors(JSON.stringify({ ok: false, error: "Password must be at least 8 characters" }), 400);
           cleanedHash = cleanedPw;
           authVersion = 3;
         } else {
@@ -10296,7 +10297,8 @@ I confirm I control this wallet.`;
         let _recAuthV = 2;
         if (_recUseRaw) {
           const _recPw = cleanPassword(newPassword);
-          if (!_recPw) return cors(JSON.stringify({ ok: false, error: "Password must be 4-128 characters" }), 400);
+          if (!_recPw) return cors(JSON.stringify({ ok: false, error: "Password must be 8-128 characters" }), 400);
+          if (_recPw.length < 8) return cors(JSON.stringify({ ok: false, error: "Password must be at least 8 characters" }), 400);
           cleanedHash = _recPw;
           _recAuthV = 3;
         } else {
@@ -10910,7 +10912,8 @@ Issued: ${(/* @__PURE__ */ new Date()).toISOString()}
         let _rwAuthV = 2;
         if (_rwUseRaw) {
           const _rwPw = cleanPassword(newPassword);
-          if (!_rwPw) return cors(JSON.stringify({ ok: false, error: "Password must be 4-128 characters" }), 400);
+          if (!_rwPw) return cors(JSON.stringify({ ok: false, error: "Password must be 8-128 characters" }), 400);
+          if (_rwPw.length < 8) return cors(JSON.stringify({ ok: false, error: "Password must be at least 8 characters" }), 400);
           cleanedHash = _rwPw;
           _rwAuthV = 3;
         } else {
