@@ -4759,6 +4759,16 @@ async function storeSnapshot(env) {
     /* Non-fatal: bw_gibs falls back to 0, chart still renders. */
   }
 
+  /* v61: HW count comes from the AO-registry cache (hw_relays_v1) — the same
+   * source the client uses — not from fp-index, whose wallet-lookup universe
+   * never contained the HW fingerprints (its onlineHW was structurally 0).
+   * Reads the already-warmed cache; falls back to 0 if absent. */
+  let hwCount = 0;
+  try {
+    const hw = await env.FP_INDEX.get("hw_relays_v1", { type: "json" });
+    if (hw && typeof hw.count === "number") hwCount = hw.count;
+  } catch (_) {}
+
   const snapshot = {
     date: (/* @__PURE__ */ new Date()).toISOString().slice(0, 10),
     ts: Date.now(),
@@ -4766,7 +4776,7 @@ async function storeSnapshot(env) {
     exits: fpIndex.exits,
     guards: fpIndex.guards,
     middles: fpIndex.middles,
-    hardware: fpIndex.hardware,
+    hardware: hwCount,
     bw_gibs: Math.round(bwMibsTotal / 1024 * 10) / 10,
     wallets: walletsTotal,
     source: "fp-index-v48",
@@ -11202,8 +11212,12 @@ async function buildAndStoreIndex(env) {
   const allFps = /* @__PURE__ */ new Set();
   const failedWallets = [];
 
-  const [, hardwareSet] = await Promise.all([
-    (async () => {
+  /* v61 cleanup: HW is sourced solely from /api/hw-relays (AO registry),
+   * intersected with live consensus on the client. fp-index's onlineHW used the
+   * wallet-lookup fingerprint universe (allFps), which never contained the AO HW
+   * fingerprints, so it was structurally 0 and only added an AO upstream
+   * dependency to this fragile build. Removed; the index still carries e/g. */
+  await (async () => {
       for (let i = 0; i < allWallets.length; i += IPS_BATCH_SIZE) {
         const batch = allWallets.slice(i, i + IPS_BATCH_SIZE);
         const results = await Promise.all(batch.map((w) => fetchWalletIps(w)));
@@ -11232,16 +11246,9 @@ async function buildAndStoreIndex(env) {
           }
         }
       }
-    })(),
-    fetchHardwareFPs().catch(() => /* @__PURE__ */ new Set())
-  ]);
+  })();
 
-  /* v47 FIX (ghost-HW bug, part 2): only count HW relays that are currently
-   * in consensus. The hardware list from AO is the *registered* set, not the
-   * *online* set — unioning it wholesale inflates the HW count and the index. */
-  const onlineHW = /* @__PURE__ */ new Set();
-  for (const fp of hardwareSet) if (allFps.has(fp)) onlineHW.add(fp);
-
+  
   /* v47 FIX (arithmetic): with the classification fix, exits and guards now
    * OVERLAP. middle = |allFps| - |exits ∪ guards|, not |allFps| - |exits| - |guards|. */
   const exitOrGuard = /* @__PURE__ */ new Set();
@@ -11254,7 +11261,6 @@ async function buildAndStoreIndex(env) {
     let code = "";
     if (exits.has(fp)) code += "e";
     if (guards.has(fp)) code += "g";
-    if (onlineHW.has(fp)) code += "h";
     if (code) index[fp] = code;
     /* Middle-only relays (no flags, not HW) stay out of the index by design;
      * they're counted via the middleCount arithmetic above. */
@@ -11269,7 +11275,6 @@ async function buildAndStoreIndex(env) {
     guards: guards.size,
     middles: Math.max(0, middleCount),
     total: allFps.size,
-    hardware: onlineHW.size,
     wallets: walletRows.length,
     topN: allWallets.length,
     coverage: "100%",
