@@ -19339,16 +19339,33 @@ async function acSendImage(){
 }
 
 function acRenderImage(text){
-  const m = text.match(/^\[img:(https?:\/\/[^\]]+)\]$/);
-  if(m) return '<img class="ac-chat-img" src="' + m[1] + '" alt="shared image" loading="lazy" onclick="acViewImageFull(this.src)" onerror="this.style.display=\'none\';this.insertAdjacentHTML(\'afterend\',\'<em style=color:var(--ac-muted);font-size:11px>Image unavailable</em>\')"/>';
-  return null;
+  /* SECURITY (stored XSS fix): the URL was interpolated into src="..." with NO
+   * escaping, and the old charset [^\]]+ permitted " and spaces, so a message
+   * like [img:https://x"onerror=fetch(...)//] broke out of the attribute and
+   * injected a live onerror handler that executed in every viewer's browser
+   * (stealing the chat token). Defense in depth: (1) strict charset that
+   * excludes quotes/space/angle-brackets so no breakout is even expressible,
+   * (2) acSafeUrl http/https allowlist, (3) acSanitize entity-escape. Mirrors
+   * the sibling [gif:] path, which already sanitized. */
+  const m = text.match(/^\[img:(https?:\/\/[^\]\s"'<>`]+)\]$/);
+  if(!m) return null;
+  const safe = acSafeUrl(m[1]);
+  if(!safe) return null;
+  const u = acSanitize(safe);
+  return '<img class="ac-chat-img" src="' + u + '" alt="shared image" loading="lazy" onclick="acViewImageFull(this.src)" onerror="this.style.display=\'none\';this.insertAdjacentHTML(\'afterend\',\'<em style=color:var(--ac-muted);font-size:11px>Image unavailable</em>\')"/>';
 }
 
 function acViewImageFull(src){
   const ov = document.createElement('div');
   ov.className = 'ac-img-full-overlay';
   ov.onclick = () => ov.remove();
-  ov.innerHTML = '<img src="' + src + '" alt="full size"/>';
+  /* SECURITY (defense in depth): build the <img> via DOM + property assignment
+   * instead of innerHTML string concat, so the src can never be parsed as
+   * markup even if a caller passes an attacker-influenced value. */
+  const fimg = document.createElement('img');
+  fimg.src = src;
+  fimg.alt = 'full size';
+  ov.appendChild(fimg);
   document.body.appendChild(ov);
   const h = (e) => { if(e.key === 'Escape'){ ov.remove(); document.removeEventListener('keydown', h); }};
   document.addEventListener('keydown', h);
