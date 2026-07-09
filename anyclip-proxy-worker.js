@@ -6397,6 +6397,32 @@ var worker_source_default = {
         if (body.messages.length > 20) {
           return cors(JSON.stringify({ error: { message: "Too many messages" } }), 400);
         }
+        /* audit fix #33: bound the COST of the Anthropic call. The rate limits
+         * above are per-request COUNT and implicitly assume the cheap default
+         * model — but two things let a caller blow past that cost basis:
+         *   (1) model was client-controlled via body.model. A holder of even a
+         *       guest/anon (4-part) token could request the priciest model on
+         *       every one of their 20/hr calls and bill our ANTHROPIC_KEY at
+         *       premium rates, multiplied across IPs. No legitimate client sends
+         *       `model` (grep: zero), so pin the server default and ignore any
+         *       client value. To vary the model by tier later, branch on aiTier
+         *       here — never trust body.model.
+         *   (2) only message COUNT was capped, not size. 20 huge messages inflate
+         *       input tokens without bound. Cap total input chars (system +
+         *       message content) so input cost is bounded regardless of model.
+         *       Legit use (a short query + capped chat history) sits far under
+         *       this ceiling. */
+        const _PINNED_MODEL = "claude-haiku-4-5-20251001";
+        let _aiInputChars = typeof body.system === "string" ? body.system.length : 0;
+        for (const _m of body.messages) {
+          if (_m && typeof _m.content === "string") _aiInputChars += _m.content.length;
+          else if (_m && Array.isArray(_m.content)) {
+            for (const _b of _m.content) { if (_b && typeof _b.text === "string") _aiInputChars += _b.text.length; }
+          }
+        }
+        if (_aiInputChars > 24000) {
+          return cors(JSON.stringify({ error: { message: "Request too large" } }), 400);
+        }
         const anthropicRes = await fetch("https://api.anthropic.com/v1/messages", {
           method: "POST",
           headers: {
@@ -6405,9 +6431,9 @@ var worker_source_default = {
             "anthropic-version": "2023-06-01"
           },
           body: JSON.stringify({
-            model: body.model || "claude-haiku-4-5-20251001",
+            model: _PINNED_MODEL,
             max_tokens: Math.min(body.max_tokens || 300, 500),
-            system: body.system || "",
+            system: typeof body.system === "string" ? body.system : "",
             messages: body.messages
           })
         });
