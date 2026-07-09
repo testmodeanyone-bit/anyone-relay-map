@@ -14023,12 +14023,14 @@ async function acJoinAsUser(nick, tier, wallet){
   acUpdateChar(); // Sync send button state
   acConnect();
   opUpdateMyProfile();
+  /* v556 (audit fix #21, A4): pre-warm _walletHash via hashWalletClient, which
+   * lowercases + trims to match the server's cleanWallet() so the hash equals
+   * the verified-session:${wh} key. On failure leave it unset — acWalletHash()
+   * recomputes on demand — and NEVER store the raw wallet (the old catch did,
+   * which leaked the address downstream and 400'd chat-token). */
   (async () => {
-    try {
-      const enc = new TextEncoder().encode(_acUser.wallet);
-      const buf = await crypto.subtle.digest('SHA-256', enc);
-      _acUser._walletHash = Array.from(new Uint8Array(buf)).map(b=>b.toString(16).padStart(2,'0')).join('');
-    } catch(e){ _acUser._walletHash = _acUser.wallet; }
+    try { _acUser._walletHash = await hashWalletClient(_acUser.wallet); }
+    catch(e){ /* leave unset; acWalletHash() recomputes on demand */ }
   })();
   const badge = tier === 'hw' ? '🔧 ' : '⬡ ';
   acAddSystemMessage(badge + nick + ' joined the Operators Lounge! 🇩🇴');
@@ -15390,7 +15392,7 @@ async function acAskAnyClip(query){
     acShowTyping(['AnyClip']);
 
     let token = '';
-    try { const tr = await fetch(AC_PROXY + '/api/chat-token?wh=' + encodeURIComponent((_acUser && _acUser._walletHash) || (_acUser && _acUser.wallet) || '') + '&nick=' + encodeURIComponent((_acUser && _acUser.nick) || '')); const td = await tr.json(); token = td.token || ''; } catch(e){}
+    try { const tr = await fetch(AC_PROXY + '/api/chat-token?wh=' + encodeURIComponent((await acWalletHash())) + '&nick=' + encodeURIComponent((_acUser && _acUser.nick) || '')); const td = await tr.json(); token = td.token || ''; } catch(e){}
 
     const res = await fetch(AC_PROXY + '/api/chat', {
       method: 'POST',
@@ -18151,7 +18153,7 @@ function acEditMsg(btn){
         edited.textContent = '(edited)';
         newEl.appendChild(edited);
         input.replaceWith(newEl);
-        acBroadcastEdit(oldText, newText);
+        acBroadcastEdit(bubble, oldText, newText);
       } else {
         const restore = document.createElement('div');
         restore.className = 'ac-bubble-text';
@@ -18190,14 +18192,34 @@ function acDeleteMsg(btn){
   }, 200);
 }
 
-function acBroadcastEdit(oldText, newText){
+/* v556 (audit fix #22, A5): perform a REAL server-side edit via /api/chat-edit
+ * instead of broadcasting a new '[edited]: ...' chat-send. The old code posted a
+ * fresh message to EVERY user's feed \u2014 not an edit, just duplicate spam that
+ * never reconciled with the original bubble. The hardened proxy (v20 IDOR fix +
+ * v31 audit fix #6) authenticates the editor via x-chat-token and locates the
+ * message by msgId + msgTime, so both are threaded here from the message row.
+ * If the bubble carries no data-msgid (an optimistic local send not yet
+ * acknowledged by the server), there is nothing server-side to edit \u2014 keep
+ * the local DOM edit and skip the network call rather than spamming the feed. */
+function acBroadcastEdit(bubbleEl, oldText, newText){
   if(!_acUser) return;
+  var row = (bubbleEl && bubbleEl.closest) ? bubbleEl.closest('[data-msgid]') : null;
+  var msgId = (row && row.dataset) ? row.dataset.msgid : null;
+  var msgTime = (row && row.dataset && row.dataset.time) ? parseInt(row.dataset.time, 10) : NaN;
+  if(!msgId || !/^[a-f0-9]{16}$/.test(msgId) || !Number.isInteger(msgTime) || msgTime <= 0){
+    /* No server-tracked id yet (optimistic local bubble) \u2014 local edit only. */
+    return;
+  }
+  var _headers = { 'Content-Type': 'application/json' };
+  var _tok = (typeof acGetChatToken === 'function') ? acGetChatToken() : null;
+  if(_tok) _headers['x-chat-token'] = _tok;
   try {
-    fetch(AC_PROXY + '/api/chat-send', {
-      method: 'POST', headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({ nick: _acUser.nick, tier: _acUser.tier, wallet: _acUser.wallet,
-        text: '[edited]: ' + newText.substring(0,300), time: Date.now() })
-    }).catch(()=>{});
+    fetch(AC_PROXY + '/api/chat-edit', {
+      method: 'POST', headers: _headers,
+      body: JSON.stringify({ msgId: msgId, msgTime: msgTime, newText: newText.substring(0,400) })
+    }).then(function(r){ return r.json(); }).then(function(d){
+      if(!d || !d.ok) acAddSystemMessage('Edit not saved: ' + ((d && d.error) || 'unknown'));
+    }).catch(function(){ acAddSystemMessage('Edit not saved \u2014 network error.'); });
   } catch(e){}
 }
 function acCopyMsg(btn){
@@ -18916,7 +18938,7 @@ async function acRequestPin(nick){
   try {
     let token = '';
     try {
-      const tokenRes = await fetch(AC_PROXY + '/api/chat-token?wh=' + encodeURIComponent((_acUser && _acUser._walletHash) || (_acUser && _acUser.wallet) || '') + '&nick=' + encodeURIComponent((_acUser && _acUser.nick) || ''));
+      const tokenRes = await fetch(AC_PROXY + '/api/chat-token?wh=' + encodeURIComponent((await acWalletHash())) + '&nick=' + encodeURIComponent((_acUser && _acUser.nick) || ''));
       const tokenData = await tokenRes.json();
       token = tokenData.token || '';
     } catch(e){}
@@ -19447,7 +19469,7 @@ async function acReportUser(e, btn){
   try {
     let token = '';
     try {
-      const tokenRes = await fetch(AC_PROXY + '/api/chat-token?wh=' + encodeURIComponent((_acUser && _acUser._walletHash) || (_acUser && _acUser.wallet) || '') + '&nick=' + encodeURIComponent((_acUser && _acUser.nick) || ''));
+      const tokenRes = await fetch(AC_PROXY + '/api/chat-token?wh=' + encodeURIComponent((await acWalletHash())) + '&nick=' + encodeURIComponent((_acUser && _acUser.nick) || ''));
       const tokenData = await tokenRes.json();
       token = tokenData.token || '';
     } catch(e){}
@@ -19786,6 +19808,33 @@ async function hashWalletClient(wallet){
   const data = new TextEncoder().encode(wallet.toLowerCase().trim());
   const hash = await crypto.subtle.digest('SHA-256', data);
   return Array.from(new Uint8Array(hash)).map(b => b.toString(16).padStart(2,'0')).join('');
+}
+
+/* v556 (audit fix #21, A4): single source of truth for the wh (wallet hash)
+ * sent to /api/chat-token. Returns a 64-hex SHA-256 of the LOWERCASED wallet —
+ * never the raw address. Closes three prior bugs:
+ *   (1) the 3 chat-token call sites fell back to _acUser.wallet, leaking the
+ *       plaintext address into the querystring (logs/proxies) AND 400ing the
+ *       server, which requires wh to be 64-hex;
+ *   (2) the join-time hash (acJoinAsUser) digested the raw-case wallet, so an
+ *       EIP-55 mixed-case address hashed differently than the server's
+ *       cleanWallet()-lowercased verified-session:${wh} key — silent session
+ *       lookup failure for checksummed addresses;
+ *   (3) on hash failure _walletHash was set to the raw wallet.
+ * The 64-hex test also self-heals pre-existing bad state (a raw 0x-wallet
+ * stored as _walletHash fails the test and gets recomputed). Caches back so
+ * repeat calls are free. Returns '' when no usable wallet — callers send wh=''
+ * and the server cleanly 400s instead of leaking. */
+async function acWalletHash(){
+  if(!_acUser) return '';
+  var wh = _acUser._walletHash;
+  if(typeof wh === 'string' && /^[0-9a-f]{64}$/.test(wh)) return wh;
+  if(!_acUser.wallet) return '';
+  try {
+    wh = await hashWalletClient(_acUser.wallet);
+    _acUser._walletHash = wh;
+    return wh;
+  } catch(e){ return ''; }
 }
 
 const IPFS_INDEX_KEY = 'anymap_ipfs_index';
@@ -21365,8 +21414,14 @@ function acReconcileReactions(msgId, counts){
     ctr.appendChild(r);
   });
 }
-function acEditMsgPrompt(m){ var newText = prompt('Edit your message:', m.text || ''); if(newText === null || newText.trim() === '' || newText === m.text) return; fetch(AC_PROXY + '/api/chat-edit', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ msgId: m.msgId, wallet: _acUser.wallet, newText: newText.trim() }) }).then(function(r){ return r.json(); }).then(function(d){ if(d.ok){ acAddSystemMessage('Message edited.'); } else { acAddSystemMessage('Edit failed: ' + (d.error || 'unknown')); } }).catch(function(){ acAddSystemMessage('Edit failed.'); }); }
-function acDeleteMsgConfirm(m){ if(!confirm('Delete this message for everyone?')) return; fetch(AC_PROXY + '/api/chat-delete', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ msgId: m.msgId, wallet: _acUser.wallet }) }).then(function(r){ return r.json(); }).then(function(d){ if(d.ok){ acAddSystemMessage('Message deleted.'); } else { acAddSystemMessage('Delete failed: ' + (d.error || 'unknown')); } }).catch(function(){ acAddSystemMessage('Delete failed.'); }); }
+/* v556 (audit fix #22, A5): send x-chat-token (proxy authenticates the editor
+ * from it and ignores body.wallet) and msgTime (proxy v31 requires it to locate
+ * the message without a 1000-key scan). Without these the hardened proxy returns
+ * 401 'Missing token' / 400 'msgTime required' and every DM edit silently failed. */
+function acEditMsgPrompt(m){ var newText = prompt('Edit your message:', m.text || ''); if(newText === null || newText.trim() === '' || newText === m.text) return; var _h = {'Content-Type': 'application/json'}; var _t = (typeof acGetChatToken === 'function') ? acGetChatToken() : null; if(_t) _h['x-chat-token'] = _t; fetch(AC_PROXY + '/api/chat-edit', { method: 'POST', headers: _h, body: JSON.stringify({ msgId: m.msgId, msgTime: m.time, newText: newText.trim() }) }).then(function(r){ return r.json(); }).then(function(d){ if(d.ok){ acAddSystemMessage('Message edited.'); } else { acAddSystemMessage('Edit failed: ' + (d.error || 'unknown')); } }).catch(function(){ acAddSystemMessage('Edit failed.'); }); }
+/* v556 (audit fix #22, A5): same as acEditMsgPrompt \u2014 x-chat-token for auth,
+ * msgTime so the proxy (v31) can locate the message. Was 401/400ing silently. */
+function acDeleteMsgConfirm(m){ if(!confirm('Delete this message for everyone?')) return; var _h = {'Content-Type': 'application/json'}; var _t = (typeof acGetChatToken === 'function') ? acGetChatToken() : null; if(_t) _h['x-chat-token'] = _t; fetch(AC_PROXY + '/api/chat-delete', { method: 'POST', headers: _h, body: JSON.stringify({ msgId: m.msgId, msgTime: m.time }) }).then(function(r){ return r.json(); }).then(function(d){ if(d.ok){ acAddSystemMessage('Message deleted.'); } else { acAddSystemMessage('Delete failed: ' + (d.error || 'unknown')); } }).catch(function(){ acAddSystemMessage('Delete failed.'); }); }
 /* ═══ Tier 2: Polls, Broadcasts, Private Chats ═══ */
 
 /* /poll command parser: /poll [Question?] [Opt A] [Opt B] [Opt C] */
@@ -22847,6 +22902,21 @@ function _mlApplyHealthOverlay(m, on){
   try {
     document.querySelectorAll('.legend-tier').forEach(el => { el.style.display = on ? 'none' : 'flex'; });
     document.querySelectorAll('.legend-health').forEach(el => { el.style.display = on ? 'flex' : 'none'; });
+  } catch(_){}
+  /* v556 (audit fix #23, C1): the setData rebuild above repopulates every
+   * feature's asn from the zone-level z.asName, which is always empty (a zone
+   * aggregates many relays across different ISPs). That clobbers the per-feature
+   * asn that _mlApplyIspConcOverlay enriched from allRelays — so if the ISP
+   * concentration overlay is currently ON, its rings would silently stop
+   * matching (their filter is ['in',['get','asn'],list]) even though the
+   * checkbox stays checked. Re-apply the ISP overlay so it re-enriches asn and
+   * rebuilds its ring filters. _mlApplyIspConcOverlay only mutates .asn, leaving
+   * the healthColor we just set intact. Runs on both on and off transitions
+   * since both do the asn-clobbering setData. */
+  try {
+    if (typeof ispConcOn !== 'undefined' && ispConcOn && typeof _mlApplyIspConcOverlay === 'function') {
+      _mlApplyIspConcOverlay(m, true);
+    }
   } catch(_){}
 }
 function getZoneHealthColor(zone){
