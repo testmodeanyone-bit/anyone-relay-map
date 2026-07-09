@@ -7753,14 +7753,40 @@ input:focus-visible, textarea:focus-visible, select:focus-visible{
     _ovcActive[t] = !_ovcActive[t];
     chip.classList.toggle('ovc-off', !_ovcActive[t]);
     chip.setAttribute('aria-checked', _ovcActive[t]);
+    if(t === 'hw'){ var _hw = document.getElementById('ov-hw'); if(_hw) _hw.checked = _ovcActive.hw; }
     window._ovcApplyTypeFilter();
   }
+  window._ovcSyncFromSidebar = function(){
+    var h = document.getElementById('ov-health'), i = document.getElementById('ov-isp'), hw = document.getElementById('ov-hw');
+    var mode = (i && i.checked) ? 'isp' : ((h && h.checked) ? 'health' : 'topology');
+    var seg = document.getElementById('ovc-seg');
+    if(seg){ [].forEach.call(seg.querySelectorAll('button'), function(b){
+      var isOn = b.getAttribute('data-mode') === mode;
+      b.classList.toggle('ovc-on', isOn); b.setAttribute('aria-selected', isOn);
+    }); }
+    var cap = document.getElementById('ovc-cap'); if(cap) cap.innerHTML = _OVC_CAP[mode] || '';
+    if(hw){
+      _ovcActive.hw = !!hw.checked;
+      var chip = document.querySelector('.ovc-chip.ovc-hw');
+      if(chip){ chip.classList.toggle('ovc-off', !_ovcActive.hw); chip.setAttribute('aria-checked', _ovcActive.hw); }
+    }
+    var on = 0; ['exit','guard','middle','hw'].forEach(function(t){ if(_ovcActive[t]) on++; });
+    var c = document.getElementById('ovc-count'); if(c) c.textContent = on + ' of 4';
+  };
   function _ovcInit(){
     var chips = document.getElementById('ovc-chips'); if(!chips) return;
     chips.addEventListener('click', function(e){ var c = e.target.closest('.ovc-chip'); if(c) _ovcToggleChip(c); });
     chips.addEventListener('keydown', function(e){
       if(e.key === ' ' || e.key === 'Enter'){ var c = e.target.closest && e.target.closest('.ovc-chip'); if(c){ e.preventDefault(); _ovcToggleChip(c); } }
     });
+    /* v558: reverse-sync. Reflect direct sidebar toggles (ov-health/ov-isp/ov-hw)
+       in the cluster. _ovcSetMode sets .checked programmatically, which does NOT
+       fire 'change', so this listener runs only on genuine user clicks — no loop. */
+    ['ov-health','ov-isp','ov-hw'].forEach(function(id){
+      var el = document.getElementById(id);
+      if(el) el.addEventListener('change', function(){ window._ovcSyncFromSidebar(); });
+    });
+    window._ovcSyncFromSidebar();
   }
   if(document.readyState === 'loading') document.addEventListener('DOMContentLoaded', _ovcInit);
   else _ovcInit();
