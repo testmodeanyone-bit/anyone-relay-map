@@ -6655,7 +6655,25 @@ var worker_source_default = {
         try { await env.FP_INDEX.delete(nonceKey); } catch (_) {}
         if (env.USER_DB) {
           try { await _initD1Schema(env); } catch (_) {}
-          const claimKey = `verify-claim:${stored.challenge.slice(0, 80)}`;
+          /* audit fix #24: key the replay-claim on a hash of the FULL challenge,
+           * not challenge.slice(0,80). The challenge layout is:
+           *   "AnyChat Operators Lounge Access\nWallet: 0x<40>\nNonce: <32>\n..."
+           * — the wallet alone runs to char 82, so slice(0,80) cut off BEFORE the
+           * nonce ever appears. The claim key was therefore effectively keyed on
+           * the wallet address, collapsing all of a wallet's challenges onto one
+           * counter. Two bad consequences:
+           *   (1) DoS: the claim increments BEFORE signature recovery, so anyone
+           *       who knows a victim's public address could request a challenge
+           *       for it (their own IP → their own nonce slot) and POST a garbage
+           *       signature to bump the shared counter to 1 — the victim's next
+           *       legitimate verify within the 300s TTL then hit count=2 and was
+           *       rejected "Challenge already used". Repeatable verify-lockout.
+           *   (2) A legitimate operator re-verifying within 300s (token expiry,
+           *       reload, device switch) was wrongly blocked for the same reason.
+           * Hashing the full challenge makes the key unique per nonce, so distinct
+           * challenges never collide (fixes 1 + 2) while an actual replay of the
+           * SAME signed challenge still maps to the same key and is rejected. */
+          const claimKey = `verify-claim:${await sha256Hex(stored.challenge)}`;
           const claimCount = await _atomicIncrCounter(env, claimKey, 300);
           if (claimCount !== null && claimCount > 1) {
             return cors(JSON.stringify({ verified: false, reason: "Challenge already used" }), 200);
