@@ -2865,19 +2865,24 @@ body.light .cb-foot-item{color:rgba(0,60,100,.6);}
 .cmesh{fill:none;stroke:rgba(0,245,255,.11);stroke-width:.5;}
 /* ISP concentration overlay */
 .isp-conc-ring{pointer-events:none;}
-#isp-warn-badge{
-  display:none;margin:6px 0 8px;padding:8px 10px;
-  background:rgba(251,191,36,.06);border:1px solid rgba(251,191,36,.2);
-  border-radius:8px;cursor:pointer;border-left:3px solid rgba(251,191,36,.6);
+/* v559 (UX #7): promote the two decentralization-risk signals into prominent,
+   readable alert cards so they read at a glance instead of competing with the
+   neutral donut/zone stats. Also fixes a latent bug: #geo-warn-badge had no card
+   styling and no display:none default, so it rendered permanently while its JS
+   toggled a .visible class no CSS acted on. Both now share one card + toggle. */
+#isp-warn-badge, #geo-warn-badge{
+  display:none;margin:8px 0;padding:10px 12px;
+  background:rgba(251,191,36,.10);border:1px solid rgba(251,191,36,.32);
+  border-radius:9px;cursor:pointer;border-left:4px solid var(--an-amber,#fbbf24);
   transition:all .2s ease;
 }
-#isp-warn-badge.visible{display:block;}
-#isp-warn-badge:hover{background:rgba(251,191,36,.12);border-left-color:var(--an-amber,#fbbf24);}
-.isp-warn-title{font-size:9px;font-weight:700;color:var(--an-amber,#fbbf24);letter-spacing:.8px;margin-bottom:2px;}
-.isp-warn-body{font-size:9px;color:rgba(251,191,36,.9);line-height:1.4;}
-body.light #isp-warn-badge{background:rgba(180,120,0,.06);border-color:rgba(180,120,0,.25);}
+#isp-warn-badge.visible, #geo-warn-badge.visible{display:block;}
+#isp-warn-badge:hover, #geo-warn-badge:hover{background:rgba(251,191,36,.16);border-left-color:var(--an-amber,#fbbf24);}
+.isp-warn-title{font-size:10.5px;font-weight:700;color:var(--an-amber,#fbbf24);letter-spacing:.7px;margin-bottom:3px;display:flex;align-items:center;gap:5px;}
+.isp-warn-body{font-size:11.5px;color:rgba(251,191,36,.95);line-height:1.45;}
+body.light #isp-warn-badge, body.light #geo-warn-badge{background:rgba(180,120,0,.08);border-color:rgba(180,120,0,.3);}
 body.light .isp-warn-title{color:#b45309;}
-body.light .isp-warn-body{color:rgba(180,120,0,.7);}
+body.light .isp-warn-body{color:rgba(180,120,0,.75);}
 
 /* Country labels */
 .clabel{
