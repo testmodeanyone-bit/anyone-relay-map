@@ -10806,6 +10806,14 @@ Issued: ${(/* @__PURE__ */ new Date()).toISOString()}
       try {
         const pollId = url.searchParams.get("pollId");
         if (!pollId) return cors(JSON.stringify({ ok: false, error: "Missing pollId" }), 400);
+        /* audit fix #25: validate pollId shape (matches chat-poll-vote). pollIds
+         * are 8 random bytes = 16 hex chars. Without this, an arbitrary pollId
+         * flowed straight into the `poll:${pollId}` KV key — a >512-byte key
+         * throws (caught as "not found", so harmless but sloppy), and it left
+         * this read path inconsistent with the validated write paths. */
+        if (typeof pollId !== "string" || !/^[a-f0-9]{16}$/.test(pollId)) {
+          return cors(JSON.stringify({ ok: false, error: "Invalid pollId" }), 400);
+        }
         const poll = await env.FP_INDEX.get(`poll:${pollId}`, { type: "json" }).catch(() => null);
         if (!poll) return cors(JSON.stringify({ ok: false, error: "Poll not found" }), 404);
         const counts = new Array(poll.options.length).fill(0);

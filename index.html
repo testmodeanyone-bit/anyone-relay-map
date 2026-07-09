@@ -21436,9 +21436,16 @@ function acParsePollCommand(text){
 /* Create and send a poll */
 function acCreatePoll(question, options){
   if(!_acUser) return;
+  /* v556 (audit fix #25): chat-poll-create requires x-chat-token (proxy v20) and
+   * derives the creator wh from it — body.wallet is ignored server-side, so it's
+   * dropped. Without the token every create 401'd and polls were silently dead. */
+  var _h = {'Content-Type': 'application/json'};
+  var _t = (typeof acGetChatToken === 'function') ? acGetChatToken() : null;
+  if(_t) _h['x-chat-token'] = _t;
+  if(!_t){ acAddSystemMessage('Verify your wallet to create polls.'); return; }
   fetch(AC_PROXY + '/api/chat-poll-create', {
-    method: 'POST', headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({ wallet: _acUser.wallet, question: question, options: options })
+    method: 'POST', headers: _h,
+    body: JSON.stringify({ question: question, options: options })
   }).then(function(r){ return r.json(); }).then(function(d){
     if(d.ok){
       acAddSystemMessage('\ud83d\udcca Poll created: ' + d.poll.question);
@@ -21484,11 +21491,20 @@ function acRenderPollWidget(pollId, container){
 /* Cast a vote */
 function acVotePoll(pollId, optionIndex, container){
   if(!_acUser) return;
+  /* v556 (audit fix #25): chat-poll-vote requires x-chat-token (proxy v20) and
+   * keys the vote by the token's wh — body.wallet is ignored, so it's dropped.
+   * Without the token every vote 401'd and silently no-op'd (the old .catch +
+   * if(d.ok) swallowed it, so the widget never updated and the user saw nothing). */
+  var _h = {'Content-Type': 'application/json'};
+  var _t = (typeof acGetChatToken === 'function') ? acGetChatToken() : null;
+  if(_t) _h['x-chat-token'] = _t;
+  if(!_t){ acAddSystemMessage('Verify your wallet to vote.'); return; }
   fetch(AC_PROXY + '/api/chat-poll-vote', {
-    method: 'POST', headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({ pollId: pollId, wallet: _acUser.wallet, optionIndex: optionIndex })
+    method: 'POST', headers: _h,
+    body: JSON.stringify({ pollId: pollId, optionIndex: optionIndex })
   }).then(function(r){ return r.json(); }).then(function(d){
     if(d.ok) acRenderPollWidget(pollId, container);
+    else acAddSystemMessage('Vote failed: ' + (d.error || 'unknown'));
   }).catch(function(){});
 }
 
