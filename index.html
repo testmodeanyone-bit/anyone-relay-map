@@ -16566,6 +16566,14 @@ async function acE2EImportPeerKey(peerWallet, pubKeyB64){
     var raw = Uint8Array.from(atob(pubKeyB64), function(c){ return c.charCodeAt(0); });
     var key = await crypto.subtle.importKey('raw', raw, { name:'ECDH', namedCurve:'P-256' }, true, []);
     _acE2E.peerKeys[peerWallet] = key;
+    /* v556 (audit fix #30): invalidate any shared secret derived from this
+     * peer's PREVIOUS key. acE2EDeriveShared caches per-peer and returns the
+     * cached secret first, so without this a rotated peer key (re-login, device
+     * change, or a re-import via the WS e2e_pubkey handler at acHandleIncoming)
+     * would keep deriving against the stale key \u2014 every message would silently
+     * fail to decrypt ("could not decrypt") until a full page reload. Re-deriving
+     * on next use is one cheap ECDH op. */
+    delete _acE2E.sharedSecrets[peerWallet];
     return key;
   } catch(e){ console.warn('[E2E] Import peer key failed:', e); return null; }
 }
