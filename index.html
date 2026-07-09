@@ -2883,6 +2883,11 @@ body.light .cb-foot-item{color:rgba(0,60,100,.6);}
 body.light #isp-warn-badge, body.light #geo-warn-badge{background:rgba(180,120,0,.08);border-color:rgba(180,120,0,.3);}
 body.light .isp-warn-title{color:#b45309;}
 body.light .isp-warn-body{color:rgba(180,120,0,.75);}
+/* v560 (UX #7 follow-up): show the "Network Risks" header only when at least one
+   card is active. Pure CSS via :has() — degrades gracefully (header stays hidden)
+   on engines without :has(); the cards themselves are unaffected either way. */
+#sb-risks-head{ display:none; }
+#sb-risks:has(.visible) #sb-risks-head{ display:block; }
 
 /* Country labels */
 .clabel{
@@ -7936,14 +7941,19 @@ input:focus-visible, textarea:focus-visible, select:focus-visible{
       <span class="sb-stat-val sb-loading" id="sb-health" style="color:var(--an-green,#00ff88)">—</span>
     </button>
 
-    <!-- ISP concentration warning badge -->
-    <div id="isp-warn-badge">
-      <div class="isp-warn-title">⚠ <span data-i18n="ispWarnTitle">ISP CONCENTRATION</span></div>
-      <div class="isp-warn-body" id="isp-warn-body">—</div>
-    </div>
-    <div id="geo-warn-badge">
-      <div class="isp-warn-title">⚠ <span data-i18n="geoWarnTitle">GEO CLUSTER</span></div>
-      <div class="isp-warn-body" id="geo-warn-body">—</div>
+    <!-- v560 (UX #7): risk signals grouped under a header that appears only when
+         at least one card is active — CSS :has(.visible), no JS. -->
+    <div id="sb-risks">
+      <div class="sb-section" id="sb-risks-head" style="margin-top:8px">Network Risks</div>
+      <!-- ISP concentration warning badge -->
+      <div id="isp-warn-badge">
+        <div class="isp-warn-title">⚠ <span data-i18n="ispWarnTitle">ISP CONCENTRATION</span></div>
+        <div class="isp-warn-body" id="isp-warn-body">—</div>
+      </div>
+      <div id="geo-warn-badge">
+        <div class="isp-warn-title">⚠ <span data-i18n="geoWarnTitle">GEO CLUSTER</span></div>
+        <div class="isp-warn-body" id="geo-warn-body">—</div>
+      </div>
     </div>
 
     <!-- ACTIONS -->
