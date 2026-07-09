@@ -16664,10 +16664,19 @@ async function acE2EShareKey(){
   if(AC.ws && AC.ws.readyState === WebSocket.OPEN){
     AC.ws.send(JSON.stringify({ type:'e2e_pubkey', wallet: _acUser.wallet, pubkey: pub }));
   }
-  fetch(AC_CHAT_API + '/api/chat-e2e-key', {
-    method:'POST', headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({ wallet: _acUser.wallet, nick: _acUser.nick, pubkey: pub })
-  }).catch(function(){});
+  /* v556 (audit fix #28): publish the P-256 key to the proxy's new e2e-key
+   * directory. Was AC_CHAT_API='' + '/api/chat-e2e-key' \u2014 a dead same-origin
+   * map-worker route \u2014 so the key never published, peers never fetched it, and
+   * DMs silently fell back to plaintext. Identity is the signed token; the
+   * server ignores body.wallet/nick and stores under the token's wh. Skips when
+   * unverified (no token) \u2014 nothing to publish under. */
+  var _e2eShareTok = (typeof acGetChatToken === 'function') ? acGetChatToken() : null;
+  if(_e2eShareTok){
+    fetch(AC_PROXY + '/api/chat-e2e-key', {
+      method:'POST', headers:{'Content-Type':'application/json','x-chat-token':_e2eShareTok},
+      body: JSON.stringify({ pubkey: pub })
+    }).catch(function(){});
+  }
 }
 
 
@@ -21083,7 +21092,11 @@ function opOpenChat(peer){
   // Init Push Protocol on first DM open (lazy)
   if(!_pushReady && peer?.wallet && !peer.wallet.startsWith('V-') && window.ethereum) acPushInit().catch(function(){});
   if(peer && peer.wallet && !_acE2E.peerKeys[peer.wallet]){
-    fetch(AC_CHAT_API + '/api/chat-e2e-key?wallet=' + encodeURIComponent(peer.wallet))
+    /* v556 (audit fix #28): fetch the peer's P-256 key from the proxy directory
+     * (was AC_CHAT_API='' \u2014 dead route \u2014 so peerKeys never populated and DMs
+     * ran plaintext). Server accepts ?wallet= (raw), hashes it server-side to
+     * match the publisher's stored wh, and returns { pubkey }. */
+    fetch(AC_PROXY + '/api/chat-e2e-key?wallet=' + encodeURIComponent(peer.wallet))
       .then(function(r){ return r.json(); })
       .then(function(d){ if(d && d.pubkey) acE2EImportPeerKey(peer.wallet, d.pubkey); })
       .catch(function(){});

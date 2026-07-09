@@ -8765,6 +8765,88 @@ I confirm I control this wallet.`;
         return cors(JSON.stringify({ error: "Internal error" }), 500);
       }
     }
+    /* ===================================================================
+     * audit fix #28 — DM E2E public-key directory (ECDH P-256).
+     * UNTESTED CRYPTO: verify a real encrypt→send→decrypt round-trip
+     * between two wallets before trusting the lock icon in production.
+     *
+     * Why this exists separately from /api/dm-pubkey: the client
+     * (acE2EShareKey / acE2EImportPeerKey) uses ECDH P-256 and publishes
+     * the 65-byte uncompressed point, base64-encoded (~88 chars).
+     * /api/dm-pubkey validates 32-byte X25519 keys (64-hex) — a different
+     * curve/format, so the client's key can never satisfy it. Before this
+     * endpoint existed the client POSTed to AC_CHAT_API='' + '/api/chat-e2e-key',
+     * which resolved same-origin to the map worker (chat routes removed in
+     * v373) — a dead route. Result: keys never published, peer keys never
+     * fetched, and opSendPrivate's fail-open path sent every DM in PLAINTEXT
+     * while the E2E badge implied encryption. Keep the two directories
+     * distinct; do NOT merge with dm-pubkey.
+     *
+     * Identity model matches dm-pubkey: publisher identity is the signed
+     * x-chat-token, the key is stored under that token's wh, so a caller can
+     * only publish their OWN key (prevents directory poisoning). The GET is
+     * unauthenticated (a public key is public) and hashes the supplied wallet
+     * server-side to match the POST's storage key. hashWallet here and the
+     * client's hashWalletClient are both SHA-256(lowercase+trim) → the wh
+     * keys line up. =================================================== */
+    if (url.pathname === "/api/chat-e2e-key" && request.method === "POST") {
+      try {
+        if (!env.FP_INDEX) return cors(JSON.stringify({ ok: false, error: "KV not bound" }), 503);
+        const tokVerify = await verifyChatToken(env, request.headers.get("x-chat-token"));
+        if (!tokVerify.ok) return cors(JSON.stringify({ ok: false, error: tokVerify.error, banned: tokVerify.banned, requireVerify: tokVerify.status === 401 }), tokVerify.status);
+        const wh = tokVerify.wh;
+        const body = await request.json().catch(() => ({}));
+        const pubkey = typeof body.pubkey === "string" ? body.pubkey.trim() : "";
+        /* Validate the P-256 uncompressed point: standard base64 that decodes to
+         * exactly 65 bytes with a 0x04 prefix. A 65-byte point is ~88 base64
+         * chars; allow a little slack for padding variance but reject anything
+         * that isn't a real P-256 raw public key, so a malformed/wrong-curve key
+         * never lands in the directory (a bad key would make every peer's
+         * deriveKey throw and silently drop back to plaintext). */
+        if (pubkey.length < 80 || pubkey.length > 128 || !/^[A-Za-z0-9+/]+={0,2}$/.test(pubkey)) {
+          return cors(JSON.stringify({ ok: false, error: "pubkey must be base64 P-256 point" }), 400);
+        }
+        let _pkBytes;
+        try {
+          const _bin = atob(pubkey);
+          _pkBytes = new Uint8Array(_bin.length);
+          for (let i = 0; i < _bin.length; i++) _pkBytes[i] = _bin.charCodeAt(i);
+        } catch { return cors(JSON.stringify({ ok: false, error: "pubkey not valid base64" }), 400); }
+        if (_pkBytes.length !== 65 || _pkBytes[0] !== 0x04) {
+          return cors(JSON.stringify({ ok: false, error: "pubkey must be a 65-byte uncompressed P-256 point" }), 400);
+        }
+        /* Per-IP + per-wh publish rate limits, mirroring dm-pubkey. */
+        const ip = request.headers.get("CF-Connecting-IP") || "unknown";
+        const rlKey = `e2ekey-rl:${ip}`;
+        const rl = await env.FP_INDEX.get(rlKey, { type: "json" }).catch(() => null) || { count: 0 };
+        if (rl.count >= 10) return cors(JSON.stringify({ ok: false, error: "Too many publishes" }), 429);
+        ctx.waitUntil(env.FP_INDEX.put(rlKey, JSON.stringify({ count: rl.count + 1 }), { expirationTtl: 3600 }).catch(() => {}));
+        const whRlKey = `e2ekey-wh-rl:${wh.slice(0, 16)}`;
+        const whRl = await env.FP_INDEX.get(whRlKey, { type: "json" }).catch(() => null) || { count: 0 };
+        if (whRl.count >= 5) return cors(JSON.stringify({ ok: false, error: "Too many publishes for this wallet" }), 429);
+        ctx.waitUntil(env.FP_INDEX.put(whRlKey, JSON.stringify({ count: whRl.count + 1 }), { expirationTtl: 3600 }).catch(() => {}));
+        /* No TTL — a user's E2E key is stable; persist until they republish. */
+        await env.FP_INDEX.put(`e2e-p256-pubkey:${wh}`, JSON.stringify({ pubkey, ts: Date.now() }));
+        return cors(JSON.stringify({ ok: true, wh }), 200);
+      } catch (e) {
+        return cors(JSON.stringify({ ok: false, error: "Internal error" }), 500);
+      }
+    }
+    if (url.pathname === "/api/chat-e2e-key" && request.method === "GET") {
+      try {
+        if (!env.FP_INDEX) return cors(JSON.stringify({ error: "KV not bound" }), 503);
+        const cleanedWallet = cleanWallet(url.searchParams.get("wallet"));
+        if (!cleanedWallet) return cors(JSON.stringify({ error: "wallet required" }), 400);
+        const wh = await hashWallet(cleanedWallet);
+        const record = await env.FP_INDEX.get(`e2e-p256-pubkey:${wh}`, { type: "json" });
+        if (!record || !record.pubkey) {
+          return cors(JSON.stringify({ error: "No E2E key published for this wallet" }), 404);
+        }
+        return cors(JSON.stringify({ wallet: cleanedWallet, pubkey: record.pubkey, ts: record.ts }), 200);
+      } catch (e) {
+        return cors(JSON.stringify({ error: "Internal error" }), 500);
+      }
+    }
     if (url.pathname === "/api/room/join" && request.method === "POST") {
       try {
         /* v20: identity from signed token, not body.wallet. The original bug was
