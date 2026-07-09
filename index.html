@@ -7666,11 +7666,15 @@ input:focus-visible, textarea:focus-visible, select:focus-visible{
      chips drive relay-points/relay-glow opacity + hw-diamonds visibility via the same
      setPaintProperty mechanism toggleHwOverlay() uses. -->
 <style>
-  #ovc-cluster{position:fixed;top:72px;right:16px;width:248px;z-index:900;
+  #ovc-cluster{position:fixed;top:88px;right:16px;width:248px;z-index:900;
     background:rgba(6,20,28,.82);backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);
     border:1px solid rgba(94,234,212,.14);border-radius:14px;padding:13px 13px 11px;
     box-shadow:0 8px 30px rgba(0,0,0,.45);font-family:'Rajdhani',system-ui,sans-serif;}
   #ovc-cluster.ovc-hidden{display:none;}
+  /* v561: the overlay cluster is a desktop map-layer control. On mobile the same
+     HW/Health/ISP toggles live in the sidebar sheet, and a 248px fixed panel would
+     cover the map + collide with mobile top chrome — so hide it at <=768px. */
+  @media(max-width:768px){ #ovc-cluster{display:none !important;} }
   .ovc-head{display:flex;align-items:center;gap:7px;margin:0 2px 8px;font-family:'Orbitron',sans-serif;
     font-size:9.5px;font-weight:600;letter-spacing:1.5px;text-transform:uppercase;color:#7fa3ad;}
   .ovc-head .ovc-tick{width:3px;height:11px;background:#00f5ff;border-radius:1px;box-shadow:0 0 8px #00f5ff;}
