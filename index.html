@@ -7650,6 +7650,123 @@ input:focus-visible, textarea:focus-visible, select:focus-visible{
 <!-- MAP -->
 <div id="map-wrap" role="main" aria-label="Relay map"><svg id="map"></svg><canvas id="map-canvas" aria-hidden="true"></canvas></div>
 
+<!-- v557 (UX): overlay control cluster — surfaces the buried HW/Health/ISP sidebar
+     toggles as a discoverable map-layer control (top-right) + live relay-type filter
+     chips. Mode buttons drive the existing toggleHealthOverlay()/toggleIspConc();
+     chips drive relay-points/relay-glow opacity + hw-diamonds visibility via the same
+     setPaintProperty mechanism toggleHwOverlay() uses. -->
+<style>
+  #ovc-cluster{position:fixed;top:72px;right:16px;width:248px;z-index:900;
+    background:rgba(6,20,28,.82);backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);
+    border:1px solid rgba(94,234,212,.14);border-radius:14px;padding:13px 13px 11px;
+    box-shadow:0 8px 30px rgba(0,0,0,.45);font-family:'Rajdhani',system-ui,sans-serif;}
+  #ovc-cluster.ovc-hidden{display:none;}
+  .ovc-head{display:flex;align-items:center;gap:7px;margin:0 2px 8px;font-family:'Orbitron',sans-serif;
+    font-size:9.5px;font-weight:600;letter-spacing:1.5px;text-transform:uppercase;color:#7fa3ad;}
+  .ovc-head .ovc-tick{width:3px;height:11px;background:#00f5ff;border-radius:1px;box-shadow:0 0 8px #00f5ff;}
+  .ovc-head .ovc-count{margin-left:auto;color:#5eead4;font-size:9.5px;letter-spacing:1px;}
+  .ovc-seg{display:flex;background:rgba(0,0,0,.28);border:1px solid rgba(94,234,212,.14);
+    border-radius:9px;padding:3px;gap:2px;margin-bottom:13px;}
+  .ovc-seg button{flex:1;border:0;background:transparent;color:#7fa3ad;cursor:pointer;
+    font-family:'Orbitron',sans-serif;font-size:9px;font-weight:600;letter-spacing:.6px;
+    text-transform:uppercase;padding:8px 3px;border-radius:6px;transition:all .18s ease;}
+  .ovc-seg button:hover{color:#cfe9ee;}
+  .ovc-seg button.ovc-on{background:rgba(0,245,255,.12);color:#00f5ff;box-shadow:inset 0 0 0 1px rgba(0,245,255,.35);}
+  .ovc-chips{display:flex;flex-wrap:wrap;gap:6px;}
+  .ovc-chip{display:inline-flex;align-items:center;gap:6px;cursor:pointer;background:rgba(255,255,255,.03);
+    border:1px solid rgba(94,234,212,.14);border-radius:20px;padding:6px 10px 6px 8px;
+    font-size:12px;font-weight:500;letter-spacing:.3px;color:#cfe9ee;transition:all .18s ease;user-select:none;}
+  .ovc-chip:hover{border-color:rgba(94,234,212,.4);}
+  .ovc-chip .ovc-sw{width:9px;height:9px;border-radius:50%;flex-shrink:0;box-shadow:0 0 6px currentColor;transition:all .2s ease;}
+  .ovc-chip.ovc-hw .ovc-sw{border-radius:0;clip-path:polygon(50% 0,100% 50%,50% 100%,0 50%);width:10px;height:10px;}
+  .ovc-chip.ovc-off{color:#7fa3ad;background:transparent;border-color:rgba(120,150,160,.14);}
+  .ovc-chip.ovc-off .ovc-sw{opacity:.25;box-shadow:none;filter:grayscale(1);}
+  .ovc-chip.ovc-off .ovc-lbl{text-decoration:line-through;text-decoration-color:rgba(127,163,173,.5);}
+  .ovc-cap{margin-top:11px;padding-top:10px;border-top:1px solid rgba(94,234,212,.14);
+    font-size:11.5px;line-height:1.45;color:#7fa3ad;}
+  .ovc-cap b{color:#5eead4;font-weight:600;}
+  body.light #ovc-cluster{background:rgba(240,248,250,.9);border-color:rgba(20,100,140,.18);}
+  body.light .ovc-head,body.light .ovc-cap{color:#527a86;}
+  body.light .ovc-chip{color:#0b2a33;}
+</style>
+<div id="ovc-cluster" role="group" aria-label="Map overlay controls">
+  <div class="ovc-head"><span class="ovc-tick"></span>Map mode</div>
+  <div class="ovc-seg" id="ovc-seg" role="tablist">
+    <button class="ovc-on" data-mode="topology" role="tab" aria-selected="true" onclick="_ovcSetMode('topology')">Topology</button>
+    <button data-mode="health" role="tab" aria-selected="false" onclick="_ovcSetMode('health')">Health</button>
+    <button data-mode="isp" role="tab" aria-selected="false" onclick="_ovcSetMode('isp')">ISP&nbsp;Conc.</button>
+  </div>
+  <div class="ovc-head"><span class="ovc-tick"></span>Relay types<span class="ovc-count" id="ovc-count">4 of 4</span></div>
+  <div class="ovc-chips" id="ovc-chips">
+    <span class="ovc-chip ovc-exit"   data-type="exit"   role="switch" aria-checked="true" tabindex="0"><span class="ovc-sw" style="background:#ff6b35;color:#ff6b35"></span><span class="ovc-lbl">Exit</span></span>
+    <span class="ovc-chip ovc-guard"  data-type="guard"  role="switch" aria-checked="true" tabindex="0"><span class="ovc-sw" style="background:#a78bfa;color:#a78bfa"></span><span class="ovc-lbl">Guard</span></span>
+    <span class="ovc-chip ovc-middle" data-type="middle" role="switch" aria-checked="true" tabindex="0"><span class="ovc-sw" style="background:#2dd4bf;color:#2dd4bf"></span><span class="ovc-lbl">Middle</span></span>
+    <span class="ovc-chip ovc-hw"     data-type="hw"     role="switch" aria-checked="true" tabindex="0"><span class="ovc-sw" style="background:#fbbf24;color:#fbbf24"></span><span class="ovc-lbl">HW</span></span>
+  </div>
+  <div class="ovc-cap" id="ovc-cap"><b>Topology.</b> Every relay by role.</div>
+</div>
+<script>
+(function(){
+  var _ovcActive = { exit:true, guard:true, middle:true, hw:true };
+  var _OVC_CAP = {
+    topology:'<b>Topology.</b> Every relay by role.',
+    health:'<b>Health.</b> Zones tinted by uptime &amp; score.',
+    isp:'<b>ISP concentration.</b> Rings flag dominant providers.'
+  };
+  function _ovcMap(){ return window.__anyoneMapLibre || null; }
+  window._ovcApplyTypeFilter = function(){
+    var m = _ovcMap(); if(!m) return;
+    var base = ['exit','guard','middle'];
+    var activeTiers = base.filter(function(t){ return _ovcActive[t]; });
+    var allBase = _ovcActive.exit && _ovcActive.guard && _ovcActive.middle;
+    try {
+      if(m.getLayer('relay-points')){
+        m.setPaintProperty('relay-points','circle-opacity',
+          allBase ? 1 : ['case',['in',['get','tier'],['literal',activeTiers]],1,0.05]);
+      }
+      if(m.getLayer('relay-glow')){
+        m.setPaintProperty('relay-glow','circle-opacity',
+          allBase ? 0.6 : ['case',['in',['get','tier'],['literal',activeTiers]],0.6,0.02]);
+      }
+      if(m.getLayer('hw-diamonds')){
+        m.setLayoutProperty('hw-diamonds','visibility', _ovcActive.hw ? 'visible' : 'none');
+      }
+    } catch(_){}
+    var on = 0; ['exit','guard','middle','hw'].forEach(function(t){ if(_ovcActive[t]) on++; });
+    var c = document.getElementById('ovc-count'); if(c) c.textContent = on + ' of 4';
+  };
+  window._ovcSetMode = function(mode){
+    var h = document.getElementById('ov-health'), i = document.getElementById('ov-isp');
+    if(h) h.checked = (mode === 'health');
+    if(i) i.checked = (mode === 'isp');
+    try { if(typeof toggleHealthOverlay === 'function') toggleHealthOverlay(); } catch(_){}
+    try { if(typeof toggleIspConc === 'function') toggleIspConc(); } catch(_){}
+    var seg = document.getElementById('ovc-seg');
+    if(seg){ [].forEach.call(seg.querySelectorAll('button'), function(b){
+      var isOn = b.getAttribute('data-mode') === mode;
+      b.classList.toggle('ovc-on', isOn); b.setAttribute('aria-selected', isOn);
+    }); }
+    var cap = document.getElementById('ovc-cap'); if(cap) cap.innerHTML = _OVC_CAP[mode] || '';
+  };
+  function _ovcToggleChip(chip){
+    var t = chip.getAttribute('data-type'); if(!t) return;
+    _ovcActive[t] = !_ovcActive[t];
+    chip.classList.toggle('ovc-off', !_ovcActive[t]);
+    chip.setAttribute('aria-checked', _ovcActive[t]);
+    window._ovcApplyTypeFilter();
+  }
+  function _ovcInit(){
+    var chips = document.getElementById('ovc-chips'); if(!chips) return;
+    chips.addEventListener('click', function(e){ var c = e.target.closest('.ovc-chip'); if(c) _ovcToggleChip(c); });
+    chips.addEventListener('keydown', function(e){
+      if(e.key === ' ' || e.key === 'Enter'){ var c = e.target.closest && e.target.closest('.ovc-chip'); if(c){ e.preventDefault(); _ovcToggleChip(c); } }
+    });
+  }
+  if(document.readyState === 'loading') document.addEventListener('DOMContentLoaded', _ovcInit);
+  else _ovcInit();
+})();
+</script>
+
 <!-- Growth tooltip -->
 <div id="growth-tooltip"></div>
 
