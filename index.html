@@ -19346,9 +19346,18 @@ async function acSendImage(){
       r.onerror = rej;
       r.readAsDataURL(file);
     });
+    /* v556 (audit fix #26): chat-image requires x-chat-token (proxy v20). The
+     * server reads the session tier from the token's wh and gates HW-only there;
+     * body.tier is ignored. Without the token every upload 401'd before the
+     * HW check ran, so image sending was fully broken for HW operators \u2014 the
+     * one feature that spends real money (Anthropic vision moderation). */
+    var _imgH = { 'Content-Type': 'application/json' };
+    var _imgTok = (typeof acGetChatToken === 'function') ? acGetChatToken() : null;
+    if(_imgTok) _imgH['x-chat-token'] = _imgTok;
+    if(!_imgTok){ acAddWarning('AnyClip', 'Your session expired \u2014 reconnect your wallet to send images.'); acClearImagePreview(); return; }
     const resp = await fetch(AC_PROXY + '/api/chat-image', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: _imgH,
       body: JSON.stringify({ nick: _acUser.nick, tier: _acUser.tier, wallet: _acUser.wallet,
         image: base64, filename: file.name, mimetype: file.type, size: file.size })
     });
@@ -21122,7 +21131,13 @@ function opCloseChat(){
 async function opLoadDMHistory(peerWallet){
   if(!_acUser) return;
   try {
-    const res = await fetch(AC_PROXY + '/api/chat-dm-poll?wallet=' + encodeURIComponent(_acUser.wallet) + '&since=0');
+    /* v556 (audit fix #27): chat-dm-poll requires x-chat-token whose wh matches
+     * hashWallet(wallet). Without it the proxy 401'd and no DM history loaded. */
+    var _dmpH = {};
+    var _dmpTok = (typeof acGetChatToken === 'function') ? acGetChatToken() : null;
+    if(!_dmpTok) return;
+    _dmpH['x-chat-token'] = _dmpTok;
+    const res = await fetch(AC_PROXY + '/api/chat-dm-poll?wallet=' + encodeURIComponent(_acUser.wallet) + '&since=0', { headers: _dmpH });
     const data = await res.json();
     if(data.messages && data.messages.length > 0){
       const peerWh = peerWallet;
@@ -21159,7 +21174,13 @@ async function opPollDMs(){
   if(AC.ws && AC.ws.readyState === WebSocket.OPEN) return;
   const since = OP._dmLastPoll || (Date.now() - 3600000);
   try {
-    const res = await fetch(AC_PROXY + '/api/chat-dm-poll?wallet=' + encodeURIComponent(_acUser.wallet) + '&since=' + since);
+    /* v556 (audit fix #27): same token requirement as opLoadDMHistory \u2014 without
+     * it the background DM poll 401'd, so incoming DMs never arrived over HTTP. */
+    var _dmpH2 = {};
+    var _dmpTok2 = (typeof acGetChatToken === 'function') ? acGetChatToken() : null;
+    if(!_dmpTok2) return;
+    _dmpH2['x-chat-token'] = _dmpTok2;
+    const res = await fetch(AC_PROXY + '/api/chat-dm-poll?wallet=' + encodeURIComponent(_acUser.wallet) + '&since=' + since, { headers: _dmpH2 });
     const data = await res.json();
     if(data.messages && data.messages.length > 0){
       let newMsgs = false;
@@ -21323,9 +21344,18 @@ async function opSendPrivate(){
       if(pushSent){ console.log('[Push] DM sent via Push Protocol'); return; }
     }
     // Fallback to HTTP
+    /* v556 (audit fix #27): chat-dm-send requires x-chat-token (proxy v20) \u2014
+     * sender identity is derived from it, body.{nick,tier,wallet} are ignored.
+     * Without the token every DM 401'd. Since the WebSocket path is retired
+     * (Ably migration; /api/ws returns 503), this HTTP path is the live DM
+     * channel, so DMs were fully broken. */
+    var _dmH = { 'Content-Type': 'application/json' };
+    var _dmTok = (typeof acGetChatToken === 'function') ? acGetChatToken() : null;
+    if(_dmTok) _dmH['x-chat-token'] = _dmTok;
+    if(!_dmTok){ acAddWarning('AnyClip', 'Your session expired \u2014 reconnect your wallet to send direct messages.'); return; }
     await fetch(AC_PROXY + '/api/chat-dm-send', {
-      method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({ nick:_acUser.nick, tier:_acUser.tier, wallet:_acUser.wallet, to:OP.activePeer, text: _dmText, time:msg.time, avatar:msg.avatar })
+      method:'POST', headers:_dmH,
+      body: JSON.stringify({ to:OP.activePeer, text: _dmText, time:msg.time, avatar:msg.avatar })
     });
   } catch(e){}
 }
