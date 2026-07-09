@@ -7206,8 +7206,22 @@ I confirm I control this wallet.`;
         let channelName, capability;
         if (isVerified) {
           channelName = "operators-lounge";
+          /* audit fix #31: clients get subscribe/presence/history but NOT publish.
+           * Message forgery vector: the legit client never publishes to Ably
+           * directly — every lounge message goes through /api/chat-send, which
+           * validates (ban check, tier demotion, rate limits, content moderation),
+           * signs a MAC, and publishes to Ably server-side with the root key. The
+           * MAC that chat-send attaches is an HMAC over the server secret, so
+           * clients CANNOT verify it (they don't hold the secret) and
+           * acProcessIncomingMessage renders inbound Ably payloads verbatim.
+           * Therefore, if a verified client held `publish`, it could publish a
+           * chat-message event with {nick:"<victim>", tier:"hw", ...} directly to
+           * operators-lounge and every subscriber would render it as that victim —
+           * bypassing every server-side control. Since no legitimate client uses
+           * Ably publish (grep: zero .publish() calls), removing the capability
+           * closes the forgery hole with no feature impact. */
           capability = JSON.stringify({
-            [channelName]: ["subscribe", "publish", "presence", "history"]
+            [channelName]: ["subscribe", "presence", "history"]
           });
         } else {
           channelName = "lobby";
