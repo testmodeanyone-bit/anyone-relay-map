@@ -16782,22 +16782,17 @@ function acCheckIPAbuse(action){
   }
   return { blocked: false };
 }
+/* v556 (audit fix #29): server-side abuse reporting POSTed to
+ * AC_CHAT_API='' + '/api/chat-abuse-report' \u2014 a dead same-origin map-worker
+ * route (chat routes removed v373), so every report vanished and fired a failed
+ * request on each detection. The LOCAL abuse blocking in acCheckAbuse is
+ * unaffected (it returns {blocked:true} independently of this call), so
+ * protection is intact \u2014 only the lost server telemetry is removed. To restore
+ * server-side visibility: add a token-authed /api/chat-abuse-report handler on
+ * the proxy and POST to AC_PROXY with x-chat-token (derive identity from the
+ * token, not body.wallet). */
 function acReportAbuse(type, data){
-  try {
-    fetch(AC_CHAT_API + '/api/chat-abuse-report', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        type: type,
-        country: _acIPInfo.country,
-        isTor: _acIPInfo.isTor,
-        wallet: _acUser?.wallet,
-        nick: _acUser?.nick,
-        data: data,
-        time: Date.now()
-      })
-    }).catch(function(){});
-  } catch(e){}
+  /* no-op \u2014 see audit fix #29. Detection + blocking live in acCheckAbuse. */
 }
 setTimeout(function(){
   if(_acIPInfo.isTor){
@@ -17671,10 +17666,16 @@ AC.flashTimer = null;
 AC.origTitle = document.title;
 
 
+/* v556 (audit fix #29): DM typing indicators POSTed to AC_CHAT_API='' +
+ * '/api/chat-dm-typing' \u2014 a dead route. It canNOT be repointed to
+ * /api/chat-typing: that endpoint is lounge-wide and would leak your private DM
+ * activity to every operator. Neutralized to stop the failed request; the
+ * display helpers (acDmShowTyping/acDmHideTyping) remain for when a proper
+ * from\u2192to DM-typing endpoint exists. To restore: add /api/chat-dm-typing
+ * (token-authed, keyed by {fromWh,toWh}) on the proxy and surface it in
+ * chat-dm-poll. */
 function acDmSendTyping(){
-  if(!_acUser || !OP.activePeer) return;
-  try { fetch(AC_CHAT_API + '/api/chat-dm-typing', { method:'POST', headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({ from: _acUser.wallet, to: OP.activePeer, nick: _acUser.nick }) }).catch(()=>{}); } catch(e){}
+  /* no-op \u2014 see audit fix #29. */
 }
 function acDmShowTyping(nick){
   const el = document.getElementById('op-dm-typing');
