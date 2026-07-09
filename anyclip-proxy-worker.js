@@ -10670,6 +10670,37 @@ Issued: ${(/* @__PURE__ */ new Date()).toISOString()}
         }
         const ALLOWED = ["\ud83d\udc4d","\u2764\ufe0f","\ud83d\ude02","\ud83c\udf89","\ud83d\udd25","\u26a0\ufe0f"];
         if (!ALLOWED.includes(emoji)) return cors(JSON.stringify({ ok: false, error: "Emoji not allowed" }), 400);
+        /* audit fix #32: rate-limit reactions. This was the only token-gated
+         * mutation endpoint with no limit. Because there's no msgId-existence
+         * check (the request carries no msgTime, so a direct-key lookup isn't
+         * possible and an O(n) scan would be its own DoS), a token holder could
+         * react to arbitrary 16-hex msgIds — each creating a distinct
+         * react:${msgId} KV record with a 7-day TTL. Rotating msgIds writes to
+         * different keys, so Cloudflare's per-key write throttle doesn't help;
+         * this is an authenticated KV-write-amplification / quota-burn vector.
+         * Per-wh (the reactor's stable identity) is the primary control; per-IP
+         * catches multi-account churn. Limits are generous so catching up on a
+         * busy thread with many reactions still works. */
+        if (env.FP_INDEX) {
+          const _rxNow = Date.now();
+          const _rxWhKey = `react-wh-rl:${wh.slice(0, 16)}`;
+          const _rxWh = await env.FP_INDEX.get(_rxWhKey, { type: "json" }).catch(() => null) || { count: 0, ts: _rxNow };
+          if (_rxNow - _rxWh.ts > 60000) { _rxWh.count = 0; _rxWh.ts = _rxNow; }
+          if (_rxWh.count >= 40) {
+            return cors(JSON.stringify({ ok: false, error: "Reacting too fast \u2014 slow down.", rateLimit: true }), 429);
+          }
+          _rxWh.count++;
+          ctx.waitUntil(env.FP_INDEX.put(_rxWhKey, JSON.stringify(_rxWh), { expirationTtl: 120 }).catch(() => {}));
+          const _rxIp = request.headers.get("CF-Connecting-IP") || "unknown";
+          const _rxIpKey = `react-ip-rl:${_rxIp}`;
+          const _rxIpRl = await env.FP_INDEX.get(_rxIpKey, { type: "json" }).catch(() => null) || { count: 0, ts: _rxNow };
+          if (_rxNow - _rxIpRl.ts > 60000) { _rxIpRl.count = 0; _rxIpRl.ts = _rxNow; }
+          if (_rxIpRl.count >= 80) {
+            return cors(JSON.stringify({ ok: false, error: "Reacting too fast \u2014 slow down.", rateLimit: true }), 429);
+          }
+          _rxIpRl.count++;
+          ctx.waitUntil(env.FP_INDEX.put(_rxIpKey, JSON.stringify(_rxIpRl), { expirationTtl: 120 }).catch(() => {}));
+        }
         const reactKey = `react:${msgId}`;
         const existing = await env.FP_INDEX.get(reactKey, { type: "json" }).catch(() => null) || {};
         if (existing[wh] === emoji) { delete existing[wh]; } else { existing[wh] = emoji; }
