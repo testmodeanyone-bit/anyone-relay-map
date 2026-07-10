@@ -803,6 +803,20 @@ setTimeout(function() {
     } else if (e.key === 'Enter') {
       e.preventDefault();
       executeItem(cmdkSelected);
+    } else if (e.key === 'Tab') {
+      /* v565 (a11y): trap Tab within the command palette (aria-modal=true).
+         Only #cmdk-input is focusable today, so Tab/Shift+Tab keep focus on it
+         instead of escaping to the page behind the open dialog; if the palette
+         gains more focusables later this cycles them correctly. */
+      var _cmdk = document.getElementById('cmdk-overlay');
+      if (_cmdk) {
+        var _f = [].slice.call(_cmdk.querySelectorAll('a[href],button:not([disabled]),input:not([disabled]),select:not([disabled]),textarea:not([disabled]),[tabindex]:not([tabindex="-1"])')).filter(function(el){ return el.offsetParent !== null; });
+        if (_f.length) {
+          var _first = _f[0], _last = _f[_f.length - 1], _a = document.activeElement;
+          if (e.shiftKey) { if (_a === _first || !_cmdk.contains(_a)) { e.preventDefault(); _last.focus(); } }
+          else { if (_a === _last || !_cmdk.contains(_a)) { e.preventDefault(); _first.focus(); } }
+        }
+      }
     }
   });
   
