@@ -30499,6 +30499,60 @@ IMPORTANT: The user's preferred language is ${activeLang.name}. You MUST respond
     </div>
   </div>
 </div>
+<script>
+/* v564 (a11y): make the #onboarding welcome modal a real dialog. Self-contained —
+ * watches its .hidden class (show-paths remove it, dismissOnboarding adds it) and
+ * never touches that logic. On open: set dialog ARIA, remember the trigger, move
+ * focus into the card, and trap Tab within it. On close: release the trap and
+ * restore focus. Escape-to-close already exists in the global key handler. */
+(function(){
+  if (window.__obA11yWired) return; window.__obA11yWired = true;
+  function boot(){
+    var ob = document.getElementById('onboarding');
+    if (!ob) return false;
+    ob.setAttribute('role','dialog');
+    ob.setAttribute('aria-modal','true');
+    if (document.getElementById('ob-title')) ob.setAttribute('aria-labelledby','ob-title');
+    if (document.getElementById('ob-sub'))   ob.setAttribute('aria-describedby','ob-sub');
+
+    var lastFocus = null, open = false;
+    function focusables(){
+      return [].slice.call(ob.querySelectorAll(
+        'a[href],button:not([disabled]),input:not([disabled]),select:not([disabled]),textarea:not([disabled]),[tabindex]:not([tabindex="-1"])'
+      )).filter(function(el){ return el.offsetParent !== null; });
+    }
+    function onKeydown(e){
+      if (e.key === 'Escape'){ if (typeof dismissOnboarding === 'function') dismissOnboarding(); else ob.classList.add('hidden'); return; }
+      if (e.key !== 'Tab') return;
+      var f = focusables(); if (!f.length) return;
+      var first = f[0], last = f[f.length-1], a = document.activeElement;
+      if (e.shiftKey){
+        if (a === first || !ob.contains(a)){ e.preventDefault(); last.focus(); }
+      } else {
+        if (a === last || !ob.contains(a)){ e.preventDefault(); first.focus(); }
+      }
+    }
+    function setOpen(isOpen){
+      if (isOpen === open) return; open = isOpen;
+      if (isOpen){
+        lastFocus = document.activeElement;
+        document.addEventListener('keydown', onKeydown, true);
+        var target = document.getElementById('ob-close') || focusables()[0];
+        if (target) try { target.focus(); } catch(_){}
+      } else {
+        document.removeEventListener('keydown', onKeydown, true);
+        if (lastFocus && document.contains(lastFocus) && lastFocus !== document.body){ try { lastFocus.focus(); } catch(_){} }
+        lastFocus = null;
+      }
+    }
+    setOpen(!ob.classList.contains('hidden'));
+    new MutationObserver(function(){ setOpen(!ob.classList.contains('hidden')); })
+      .observe(ob, { attributes:true, attributeFilter:['class'] });
+    return true;
+  }
+  if (!boot()){ var n=0, iv=setInterval(function(){ n++; if (boot() || n>120){ clearInterval(iv); } }, 200); }
+})();
+</script>
 <!-- ══════════════════════════════════════════
      ANYCHAT — OP MESSENGER STYLE
 ══════════════════════════════════════════ -->
