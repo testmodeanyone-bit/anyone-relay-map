@@ -7691,6 +7691,12 @@ input:focus-visible, textarea:focus-visible, select:focus-visible{
     border:1px solid rgba(94,234,212,.14);border-radius:20px;padding:6px 10px 6px 8px;
     font-size:12px;font-weight:500;letter-spacing:.3px;color:#cfe9ee;transition:all .18s ease;user-select:none;}
   .ovc-chip:hover{border-color:rgba(94,234,212,.4);}
+  /* v562 (a11y): visible keyboard focus. .ovc-chip is a <span role=switch>, so the
+     house button:focus-visible rule doesn't reach it — give chips + seg buttons an
+     explicit cyan focus ring matching site convention (outline offsets tuned to sit
+     inside the pill/segment without clipping). */
+  .ovc-chip:focus-visible{outline:2px solid #00f5ff;outline-offset:2px;}
+  .ovc-seg button:focus-visible{outline:2px solid #00f5ff;outline-offset:-1px;}
   .ovc-chip .ovc-sw{width:9px;height:9px;border-radius:50%;flex-shrink:0;box-shadow:0 0 6px currentColor;transition:all .2s ease;}
   .ovc-chip.ovc-hw .ovc-sw{border-radius:0;clip-path:polygon(50% 0,100% 50%,50% 100%,0 50%);width:10px;height:10px;}
   .ovc-chip.ovc-off{color:#7fa3ad;background:transparent;border-color:rgba(120,150,160,.14);}
@@ -7710,7 +7716,7 @@ input:focus-visible, textarea:focus-visible, select:focus-visible{
     <button data-mode="health" role="tab" aria-selected="false" onclick="_ovcSetMode('health')">Health</button>
     <button data-mode="isp" role="tab" aria-selected="false" onclick="_ovcSetMode('isp')">ISP&nbsp;Conc.</button>
   </div>
-  <div class="ovc-head"><span class="ovc-tick"></span>Relay types<span class="ovc-count" id="ovc-count">4 of 4</span></div>
+  <div class="ovc-head"><span class="ovc-tick"></span>Relay types<span class="ovc-count" id="ovc-count" aria-live="polite">4 of 4</span></div>
   <div class="ovc-chips" id="ovc-chips">
     <span class="ovc-chip ovc-exit"   data-type="exit"   role="switch" aria-checked="true" tabindex="0"><span class="ovc-sw" style="background:#ff6b35;color:#ff6b35"></span><span class="ovc-lbl">Exit</span></span>
     <span class="ovc-chip ovc-guard"  data-type="guard"  role="switch" aria-checked="true" tabindex="0"><span class="ovc-sw" style="background:#a78bfa;color:#a78bfa"></span><span class="ovc-lbl">Guard</span></span>
