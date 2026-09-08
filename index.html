@@ -8857,6 +8857,16 @@ function tagZones(data){
     window._clusteredZoneFps = _cf;
     window._clusteredZoneInfo = _ci;
   } catch(e) {}
+  /* v568: refresh the geo-cluster badge here, not only at the end of
+   * fetchUptimeAndGeoData. Before v567 geoCount came from geoBoostFps, which was
+   * only populated by that enrichment pass, so calling the badge update once at
+   * the end of it was correct. Since v567 geoCount derives from relayCount, which
+   * is present at the FIRST tagZones call — long before enrichment finishes, and
+   * regardless of whether it finishes at all. The badge data was therefore right
+   * but never rendered, because nothing asked it to. updateGeoClusterBadge is a
+   * cheap read over relayData and already no-ops when its DOM nodes are absent,
+   * so calling it on every tagZones is safe at init and on refresh alike. */
+  try { if (typeof updateGeoClusterBadge === 'function') updateGeoClusterBadge(); } catch(_){}
 }
 
 async function fetchExitRelays(){
