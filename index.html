@@ -1257,7 +1257,7 @@ function hdrInitOverflow(){
     btn.addEventListener('click', function(){
       var act = btn.getAttribute('data-act');
       menu.classList.remove('open');
-      if(act === 'domains') document.getElementById('domains-panel').classList.toggle('visible');
+      if(act === 'domains'){ var _db = document.getElementById('btn-domains'); if(_db) _db.click(); } /* v566: was toggling '.visible' on non-existent '#domains-panel' (threw on null); real panel is #domain-panel, opened canonically via #btn-domains */
       else if(act === 'mode' && typeof toggleMode === 'function') toggleMode();
       else if(act === 'chat' && typeof toggleAnyChat === 'function') toggleAnyChat();
     });
@@ -1329,8 +1329,8 @@ function mobTabSwitch(btn, tab){
   var relay = document.getElementById('relay-panel');
   if(relay) relay.style.display = 'none';
   if(AC && AC.open && typeof toggleAnyChat === 'function') toggleAnyChat();
-  var domains = document.getElementById('domains-panel');
-  if(domains) domains.classList.remove('visible');
+  var domains = document.getElementById('domain-panel');
+  if(domains && domains.classList.contains('open')){ var _db2 = document.getElementById('btn-domains'); if(_db2) _db2.click(); } /* v566: was '#domains-panel'/.visible (dead null-guarded ref) */
   switch(tab){
     case 'map': break;
     case 'health':
@@ -1562,8 +1562,8 @@ document.addEventListener('keydown', function(e){
     if(health && health.classList.contains('visible')){ health.classList.remove('visible'); acRestoreFocus(); return; }
     var relay = document.getElementById('relay-panel');
     if(relay && relay.style.display === 'block'){ relay.style.display = 'none'; acRestoreFocus(); return; }
-    var domains = document.getElementById('domains-panel');
-    if(domains && domains.classList.contains('visible')){ domains.classList.remove('visible'); acRestoreFocus(); return; }
+    var domains = document.getElementById('domain-panel');
+    if(domains && domains.classList.contains('open')){ var _db3 = document.getElementById('btn-domains'); if(_db3) _db3.click(); acRestoreFocus(); return; } /* v566: was '#domains-panel'/.visible (dead null-guarded ref) */
     // Close any bottom sheet
     var sheet = document.getElementById('bottom-sheet');
     if(sheet && sheet.classList.contains('open')){ sheet.classList.remove('open'); return; }
@@ -8428,7 +8428,23 @@ let hwFps     = new Set();  // fingerprints with hardware relay flag
 window.exitFps = exitFps; window.guardFps = guardFps; window.hwFps = hwFps; /* v543: expose tier sets for compass relay-finder */
 let stableFps = new Set();  // fingerprints with Stable+Fast flags (tier A uptime)
 let fastFps   = new Set();  // fingerprints with Fast flag only (tier B uptime)
-let geoBoostFps = new Set(); // fingerprints where loc_mult > 1.0 (geo reward boost)
+/* v567: the comment here used to read "loc_mult > 1.0 (geo reward boost)", which
+ * is the opposite of what the collector does — fetchUptimeAndGeoData adds
+ * fingerprints where `lm < 0.95`, i.e. a location *penalty* for being in an
+ * over-concentrated spot. The badge text ("relays in over-clustered locations")
+ * and the CLUSTER badge class both agree with the code; only this comment and
+ * the "geoBoost"/"GEO+" naming implied a reward. Names left alone to keep the
+ * diff small, but the semantics are: penalised / over-clustered. */
+let geoBoostFps = new Set(); // fingerprints in over-concentrated locations (loc_mult < 0.95)
+
+/* v567: local over-clustering thresholds. A zone counts as over-clustered when it
+ * holds at least GEO_CLUSTER_MEAN_MULT x the network mean relays-per-zone, with
+ * GEO_CLUSTER_MIN_RELAYS as an absolute floor so a small network can't flag
+ * everything. These two constants are the only knobs: at 3x mean the current
+ * network flags 21 zones / 4,421 relays (79%); an absolute floor of 250 flags
+ * 11 zones / 3,320 relays (59%). */
+const GEO_CLUSTER_MEAN_MULT  = 3;
+const GEO_CLUSTER_MIN_RELAYS = 25;
 let svg, g, proj, gpath, zoom;
 let worldTopo = null;
 let tkAnim    = null;
@@ -8747,6 +8763,10 @@ async function fetchFlagIndex(){
 
 function tagZones(data){
   const fpReady = exitFps.size > 0 || guardFps.size > 0;
+  /* v567: network-wide mean, computed once per call rather than per zone. */
+  const _netRelays        = data.reduce((s, z) => s + (z.relayCount || 0), 0);
+  const _meanPerZone      = data.length ? _netRelays / data.length : 0;
+  const _clusterThreshold = Math.max(GEO_CLUSTER_MIN_RELAYS, GEO_CLUSTER_MEAN_MULT * _meanPerZone);
   const hasStable = stableFps && stableFps.size > 0;
   const hasFast   = fastFps && fastFps.size > 0;
   /* v205: hw is a parallel label — don't gate it on exit/guard readiness. */
@@ -8777,7 +8797,27 @@ function tagZones(data){
         if(hasHw && hwFps.has(u))         hws++;
       });
     }
-    const geos       = zone.fingerprints.filter(fp => geoBoostFps.has(fp.toUpperCase())).length;
+    /* v567 BUGFIX: geoCount no longer depends solely on geoBoostFps. That set is
+     * fed by relay.lm <- ao_location_multiplier, a field the upstream stopped
+     * returning, so geoCount was 0 for every zone. That emptied _clusteredZoneFps
+     * (built below from `z.geoCount > 0`), which killed the CLUSTER badge on every
+     * relay row and left the geo-cluster warning permanently hidden — while the
+     * GEO+ legend chip still advertised the feature. The v110 fallback was meant
+     * to be an independent local signal but derived from the same dead field.
+     *
+     * Over-clustering is now measured from relayCount, which the map already has,
+     * so the feature carries no upstream dependency. geoBoostFps is still honoured
+     * for zones under the threshold, so if ao_location_multiplier ever returns it
+     * only ADDS relays rather than being the sole source of truth. */
+    const _overClustered = (zone.relayCount || 0) >= _clusterThreshold;
+    let geos;
+    if (_overClustered) {
+      geos = zone.relayCount || 0;            // whole zone is over-concentrated
+    } else if (geoBoostFps.size) {
+      geos = zone.fingerprints.filter(fp => geoBoostFps.has(fp.toUpperCase())).length;
+    } else {
+      geos = 0;
+    }
     // Exclusive partition: a relay is Exit OR Guard-only OR Middle.
     // Any dual-flagged relay falls under Exit (Tor convention).
     const guardsOnly = Math.max(0, guards - dualEG);
@@ -8789,6 +8829,11 @@ function tagZones(data){
     zone.middleCount     = middles;      // exclusive: relayCount − exits − guardsOnly
     zone.hwCount         = hws;          // orthogonal: HW is a parallel label
     zone.geoCount        = geos;
+    /* v567: how geoCount was derived, so the CLUSTER tooltip can distinguish a
+     * locally-measured zone from an upstream-flagged relay instead of presenting
+     * a local approximation as protocol truth. */
+    zone.geoSource        = _overClustered ? 'local-cluster' : (geos > 0 ? 'loc-mult' : 'none');
+    zone.clusterThreshold = _clusterThreshold;
     zone.stableCount     = stables;
     zone.fastCount       = fasts;
     if(fpReady){
