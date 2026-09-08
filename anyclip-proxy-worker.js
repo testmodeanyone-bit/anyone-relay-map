@@ -2804,8 +2804,14 @@ var CONSENSUS_MAX_BYTES = 5 * 1024 * 1024;
 var CONSENSUS_STATUS_KEY = "consensus:last-fetch";
 var WALLET_LOOKUP = "https://dev.anyone-wallet-lookup.info/network?format=json";
 var IPS_BASE = "https://dev.anyone-wallet-lookup.info/ips?format=json&wallet=";
-var AO_CU = "https://cu.anyone.tech/dry-run?process-id=W5XIwvQ6pJBtL_Hhvx9KH4fj4LNoyHDLtbAILMM_lCs";
+/* v530: single source of truth for the AO compute-unit host. The base URL used to be
+ * hardcoded twice — here, and as an inline template literal inside /api/total-staked —
+ * so moving the CU meant finding both. cu.anyone.tech started returning a bare
+ * "404 page not found" on every path, which is what took /api/hw-relays and
+ * /api/total-staked to 502. Repoint AO_CU_BASE alone to recover both. */
+var AO_CU_BASE = "https://cu.anyone.tech";
 var AO_REGISTRY_ID = "W5XIwvQ6pJBtL_Hhvx9KH4fj4LNoyHDLtbAILMM_lCs";
+var AO_CU = `${AO_CU_BASE}/dry-run?process-id=${AO_REGISTRY_ID}`;
 var KV_KEY = "fp_index_v1";
 /* v57 FIX (map-blanking 502s): fp-index was cached with a 1-hour TTL while
  * nothing on the cron kept it warm. When the WALLET_LOOKUP upstream went slow,
@@ -5385,25 +5391,66 @@ var worker_source_default = {
     }
 
     if (url.pathname === "/api/total-staked" && request.method === "GET") {
+      /* v530: same stale-while-error treatment as /api/hw-relays — this route hits
+       * the same AO registry through the same CU, so it fails in lockstep with it.
+       * Fresh window stays at 30 minutes; the KV TTL moves to 7 days so a stale
+       * copy still exists to fall back on. */
+      const TS_FRESH_MS = 30 * 60 * 1e3;
+      const TS_COOLDOWN_S = 120;
+      const tsStale = (snap) => {
+        const age = Date.now() - (snap.ts || 0);
+        return new Response(JSON.stringify({ ...snap, stale: true }), {
+          headers: jsonHeaders({
+            "X-Cache": "STALE",
+            "X-Age": (age / 1e3).toFixed(0) + "s",
+            "Cache-Control": "max-age=60"
+          })
+        });
+      };
+      const tsFail = (snap, body) => {
+        if (env.FP_INDEX) {
+          ctx.waitUntil(
+            env.FP_INDEX.put("total_staked_cooldown", "1", { expirationTtl: TS_COOLDOWN_S }).catch(() => {
+            })
+          );
+        }
+        if (snap) return tsStale(snap);
+        return cors(JSON.stringify({ error: body }), 502);
+      };
+      let cached = null;
       if (env.FP_INDEX) {
         try {
-          const cached = await env.FP_INDEX.get("total_staked_v2", { type: "json" });
-          if (cached && cached.totalStaked > 0 && Date.now() - cached.ts < 30 * 60 * 1e3) {
-            return new Response(JSON.stringify(cached), {
-              headers: jsonHeaders({ "X-Cache": "HIT", "Cache-Control": "max-age=300" })
-            });
-          }
+          const c = await env.FP_INDEX.get("total_staked_v2", { type: "json" });
+          if (c && c.totalStaked > 0) cached = c;
         } catch (_) {
         }
       }
+      if (cached) {
+        const age = Date.now() - (cached.ts || 0);
+        if (age >= 0 && age < TS_FRESH_MS) {
+          return new Response(JSON.stringify(cached), {
+            headers: jsonHeaders({ "X-Cache": "HIT", "X-Age": (age / 1e3).toFixed(0) + "s", "Cache-Control": "max-age=300" })
+          });
+        }
+        if (env.FP_INDEX) {
+          try {
+            if (await env.FP_INDEX.get("total_staked_cooldown")) return tsStale(cached);
+          } catch (_) {
+          }
+        }
+      }
       try {
-        const AO_REGISTRY = "W5XIwvQ6pJBtL_Hhvx9KH4fj4LNoyHDLtbAILMM_lCs";
-        const aoRes = await fetch(`https://cu.anyone.tech/dry-run?process-id=${AO_REGISTRY}`, {
+        /* v530: was an inline cu.anyone.tech literal and a local re-declaration of
+         * the registry id; both now come from the module constants. The 10s timeout
+         * matches fetchHardwareFPs — without it a hanging CU could block this route
+         * for the whole request budget. */
+        const aoRes = await fetch(`${AO_CU_BASE}/dry-run?process-id=${AO_REGISTRY_ID}`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
+          signal: AbortSignal.timeout(10e3),
           body: JSON.stringify({
             Id: "1234",
-            Target: AO_REGISTRY,
+            Target: AO_REGISTRY_ID,
             Owner: "1234",
             Anchor: "0",
             Data: "1234",
@@ -5430,7 +5477,7 @@ var worker_source_default = {
               ts: Date.now()
             };
             if (env.FP_INDEX) {
-              ctx.waitUntil(env.FP_INDEX.put("total_staked_v2", JSON.stringify(result), { expirationTtl: 3600 }).catch(() => {
+              ctx.waitUntil(env.FP_INDEX.put("total_staked_v2", JSON.stringify(result), { expirationTtl: KV_TTL_SECS }).catch(() => {
               }));
             }
             return new Response(JSON.stringify(result), {
@@ -5438,9 +5485,9 @@ var worker_source_default = {
             });
           }
         }
-        return cors(JSON.stringify({ error: "AO Registry unavailable" }), 502);
+        return tsFail(cached, "AO Registry unavailable");
       } catch (err) {
-        return cors(JSON.stringify({ error: "Upstream error" }), 502);
+        return tsFail(cached, "Upstream error");
       }
     }
     if (url.pathname === "/api/all-uptimes" && request.method === "GET") {
@@ -5707,24 +5754,64 @@ var worker_source_default = {
         const authFail = await _checkGrowthAdminAuth(request, env);
         if (authFail) return authFail;
       }
+      /* v530: stale-while-error. The snapshot is written with a 7-day TTL and
+       * freshness is judged from builtAt rather than KV expiry. Under an hour old,
+       * serve it straight — identical to the old 3600s-TTL behaviour. Older than
+       * that, try the AO registry first and fall back to the stale copy only if
+       * that fetch fails, so an upstream outage degrades to slightly-old hardware
+       * counts instead of a 502 and a permanently empty HW card downstream.
+       *
+       * bust=1 deliberately skips both the cache read and the stale fallback: a
+       * forced rebuild should surface the real upstream error to the operator. */
+      const HW_FRESH_MS = 60 * 60 * 1e3;
+      const HW_COOLDOWN_S = 120;
+      const hwStale = (snap) => {
+        const age = Date.now() - (snap.builtAt || 0);
+        return new Response(JSON.stringify({ ...snap, stale: true }), {
+          headers: jsonHeaders({
+            "X-Cache": "STALE",
+            "X-Age": (age / 1e3).toFixed(0) + "s",
+            /* Short client TTL so browsers pick up recovery quickly. */
+            "Cache-Control": "max-age=60"
+          })
+        });
+      };
+      let cached = null;
       if (!bust && env.FP_INDEX) {
         try {
-          const cached = await env.FP_INDEX.get("hw_relays_v1", { type: "json" });
-          if (cached && cached.fingerprints) {
-            const age = Date.now() - (cached.builtAt || 0);
-            return new Response(JSON.stringify(cached), {
-              headers: jsonHeaders({ "X-Cache": "HIT", "X-Age": (age / 1e3).toFixed(0) + "s", "Cache-Control": "max-age=300" })
-            });
-          }
+          const c = await env.FP_INDEX.get("hw_relays_v1", { type: "json" });
+          /* An empty fingerprint list is not usable: the consumer gates on
+           * count > 0, so caching a zero-length result would pin the HW card at
+           * "Awaiting hardware data" for the whole life of the key. */
+          if (c && Array.isArray(c.fingerprints) && c.fingerprints.length > 0) cached = c;
         } catch (_) {
+        }
+      }
+      if (cached) {
+        const age = Date.now() - (cached.builtAt || 0);
+        if (age >= 0 && age < HW_FRESH_MS) {
+          return new Response(JSON.stringify(cached), {
+            headers: jsonHeaders({ "X-Cache": "HIT", "X-Age": (age / 1e3).toFixed(0) + "s", "Cache-Control": "max-age=300" })
+          });
+        }
+        /* Cooldown: /api/hw-relays is polled by every open map every 60s. Without
+         * this, a dead CU means each of those polls opens its own 10s AO fetch. */
+        if (env.FP_INDEX) {
+          try {
+            if (await env.FP_INDEX.get("hw_relays_cooldown")) return hwStale(cached);
+          } catch (_) {
+          }
         }
       }
       try {
         const hwSet = await fetchHardwareFPs();
+        /* Treat an empty registry response as a failure so it routes to the stale
+         * fallback rather than overwriting a good snapshot with zeroes. */
+        if (hwSet.size === 0) throw new Error("AO registry returned an empty hardware set");
         const result = { fingerprints: [...hwSet], count: hwSet.size, source: "ao-registry", builtAt: Date.now() };
         if (env.FP_INDEX) {
           ctx.waitUntil(
-            env.FP_INDEX.put("hw_relays_v1", JSON.stringify(result), { expirationTtl: 3600 }).catch(() => {
+            env.FP_INDEX.put("hw_relays_v1", JSON.stringify(result), { expirationTtl: KV_TTL_SECS }).catch(() => {
             })
           );
         }
@@ -5732,6 +5819,13 @@ var worker_source_default = {
           headers: jsonHeaders({ "X-Cache": "MISS", "Cache-Control": "max-age=300" })
         });
       } catch (err) {
+        if (env.FP_INDEX) {
+          ctx.waitUntil(
+            env.FP_INDEX.put("hw_relays_cooldown", "1", { expirationTtl: HW_COOLDOWN_S }).catch(() => {
+            })
+          );
+        }
+        if (cached) return hwStale(cached);
         return cors(JSON.stringify({ error: "Upstream error" }), 502);
       }
     }
