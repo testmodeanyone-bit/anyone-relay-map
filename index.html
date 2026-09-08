@@ -8866,7 +8866,7 @@ function tagZones(data){
    * but never rendered, because nothing asked it to. updateGeoClusterBadge is a
    * cheap read over relayData and already no-ops when its DOM nodes are absent,
    * so calling it on every tagZones is safe at init and on refresh alike. */
-  try { if (typeof updateGeoClusterBadge === 'function') updateGeoClusterBadge(); } catch(_){}
+  try { if (typeof updateGeoClusterBadge === 'function') updateGeoClusterBadge(data); } catch(_){}
 }
 
 async function fetchExitRelays(){
@@ -23051,14 +23051,22 @@ function toggleHwOverlay(){
 
 function toggleGeoBoost(){ /* v27: no-op — geo cluster badge auto-shows */ }
 
-function updateGeoClusterBadge(){
+/* v569: accept the zone array explicitly. This function read the GLOBAL relayData,
+ * which is only assigned AFTER tagZones(data) returns during init. The v568 call
+ * added at the end of tagZones therefore ran while the global was still empty,
+ * counted zero zones, and hit the `else` branch below — actively REMOVING the
+ * 'visible' class rather than showing the badge. Passing `data` straight through
+ * makes the badge independent of when the global is assigned. Falls back to the
+ * global so the existing call in fetchUptimeAndGeoData keeps working unchanged. */
+function updateGeoClusterBadge(src){
   const badge = document.getElementById('geo-warn-badge');
   const body  = document.getElementById('geo-warn-body');
   if(!badge || !body) return;
+  const _zones = (src && src.length) ? src : relayData;
   // v27: badge always shows when cluster data exists (no toggle)
   let zoneCount = 0, relayCount = 0;
-  if(relayData && relayData.length){
-    relayData.forEach(z => {
+  if(_zones && _zones.length){
+    _zones.forEach(z => {
       if(z.geoCount > 0){ zoneCount++; relayCount += z.geoCount; }
     });
   }
