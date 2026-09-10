@@ -30277,11 +30277,27 @@ IMPORTANT: The user's preferred language is ${activeLang.name}. You MUST respond
 
       /* v322: capture res for status-aware error handling. The catch below
        * now sees res.status and the parsed body, not just a string. */
+      /* v570 BUGFIX: `system` was never sent. The proxy's /api/chat reads exactly
+       * four fields — messages, system, max_tokens, model — and ignores task,
+       * stats, memory and lang. Since chatBody had no `system`, the proxy fell
+       * through to `system: ""` and called the model with NO system prompt at
+       * all: no identity, no network stats, no mention of Anyone Protocol. That
+       * is why the assistant answered "I don't have specific information about
+       * ANyone Protocol" — it genuinely didn't.
+       *
+       * buildSystem() and langInstruction were both already built here and then
+       * dropped on the floor (buildSystem was only ever exported as
+       * window.acBuildSystemPrompt and never called). Wiring them into `system`
+       * is what the rest of this function always assumed was happening.
+       *
+       * task/stats/memory are left in place: the proxy ignores them today, but
+       * they are harmless and are what a server-side prompt build would use. */
       const chatBody = {
         task: 'assistant',
         stats: acCollectStats(),
         memory: buildMemoryContext(),
         lang: (activeLang && activeLang.code) ? activeLang.code : null,
+        system: buildSystem() + langInstruction,
         /* v474: 600-token ceiling kept; server clamps to the same value. */
         max_tokens: 600,
         messages: history
