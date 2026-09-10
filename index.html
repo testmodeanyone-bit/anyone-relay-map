@@ -7691,9 +7691,11 @@ input:focus-visible, textarea:focus-visible, select:focus-visible{
      panel first. v572 docked it bottom-LEFT, which worked but put it far from
      the panel it belongs beside. This docks it bottom-RIGHT, immediately left of
      #domain-panel: right:316px = the panel's 300px width + a 16px gutter.
-     Measured at 1920x951: x 1356-1604, y 673-907, 16px gap to the panel, zero
-     overlap with #ticker, #relay-legend, #compass or #sidebar. */
-  #ovc-cluster.ovc-dockbr{top:auto;left:auto;right:316px;bottom:44px;}
+     bottom:28px = the ticker's height, so the dock's bottom edge lands flush
+     with #domain-panel's (both at y 923) instead of floating 16px above it.
+     Measured at 1920x951: x 1356-1604, y 689-923, 16px gutter to the panel,
+     zero overlap with #ticker, #domain-panel, #relay-legend or #sidebar. */
+  #ovc-cluster.ovc-dockbr{top:auto;left:auto;right:316px;bottom:28px;}
   /* v561: the overlay cluster is a desktop map-layer control. On mobile the same
      HW/Health/ISP toggles live in the sidebar sheet, and a 248px fixed panel would
      cover the map + collide with mobile top chrome — so hide it at <=768px. */
