@@ -6707,11 +6707,10 @@ var worker_source_default = {
         if (env.FP_INDEX) {
           const fbIp = request.headers.get("CF-Connecting-IP") || "unknown";
           const rlKey = `feedback-rl:${fbIp}`;
-          const rl = await env.FP_INDEX.get(rlKey, { type: "json" }).catch(() => null) || { count: 0 };
-          if (rl.count >= 10) {
+          /* v534: atomic (see _rlExceeded). */
+          if (await _rlExceeded(env, rlKey, 10, 3600)) {
             return cors(JSON.stringify({ ok: false, error: "Too many feedback submissions" }), 429);
           }
-          ctx.waitUntil(env.FP_INDEX.put(rlKey, JSON.stringify({ count: rl.count + 1 }), { expirationTtl: 3600 }).catch(() => {}));
         }
         const body = await request.json();
         const received = (/* @__PURE__ */ new Date()).toISOString();
@@ -6817,16 +6816,10 @@ var worker_source_default = {
         }
         const ip = request.headers.get("CF-Connecting-IP") || "unknown";
         const rlKey = `verify-rl:${ip}`;
-        const rl = await env.FP_INDEX.get(rlKey, { type: "json" }).catch(() => null) || { count: 0 };
-        if (rl.count >= 10) {
+        /* v534: atomic (see _rlExceeded). */
+        if (await _rlExceeded(env, rlKey, 10, 3600)) {
           return cors(JSON.stringify({ verified: false, reason: "Too many attempts. Try again later." }), 200);
         }
-        ctx.waitUntil(env.FP_INDEX.put(
-          rlKey,
-          JSON.stringify({ count: rl.count + 1 }),
-          { expirationTtl: 3600 }
-        ).catch(() => {
-        }));
         /* Batch 3 #4: nonce read uses same per-(wallet, ipHash) key as writer. */
         const _verifyIpHash = (await sha256Hex(ip)).slice(0, 16);
         const nonceKey = `verify-nonce:${cleanedWallet}:${_verifyIpHash}`;
@@ -7136,16 +7129,10 @@ var worker_source_default = {
         }
         const ip = request.headers.get("CF-Connecting-IP") || "unknown";
         const rlKey = `verify-chal-rl:${ip}`;
-        const rl = await env.FP_INDEX.get(rlKey, { type: "json" }).catch(() => null) || { count: 0 };
-        if (rl.count >= 10) {
+        /* v534: atomic (see _rlExceeded). */
+        if (await _rlExceeded(env, rlKey, 10, 3600)) {
           return cors(JSON.stringify({ error: "Too many requests. Try again later." }), 429);
         }
-        ctx.waitUntil(env.FP_INDEX.put(
-          rlKey,
-          JSON.stringify({ count: rl.count + 1 }),
-          { expirationTtl: 3600 }
-        ).catch(() => {
-        }));
         const nonceBytes = new Uint8Array(16);
         crypto.getRandomValues(nonceBytes);
         const nonce = Array.from(nonceBytes).map((b) => b.toString(16).padStart(2, "0")).join("");
@@ -7246,16 +7233,10 @@ I confirm I control this wallet.`;
         }
         const ip = request.headers.get("CF-Connecting-IP") || "unknown";
         const rlKey = `wstoken-rl:${ip}`;
-        const rl = await env.FP_INDEX.get(rlKey, { type: "json" }).catch(() => null) || { count: 0 };
-        if (rl.count >= 20) {
+        /* v534: atomic (see _rlExceeded). */
+        if (await _rlExceeded(env, rlKey, 20, 3600)) {
           return cors(JSON.stringify({ error: "Too many requests" }), 429);
         }
-        ctx.waitUntil(env.FP_INDEX.put(
-          rlKey,
-          JSON.stringify({ count: rl.count + 1 }),
-          { expirationTtl: 3600 }
-        ).catch(() => {
-        }));
         const ban = await env.FP_INDEX.get(`chat:ban:${cleanedWh.slice(0, 16)}`).catch(() => null);
         if (ban) {
           return cors(JSON.stringify({ error: "Banned" }), 403);
@@ -7285,16 +7266,10 @@ I confirm I control this wallet.`;
           cleanedNick = cleanNick(rawNick) || "recruit";
           tier = "recruit";
           const anonRlKey = `wstoken-anon-rl:${cleanedWh.slice(0, 16)}`;
-          const anonRl = await env.FP_INDEX.get(anonRlKey, { type: "json" }).catch(() => null) || { count: 0 };
-          if (anonRl.count >= 10) {
+          /* v534: atomic (see _rlExceeded). */
+          if (await _rlExceeded(env, anonRlKey, 10, 3600)) {
             return cors(JSON.stringify({ error: "Too many requests" }), 429);
           }
-          ctx.waitUntil(env.FP_INDEX.put(
-            anonRlKey,
-            JSON.stringify({ count: anonRl.count + 1 }),
-            { expirationTtl: 3600 }
-          ).catch(() => {
-          }));
         }
         const ts = Date.now();
         const nonce = Array.from(crypto.getRandomValues(new Uint8Array(8))).map((b) => b.toString(16).padStart(2, "0")).join("");
@@ -7346,15 +7321,10 @@ I confirm I control this wallet.`;
         const tokenHdr = request.headers.get("x-chat-token");
         const ip = request.headers.get("CF-Connecting-IP") || "unknown";
         const rlKey = `ably-tok-rl:${ip}`;
-        const rl = await env.FP_INDEX.get(rlKey, { type: "json" }).catch(() => null) || { count: 0 };
-        if (rl.count >= 20) {
+        /* v534: atomic (see _rlExceeded). */
+        if (await _rlExceeded(env, rlKey, 20, 3600)) {
           return cors(JSON.stringify({ error: "Too many requests" }), 429);
         }
-        ctx.waitUntil(env.FP_INDEX.put(
-          rlKey,
-          JSON.stringify({ count: rl.count + 1 }),
-          { expirationTtl: 3600 }
-        ).catch(() => {}));
         let cleanedWh = null;
         let cleanedNick;
         let tier;
@@ -7381,15 +7351,10 @@ I confirm I control this wallet.`;
           /* Per-IP cap on the anonymous path so token churn from one origin can't
            * exhaust Ably quota. */
           const anonRlKey = `ably-tok-anon-ip-rl:${ip}`;
-          const anonRl = await env.FP_INDEX.get(anonRlKey, { type: "json" }).catch(() => null) || { count: 0 };
-          if (anonRl.count >= 10) {
+          /* v534: atomic (see _rlExceeded). */
+          if (await _rlExceeded(env, anonRlKey, 10, 3600)) {
             return cors(JSON.stringify({ error: "Too many requests" }), 429);
           }
-          ctx.waitUntil(env.FP_INDEX.put(
-            anonRlKey,
-            JSON.stringify({ count: anonRl.count + 1 }),
-            { expirationTtl: 3600 }
-          ).catch(() => {}));
         }
         /* S5: Ably channel separation by verification tier. Previously all users
          * (verified and unverified) got tokens for the same 'operators-lounge' channel
@@ -7474,15 +7439,10 @@ I confirm I control this wallet.`;
         if (!cleanedText) return cors(JSON.stringify({ ok: false, error: "Empty or invalid text" }), 400);
         const msgTime = typeof time === "number" && time > 0 && time < Date.now() + 6e4 ? time : Date.now();
         const rlKey = `lounge-persist-rl:${cleanedWh.slice(0, 16)}`;
-        const rl = await env.FP_INDEX.get(rlKey, { type: "json" }).catch(() => null) || { count: 0 };
-        if (rl.count >= 30) {
+        /* v534: atomic (see _rlExceeded). */
+        if (await _rlExceeded(env, rlKey, 30, 60)) {
           return cors(JSON.stringify({ ok: false, error: "Slow down" }), 429);
         }
-        ctx.waitUntil(env.FP_INDEX.put(
-          rlKey,
-          JSON.stringify({ count: rl.count + 1 }),
-          { expirationTtl: 60 }
-        ).catch(() => {}));
         const msg = {
           type: "message",
           nick: cleanedNick,
@@ -8010,11 +7970,10 @@ I confirm I control this wallet.`;
          * at the top instead of redeclaring `_sendIp`. */
         if (env.FP_INDEX) {
           const _ipRlKey = `send-ip-rl:${ip}`;
-          const _ipRl = await env.FP_INDEX.get(_ipRlKey, { type: "json" }).catch(() => null) || { count: 0 };
-          if (_ipRl.count >= 20) {
+          /* v534: atomic (see _rlExceeded). */
+          if (await _rlExceeded(env, _ipRlKey, 20, 60)) {
             return cors(JSON.stringify({ ok: false, error: "Rate limit \u2014 slow down.", rateLimit: true }), 429);
           }
-          ctx.waitUntil(env.FP_INDEX.put(_ipRlKey, JSON.stringify({ count: _ipRl.count + 1 }), { expirationTtl: 60 }).catch(() => {}));
         }
         if (env.FP_INDEX) {
           const rateKey = walletHash.slice(0, 16);
@@ -8936,22 +8895,16 @@ I confirm I control this wallet.`;
         }
         const ip = request.headers.get("CF-Connecting-IP") || "unknown";
         const rlKey = `dmpub-rl:${ip}`;
-        const rl = await env.FP_INDEX.get(rlKey, { type: "json" }).catch(() => null) || { count: 0 };
-        if (rl.count >= 10) {
+        /* v534: atomic (see _rlExceeded). */
+        if (await _rlExceeded(env, rlKey, 10, 3600)) {
           return cors(JSON.stringify({ ok: false, error: "Too many publishes" }), 429);
         }
-        ctx.waitUntil(env.FP_INDEX.put(
-          rlKey,
-          JSON.stringify({ count: rl.count + 1 }),
-          { expirationTtl: 3600 }
-        ).catch(() => {}));
         /* Also rate-limit per-wh so a single account can't churn its own entry. */
         const whRlKey = `dmpub-wh-rl:${wh.slice(0, 16)}`;
-        const whRl = await env.FP_INDEX.get(whRlKey, { type: "json" }).catch(() => null) || { count: 0 };
-        if (whRl.count >= 5) {
+        /* v534: atomic (see _rlExceeded). */
+        if (await _rlExceeded(env, whRlKey, 5, 3600)) {
           return cors(JSON.stringify({ ok: false, error: "Too many publishes for this wallet" }), 429);
         }
-        ctx.waitUntil(env.FP_INDEX.put(whRlKey, JSON.stringify({ count: whRl.count + 1 }), { expirationTtl: 3600 }).catch(() => {}));
         await env.FP_INDEX.put(
           `dm-pubkey:${wh}`,
           JSON.stringify({ pubkey, ts: Date.now() })
@@ -9598,11 +9551,10 @@ I confirm I control this wallet.`;
         /* v20: per-wh rate limit to stop a single account from flooding the
          * device:flagged tripwire by churning fp values. */
         const dvRlKey = `chat-device-rl:${wh.slice(0, 16)}`;
-        const dvRl = await env.FP_INDEX.get(dvRlKey, { type: "json" }).catch(() => null) || { count: 0 };
-        if (dvRl.count >= 5) {
+        /* v534: atomic (see _rlExceeded). */
+        if (await _rlExceeded(env, dvRlKey, 5, 3600)) {
           return cors(JSON.stringify({ ok: false, error: "Too many device reports" }), 429);
         }
-        ctx.waitUntil(env.FP_INDEX.put(dvRlKey, JSON.stringify({ count: dvRl.count + 1 }), { expirationTtl: 3600 }).catch(() => {}));
         if (env.PINATA_JWT) {
           ctx.waitUntil((async () => {
             try {
@@ -9676,16 +9628,10 @@ I confirm I control this wallet.`;
         const ip = request.headers.get("CF-Connecting-IP") || "unknown";
         if (env.FP_INDEX) {
           const ipKey = `ipfs-rl-ip:${ip}`;
-          const ipRl = await env.FP_INDEX.get(ipKey, { type: "json" }).catch(() => null) || { count: 0 };
-          if (ipRl.count >= 30) {
+          /* v534: atomic (see _rlExceeded). */
+          if (await _rlExceeded(env, ipKey, 30, 3600)) {
             return cors(JSON.stringify({ ok: false, error: "Hourly pin limit (per IP) reached" }), 429);
           }
-          ctx.waitUntil(env.FP_INDEX.put(
-            ipKey,
-            JSON.stringify({ count: ipRl.count + 1 }),
-            { expirationTtl: 3600 }
-          ).catch(() => {
-          }));
         }
         const todayKey2 = (/* @__PURE__ */ new Date()).toISOString().slice(0, 10);
         const quotaKey = `ipfs-quota:${verifiedWh.slice(0, 16)}:${todayKey2}`;
@@ -10536,15 +10482,10 @@ I confirm I control this wallet.`;
         if (env.FP_INDEX) {
           const _lookupIp = request.headers.get("CF-Connecting-IP") || "unknown";
           const _lookupRlKey = `lookup-rl:${_lookupIp}`;
-          const _lookupRl = await env.FP_INDEX.get(_lookupRlKey, { type: "json" }).catch(() => null) || { count: 0 };
-          if (_lookupRl.count >= 30) {
+          /* v534: atomic (see _rlExceeded). */
+          if (await _rlExceeded(env, _lookupRlKey, 30, 3600)) {
             return cors(JSON.stringify({ exists: false, error: "rate-limited" }), 429);
           }
-          ctx.waitUntil(env.FP_INDEX.put(
-            _lookupRlKey,
-            JSON.stringify({ count: _lookupRl.count + 1 }),
-            { expirationTtl: 3600 }
-          ).catch(() => {}));
         }
         /* v37 (audit fix #18, step 4): D1-first. */
         let _v37_lookupUser = await _getUserByNickFromD1(env, _lookupNick.toLowerCase());
@@ -10573,15 +10514,10 @@ I confirm I control this wallet.`;
         if (env.FP_INDEX) {
           const _walletIp = request.headers.get("CF-Connecting-IP") || "unknown";
           const _walletRlKey = `wallet-lookup-rl:${_walletIp}`;
-          const _walletRl = await env.FP_INDEX.get(_walletRlKey, { type: "json" }).catch(() => null) || { count: 0 };
-          if (_walletRl.count >= 10) {
+          /* v534: atomic (see _rlExceeded). */
+          if (await _rlExceeded(env, _walletRlKey, 10, 3600)) {
             return cors(JSON.stringify({ found: false, error: "rate-limited" }), 429);
           }
-          ctx.waitUntil(env.FP_INDEX.put(
-            _walletRlKey,
-            JSON.stringify({ count: _walletRl.count + 1 }),
-            { expirationTtl: 3600 }
-          ).catch(() => {}));
         }
         /* v37 (audit fix #18, step 4): D1-first wallet lookup. */
         let _v37_walletUser = await _getUserByWalletFromD1(env, _cleanedAddr);
@@ -10637,16 +10573,10 @@ I confirm I control this wallet.`;
           const codeHash = await sha256Hex(cleanedCode.toUpperCase());
           const prefix = codeHash.slice(0, 4);
           const globalKey = `recover-prefix-rl:${prefix}`;
-          const grl = await env.FP_INDEX.get(globalKey, { type: "json" }).catch(() => null) || { count: 0 };
-          if (grl.count >= 50) {
+          /* v534: atomic (see _rlExceeded). */
+          if (await _rlExceeded(env, globalKey, 50, 3600)) {
             return cors(JSON.stringify({ ok: false, error: "Too many recovery attempts. Try later." }), 429);
           }
-          ctx.waitUntil(env.FP_INDEX.put(
-            globalKey,
-            JSON.stringify({ count: grl.count + 1 }),
-            { expirationTtl: 3600 }
-          ).catch(() => {
-          }));
         }
         const codeBaseHash = await sha256Hex(cleanedCode.toUpperCase());
         /* v34 (audit fix #18, step 2): D1-atomic claim on this recovery code
@@ -11070,11 +11000,10 @@ Issued: ${(/* @__PURE__ */ new Date()).toISOString()}
         }
         if (env.FP_INDEX) {
           const dayKey = `poll-create-rl:${wh.slice(0, 16)}:${(/* @__PURE__ */ new Date()).toISOString().slice(0, 10)}`;
-          const rl = await env.FP_INDEX.get(dayKey, { type: "json" }).catch(() => null) || { count: 0 };
-          if (rl.count >= 10) {
+          /* v534: atomic (see _rlExceeded). */
+          if (await _rlExceeded(env, dayKey, 10, 90000)) {
             return cors(JSON.stringify({ ok: false, error: "Daily poll limit (10) reached" }), 429);
           }
-          ctx.waitUntil(env.FP_INDEX.put(dayKey, JSON.stringify({ count: rl.count + 1 }), { expirationTtl: 90000 }).catch(() => {}));
         }
         const pollId = Array.from(crypto.getRandomValues(new Uint8Array(8))).map(b => b.toString(16).padStart(2, "0")).join("");
         const cleanQ = cleanText(question, { max: 200 });
@@ -11270,11 +11199,10 @@ Issued: ${(/* @__PURE__ */ new Date()).toISOString()}
          * reset attempts to win the nonce race. 10/hr matches /api/chat-verify. */
         const _rwIp = request.headers.get("CF-Connecting-IP") || "unknown";
         const _rwRlKey = `reset-wallet-rl:${_rwIp}`;
-        const _rwRl = await env.FP_INDEX.get(_rwRlKey, { type: "json" }).catch(() => null) || { count: 0 };
-        if (_rwRl.count >= 10) {
+        /* v534: atomic (see _rlExceeded). */
+        if (await _rlExceeded(env, _rwRlKey, 10, 3600)) {
           return cors(JSON.stringify({ ok: false, error: "Too many reset attempts. Try again later." }), 429);
         }
-        ctx.waitUntil(env.FP_INDEX.put(_rwRlKey, JSON.stringify({ count: _rwRl.count + 1 }), { expirationTtl: 3600 }).catch(() => {}));
         /* v20: nonce is now per-(wallet, ipHash) — must compute the same key as
          * reset-challenge wrote. */
         const _rwIpHash = (await sha256Hex(_rwIp)).slice(0, 16);
