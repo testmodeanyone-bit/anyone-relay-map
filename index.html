@@ -30338,7 +30338,12 @@ IMPORTANT: The user's preferred language is ${activeLang.name}. You MUST respond
         stats: acCollectStats(),
         memory: buildMemoryContext(),
         lang: (activeLang && activeLang.code) ? activeLang.code : null,
-        system: buildSystem() + langInstruction,
+        /* v533: `system` is no longer sent. The proxy builds the prompt itself from
+         * `stats` (see _buildChatSystem there). Sending it from here made the system
+         * prompt caller-controlled on a route that bills our Anthropic key — any
+         * token holder could supply arbitrary instructions. task/stats/memory/lang
+         * carry everything the server needs; acCollectStats() already returns all
+         * 29 template slots, including topCountriesStr / topISPsStr / hwLocStr. */
         /* v474: 600-token ceiling kept; server clamps to the same value. */
         max_tokens: 600,
         messages: history
