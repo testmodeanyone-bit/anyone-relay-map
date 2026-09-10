@@ -7685,13 +7685,15 @@ input:focus-visible, textarea:focus-visible, select:focus-visible{
     border:1px solid rgba(94,234,212,.14);border-radius:14px;padding:13px 13px 11px;
     box-shadow:0 8px 30px rgba(0,0,0,.45);font-family:'Rajdhani',system-ui,sans-serif;}
   #ovc-cluster.ovc-hidden{display:none;}
-  /* v572: docked position used while the Domains panel is open. v571 hid the
+  /* v573: docked position used while the Domains panel is open. v571 hid the
      map-mode control outright, which cleared the overlap but made Topology /
      Health / ISP Conc. and the relay-type chips unreachable without closing the
-     panel first. Docking it bottom-left of the map area keeps both usable.
-     Measured slot: x 226, y 617, 248x234 — zero overlap with #domain-panel,
-     #ticker, #sidebar and #relay-legend at 1920x951. */
-  #ovc-cluster.ovc-dockbl{top:auto;right:auto;left:226px;bottom:44px;}
+     panel first. v572 docked it bottom-LEFT, which worked but put it far from
+     the panel it belongs beside. This docks it bottom-RIGHT, immediately left of
+     #domain-panel: right:316px = the panel's 300px width + a 16px gutter.
+     Measured at 1920x951: x 1356-1604, y 673-907, 16px gap to the panel, zero
+     overlap with #ticker, #relay-legend, #compass or #sidebar. */
+  #ovc-cluster.ovc-dockbr{top:auto;left:auto;right:316px;bottom:44px;}
   /* v561: the overlay cluster is a desktop map-layer control. On mobile the same
      HW/Health/ISP toggles live in the sidebar sheet, and a 248px fixed panel would
      cover the map + collide with mobile top chrome — so hide it at <=768px. */
@@ -13386,15 +13388,16 @@ DOM_PANEL.open     = false;
    * v571 hid ovc-cluster outright while the panel was open. That cleared the
    * overlap but made Topology / Health / ISP Conc. and the relay-type chips
    * unreachable without closing Domains first — a functional dead end in place
-   * of a visual one. v572 relocates it instead: while Domains is open the
-   * control docks to the bottom-left of the map area, where it collides with
-   * nothing, and returns to its top-right home on close.
+   * of a visual one. v572/v573 relocate it instead: while Domains is open the
+   * control docks to the bottom-right of the map area, immediately left of the
+   * Domains panel with a 16px gutter, and returns to its top-right home on
+   * close.
    *
    * Deliberately not a z-index bump — the ladder here runs up to 999999 and is
    * load-bearing, so reordering it risks a new collision elsewhere. No-op on
    * mobile, where ovc-cluster is display:none !important below 768px. */
   const ovc = document.getElementById('ovc-cluster');
-  if(ovc) ovc.classList.toggle('ovc-dockbl', DOM_PANEL.open);
+  if(ovc) ovc.classList.toggle('ovc-dockbr', DOM_PANEL.open);
   panel.classList.toggle('open', DOM_PANEL.open);
   btn.classList.toggle('active', DOM_PANEL.open);
   if(ac) repositionAnyClip();
