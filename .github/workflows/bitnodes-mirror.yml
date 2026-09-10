@@ -9,6 +9,16 @@ name: Mirror bitnodes.io snapshot
 # repo) instead of bitnodes.io directly.
 #
 # ─── 2026 FIX (what changed and why) ─────────────────────────────────────────
+#  0. THE HOST MOVED. bitnodes.io now 302-redirects to btcnodes.io:
+#         HTTP/2 302  location: https://btcnodes.io/api/v1/snapshots/latest/
+#     The primary curl had no -L, so it saw 302, treated it as "not 200" on all
+#     three attempts, and dropped to the DNS-seeder fallback on EVERY run. That
+#     is why the committed snapshot has been source:"dns-seeders" and the
+#     worker's /bitcoin panel has been serving June data: the worker's own
+#     fail-closed guard was correctly refusing to ingest 100 seeder nodes, so KV
+#     froze at the last real snapshot. Now: point at btcnodes.io directly AND
+#     pass -L so a future move degrades to a redirect-follow rather than a
+#     silent fallback. Verified: 200, 26,996 nodes, latest_height 966389.
 #  1. CADENCE: cron was '*/30 * * * *' (48 runs/day). bitnodes.io rate-limits
 #     unauthenticated callers to ~10/day per IP, and GitHub runners SHARE IPs
 #     across projects — so running 48x/day guaranteed 429s and forced the
@@ -71,12 +81,12 @@ jobs:
           ATTEMPTS=3
           STATUS="000"
           for i in $(seq 1 "$ATTEMPTS"); do
-            STATUS=$(curl -sS -o /tmp/bitnodes-raw.json -w '%{http_code}' \
+            STATUS=$(curl -sSL -o /tmp/bitnodes-raw.json -w '%{http_code}' \
               -A 'AnyoneMap-Mirror/1.0 (+https://github.com/testmodeanyone-bit/anyone-relay-map)' \
               -H 'Accept: application/json' \
               --connect-timeout 15 \
-              --max-time 60 \
-              'https://bitnodes.io/api/v1/snapshots/latest/' 2>/dev/null || echo "000")
+              --max-time 90 \
+              'https://btcnodes.io/api/v1/snapshots/latest/' 2>/dev/null || echo "000")
             echo "Attempt $i/$ATTEMPTS: HTTP $STATUS"
             [ "$STATUS" = "200" ] && break
             if [ "$STATUS" = "429" ]; then
@@ -112,7 +122,15 @@ jobs:
           echo "bitnodes.io OK: $NODE_COUNT nodes, total_nodes=$TOTAL, ts=$TS"
           echo "ok=true"           >> "$GITHUB_OUTPUT"
           echo "source=bitnodes"   >> "$GITHUB_OUTPUT"
-          cp /tmp/bitnodes-raw.json /tmp/snapshot.json
+          # 2026 FIX #5: stamp source into the SNAPSHOT itself, not just into
+          # GITHUB_OUTPUT. The upstream response has no `source` key, and this step
+          # used to `cp` it verbatim — so a successful run committed JSON with no
+          # source, the next run's "Inspect existing snapshot" read
+          # `.source // "unknown"`, and the "Decide fallback" test
+          # `[ "$PREV_SRC" = "bitnodes" ]` was ALWAYS false. The fail-closed guard
+          # added in the previous fix could therefore never fire: every primary miss
+          # was free to clobber a perfectly good 27k-node snapshot with seeder data.
+          jq '. + {source: "bitnodes"}' /tmp/bitnodes-raw.json > /tmp/snapshot.json
 
       # ─── Decide whether the fallback may run ─────────────────────────
       # Fail-closed: if we already have a fresh (<24h) bitnodes-sourced
