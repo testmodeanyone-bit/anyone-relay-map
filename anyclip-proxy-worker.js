@@ -6514,7 +6514,19 @@ var worker_source_default = {
             for (const _b of _m.content) { if (_b && typeof _b.text === "string") _aiInputChars += _b.text.length; }
           }
         }
-        if (_aiInputChars > 24000) {
+        /* v531: raised from 24000. The map widget's buildSystem() prompt — the
+         * curated Anyone Protocol knowledge base plus live network stats — is
+         * ~26k chars on its own, so the old ceiling rejected every request the
+         * moment the client actually started sending `system` (v570). It was
+         * never hit before only because `system` was silently empty, which is
+         * the bug being fixed. 40000 chars is roughly 10k input tokens, leaving
+         * ~14k chars of headroom for the capped 20-message history.
+         *
+         * The cost basis this cap protects still holds: at ~10k input tokens on
+         * the pinned Haiku model that is well under a cent per call, and the
+         * per-IP request limits above are unchanged. Revisit if the pinned model
+         * changes to a more expensive one. */
+        if (_aiInputChars > 40000) {
           return cors(JSON.stringify({ error: { message: "Request too large" } }), 400);
         }
         const anthropicRes = await fetch("https://api.anthropic.com/v1/messages", {
