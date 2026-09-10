@@ -282,7 +282,22 @@ jobs:
           NODES=$(jq '.nodes | length' data/bitnodes-snapshot.json)
           TOTAL=$(jq '.total_nodes' data/bitnodes-snapshot.json)
           git commit -m "Mirror snapshot ts=$TS nodes=$NODES total=$TOTAL source=$SOURCE"
-          git push
+          # 2026-09: push with rebase-retry. consensus-mirror ('*/30 * * * *') writes
+          # the same branch of this repo and has its own concurrency group, so the two
+          # do not serialise. They fire in the same minute 8x/day (00:00, 03:00 ...
+          # 21:00). Losing that race used to fail the run under `set -e` — and since
+          # this workflow only runs 8x/day, a lost push stalled the mirror for 3 hours.
+          for attempt in 1 2 3; do
+            if git push; then
+              echo "pushed on attempt $attempt"
+              exit 0
+            fi
+            echo "::warning::push rejected (attempt $attempt) — rebasing onto origin/main and retrying"
+            git pull --rebase --autostash origin main || true
+            sleep $(( attempt * 5 ))
+          done
+          echo "::error::push failed after 3 attempts"
+          exit 1
 
       # ─── Preserved last-good (no usable new data this run) ───────────
       - name: Report preserved snapshot
