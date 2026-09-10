@@ -6163,9 +6163,57 @@ var worker_source_default = {
     if (url.pathname === "/api/wallet-ips" && request.method === "GET") {
       const wallet = url.searchParams.get("wallet") || "";
       if (!wallet) return cors(JSON.stringify({ error: "wallet param required" }), 400);
+      /* v536: KV cache + timeout + stale-on-error.
+       *
+       * Measured 2026-09-10: the fp-index build failed 127 of 510 wallets, every
+       * one with TimeoutError — a 24.9% drop rate. That marks the index
+       * `partial: true`, which makes storeSnapshot correctly refuse to write a
+       * growth snapshot (it will not record a 4,631-relay row when the network
+       * has 5,609). Net effect: /api/growth has been frozen since 2026-09-07 and
+       * the "relays this week" badge reads 0. The guard is right; the condition
+       * it guards against has just been true for days.
+       *
+       * Three causes, all addressed here:
+       *
+       *  1. NO TIMEOUT. This fetch had none, so a hanging wallet occupied a
+       *     Worker invocation until Cloudflare killed it — ~30s observed. The
+       *     CLIENT gives up at 8s, so the caller had already moved on while the
+       *     request kept burning budget. 10s matches fetchHardwareFPs.
+       *
+       *  2. NO CACHE. The same ~510 wallets are requested on every index build.
+       *     Nothing was cached server-side (Cache-Control: max-age=120 only helps
+       *     a repeat caller's own browser), so every build re-rolled the dice on
+       *     which wallets would hang. A 30-minute KV window turns almost all of
+       *     the fan-out into KV reads.
+       *
+       *  3. NO STALE FALLBACK. A single timeout dropped the wallet from the build
+       *     entirely. Now a timeout falls back to the last-good copy, so one bad
+       *     upstream moment costs freshness rather than coverage — which is the
+       *     difference between a complete index and a partial one.
+       *
+       * Deliberately NOT touching /api/exit-relays: its pagination cost is
+       * intentional. This is the per-wallet timeout rate, which is a different
+       * problem with the same upstream. */
+      const _wiKey = `wallet-ips:${wallet.toLowerCase()}`;
+      const _WI_FRESH_MS = 30 * 60 * 1e3;
+      let _wiCached = null;
+      if (env.FP_INDEX) {
+        try {
+          const c = await env.FP_INDEX.get(_wiKey, { type: "json" });
+          if (c && Array.isArray(c.relays)) _wiCached = c;
+        } catch (_) {
+        }
+      }
+      if (_wiCached && (Date.now() - (_wiCached.builtAt || 0)) < _WI_FRESH_MS) {
+        return new Response(JSON.stringify({ wallet, relays: _wiCached.relays }), {
+          headers: jsonHeaders({ "Cache-Control": "max-age=120", "X-Cache": "HIT" })
+        });
+      }
       try {
-        const r = await fetch(`${IPS_BASE}${encodeURIComponent(wallet)}`);
-        if (!r.ok) return cors(JSON.stringify({ error: "upstream error" }), 502);
+        const r = await fetch(`${IPS_BASE}${encodeURIComponent(wallet)}`, {
+          signal: AbortSignal.timeout(10e3)
+        });
+        if (!r.ok) throw new Error("upstream " + r.status);
         const data = await r.json();
         const relays = (data.ips || []).map((relay) => ({
           fp: relay.fingerprint,
@@ -6182,10 +6230,32 @@ var worker_source_default = {
           lm: relay.ao_location_multiplier || 1,
           fm: relay.ao_family_multiplier || 1
         }));
+        if (env.FP_INDEX) {
+          /* 7-day TTL, freshness judged by builtAt — same shape as the v530
+           * hw-relays cache. The long TTL is what makes the stale fallback below
+           * possible; a 30-minute TTL would delete the copy we want to fall back
+           * onto at exactly the moment upstream starts failing. */
+          ctx.waitUntil(env.FP_INDEX.put(
+            _wiKey,
+            JSON.stringify({ relays, builtAt: Date.now() }),
+            { expirationTtl: 604800 }
+          ).catch(() => {}));
+        }
         return new Response(JSON.stringify({ wallet, relays }), {
-          headers: jsonHeaders({ "Cache-Control": "max-age=120" })
+          headers: jsonHeaders({ "Cache-Control": "max-age=120", "X-Cache": "MISS" })
         });
       } catch (err) {
+        /* Timeout or upstream error: serve the last-good copy rather than
+         * dropping the wallet. This is the line that keeps the fp-index whole. */
+        if (_wiCached) {
+          return new Response(JSON.stringify({ wallet, relays: _wiCached.relays, stale: true }), {
+            headers: jsonHeaders({
+              "Cache-Control": "max-age=60",
+              "X-Cache": "STALE",
+              "X-Age": ((Date.now() - (_wiCached.builtAt || 0)) / 1e3).toFixed(0) + "s"
+            })
+          });
+        }
         return cors(JSON.stringify({ error: "Upstream error" }), 502);
       }
     }
@@ -6568,6 +6638,56 @@ var worker_source_default = {
          *       Legit use (a short query + capped chat history) sits far under
          *       this ceiling. */
         const _PINNED_MODEL = "claude-haiku-4-5-20251001";
+        /* v535: explicit request contract.
+         *
+         * This endpoint silently ignored every field it did not recognise, which is
+         * how the v570 client bug survived in production: the map sent
+         * task/stats/memory/lang and NEVER sent `system`, the server read only
+         * `system`, and the mismatch produced a 200 with a fluent-sounding answer
+         * every single time. Nothing failed, so nothing got noticed — the assistant
+         * just answered "I don't have specific information about ANyone Protocol"
+         * to questions about the network it is embedded in.
+         *
+         * A contract that names what is accepted turns that class of bug into a
+         * 400 on the first request instead of a slow-burning quality problem.
+         * Unknown fields are reported rather than dropped, because the failure mode
+         * being defended against is a field the client thinks matters and the
+         * server has never heard of.
+         *
+         * `system` and `model` are listed as KNOWN-IGNORED rather than unknown:
+         * older clients may still send them, and they must not 400 — but they are
+         * deliberately not read (v533 and the model-pinning note above). */
+        const _CHAT_ACCEPTED = ["task", "stats", "memory", "lang", "messages", "max_tokens"];
+        const _CHAT_IGNORED  = ["system", "model"];
+        const _unknown = Object.keys(body).filter(
+          (k) => !_CHAT_ACCEPTED.includes(k) && !_CHAT_IGNORED.includes(k)
+        );
+        if (_unknown.length) {
+          return cors(JSON.stringify({ error: { message: "Unknown field(s): " + _unknown.slice(0, 5).join(", ") } }), 400);
+        }
+        /* Shape-check the fields we DO read, so a client sending the right name with
+         * the wrong type fails loudly here rather than producing a prompt full of
+         * "?" placeholders. stats is the one that actually matters — it is the whole
+         * prompt's data source now. */
+        if (body.stats !== void 0 && (typeof body.stats !== "object" || body.stats === null || Array.isArray(body.stats))) {
+          return cors(JSON.stringify({ error: { message: "stats must be an object" } }), 400);
+        }
+        /* v535: `stats` is REQUIRED and must be non-empty. This is the direction the
+         * unknown-field check above does NOT cover, and it is the direction v570
+         * actually failed in: the server read a field the client never sent and
+         * quietly substituted "". Here, a missing or empty stats object would build
+         * a prompt whose 29 slots are all "?" — an assistant that knows nothing about
+         * the network, answering confidently, with a 200 and no signal anywhere.
+         * That is the exact failure we spent a session diagnosing. Fail loudly. */
+        if (!body.stats || Object.keys(body.stats).length === 0) {
+          return cors(JSON.stringify({ error: { message: "stats is required and must be non-empty" } }), 400);
+        }
+        if (body.memory !== void 0 && typeof body.memory !== "string") {
+          return cors(JSON.stringify({ error: { message: "memory must be a string" } }), 400);
+        }
+        if (body.lang !== void 0 && body.lang !== null && typeof body.lang !== "string") {
+          return cors(JSON.stringify({ error: { message: "lang must be a string" } }), 400);
+        }
         /* v533: the system prompt is now built here from body.stats, not taken from
          * body.system. body.system is ignored entirely — see _buildChatSystem. */
         const _sysPrompt = _buildChatSystem(body.stats, body.memory, body.lang);
