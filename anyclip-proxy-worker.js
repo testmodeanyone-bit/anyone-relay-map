@@ -3056,16 +3056,12 @@ async function _checkGrowthAdminAuth(request, env) {
    * throttled. */
   const ip = request.headers.get("CF-Connecting-IP") || "unknown";
 
-  if (env && env.FP_INDEX) {
-    const rlKey = `admin-rl:${ip}`;
-    const rl = await env.FP_INDEX.get(rlKey, { type: "json" }).catch(() => null) || { count: 0 };
-    if (rl.count >= 3) {
-      console.warn("[growth-admin] rate limit hit:", ip);
-      return cors(JSON.stringify({ error: "Too many requests" }), 429);
-    }
-    await env.FP_INDEX.put(
-      rlKey, JSON.stringify({ count: rl.count + 1 }), { expirationTtl: 60 }
-    ).catch(() => {});
+  /* v532: atomic. A 3-per-minute gate defended by a read-modify-write counter is
+   * the case where the race hurts most — a parallel burst of admin-token guesses
+   * registered as a single attempt. */
+  if (await _rlExceeded(env, `admin-rl:${ip}`, 3, 60)) {
+    console.warn("[growth-admin] rate limit hit:", ip);
+    return cors(JSON.stringify({ error: "Too many requests" }), 429);
   }
 
   /* Neither HMAC_SECRET nor ADMIN_SECRET configured: verifyAdminToken
@@ -3459,6 +3455,37 @@ async function _atomicIncrCounter(env, key, ttlSeconds) {
     console.error("[counter] atomic incr failed for key=" + key + ":", e.message);
     return null;
   }
+}
+
+/* v532: single entry point for fixed-window rate limiting.
+ *
+ * Every rate-limited route in this file used the same read-modify-write shape:
+ *
+ *     const rl = await env.FP_INDEX.get(key, {type:"json"}) || {count:0};
+ *     if (rl.count >= LIMIT) return 429;
+ *     ctx.waitUntil(env.FP_INDEX.put(key, JSON.stringify({count: rl.count+1}), ...));
+ *
+ * which is not a counter. Three defects compound:
+ *   1. Not atomic. N concurrent requests all read the same count and all write
+ *      count+1, so a parallel burst increments by 1 instead of N. The map's own
+ *      client fans out 15-wide, so this is not a theoretical attacker.
+ *   2. ctx.waitUntil returns the response BEFORE the write lands, widening the
+ *      window between the check and the increment.
+ *   3. KV is eventually consistent across colos, so the counter is effectively
+ *      per-edge-location: a distributed caller gets LIMIT x (number of PoPs).
+ *
+ * _atomicIncrCounter (above) is already the correct primitive — D1 UPSERT with
+ * RETURNING — and was already used for recovery-claim, register-rl and login.
+ * This wraps it so the cost paths can use it too.
+ *
+ * Returns true when the caller is OVER the limit and should be rejected.
+ * Fails OPEN when D1 is unavailable, matching the existing posture of the login
+ * limiter (_atomicIncrCounter returns null then). Failing closed here would take
+ * the whole API down on a D1 blip. */
+async function _rlExceeded(env, key, limit, ttlSeconds) {
+  const n = await _atomicIncrCounter(env, key, ttlSeconds);
+  if (n === null) return false;
+  return n > limit;
 }
 /* v41 (audit fix #9): derive the indexed lookup key for a recovery code.
  * HMAC-keyed with HMAC_SECRET (not raw SHA, not the same as codeBaseHash)
@@ -6372,18 +6399,11 @@ var worker_source_default = {
     }
     if (url.pathname === "/api/token" && request.method === "GET") {
       const ip = request.headers.get("CF-Connecting-IP") || "unknown";
-      if (env.FP_INDEX) {
-        const rlKey = `token-rl:${ip}`;
-        const rl = await env.FP_INDEX.get(rlKey, { type: "json" }).catch(() => null) || { count: 0 };
-        if (rl.count >= 30) {
-          return cors(JSON.stringify({ error: "Too many requests" }), 429);
-        }
-        ctx.waitUntil(env.FP_INDEX.put(
-          rlKey,
-          JSON.stringify({ count: rl.count + 1 }),
-          { expirationTtl: 3600 }
-        ).catch(() => {
-        }));
+      /* v532: atomic. Was a KV read-modify-write, so a parallel burst incremented
+       * the counter once instead of N times — and this token is what gates
+       * /api/chat, which bills our Anthropic key. */
+      if (await _rlExceeded(env, `token-rl:${ip}`, 30, 3600)) {
+        return cors(JSON.stringify({ error: "Too many requests" }), 429);
       }
       const ts = Date.now().toString();
       const nonce = Array.from(crypto.getRandomValues(new Uint8Array(8))).map((b) => b.toString(16).padStart(2, "0")).join("");
@@ -6461,27 +6481,20 @@ var worker_source_default = {
             /* HW: unlimited — skip rate checks. */
           } else if (aiTier === "op" && cleanedWh) {
             /* OP: 30/hr per wallet hash. */
-            const opAiKey = `ai-op:${cleanedWh}`;
-            const opRl = await env.FP_INDEX.get(opAiKey, { type: "json" }).catch(() => null) || { count: 0, ts: Date.now() };
-            if (Date.now() - opRl.ts > 3600000) { opRl.count = 0; opRl.ts = Date.now(); }
-            if (opRl.count >= 30) {
-              const resetMin = Math.ceil((3600000 - (Date.now() - opRl.ts)) / 60000);
-              return cors(JSON.stringify({ error: { message: `OP AI limit: 30/hr reached. Resets in ${resetMin} min. Run a hardware relay for unlimited.` } }), 429);
+            /* v532: atomic. The manual ts-based window is dropped — the D1 counter
+             * carries its own expires_at and resets itself, which is the same
+             * fixed-hour window without the read-modify-write race. The exact
+             * "resets in N min" figure is no longer available from the counter,
+             * so the message states the window instead of a countdown. */
+            if (await _rlExceeded(env, `ai-op:${cleanedWh}`, 30, 3600)) {
+              return cors(JSON.stringify({ error: { message: "OP AI limit: 30/hr reached. Resets within the hour. Run a hardware relay for unlimited." } }), 429);
             }
-            opRl.count++;
-            ctx.waitUntil(env.FP_INDEX.put(opAiKey, JSON.stringify(opRl), { expirationTtl: 3700 }).catch(() => {}));
           } else {
             /* Guest: 20/hr per IP. */
-            const rlKey = `chat-rl:${ip}`;
-            const rl = await env.FP_INDEX.get(rlKey, { type: "json" }).catch(() => null) || { count: 0 };
-            if (rl.count >= 20) {
+            /* v532: atomic — this is the direct cost path. */
+            if (await _rlExceeded(env, `chat-rl:${ip}`, 20, 3600)) {
               return cors(JSON.stringify({ error: { message: "AI limit: 20/hr. Connect your wallet for higher limits." } }), 429);
             }
-            ctx.waitUntil(env.FP_INDEX.put(
-              rlKey,
-              JSON.stringify({ count: rl.count + 1 }),
-              { expirationTtl: 3600 }
-            ).catch(() => {}));
           }
         }
         const body = await request.json();
@@ -9824,13 +9837,18 @@ I confirm I control this wallet.`;
         if (listRes.ok) {
           const listData = await listRes.json();
           if (listData.rows && listData.rows.length > 3) {
-            for (const old of listData.rows.slice(3)) {
-              fetch("https://api.pinata.cloud/pinning/unpin/" + old.ipfs_pin_hash, {
-                method: "DELETE",
-                headers: { "Authorization": "Bearer " + env.PINATA_JWT }
-              }).catch(() => {
-              });
-            }
+            /* v532: was fire-and-forget. Not an unhandled-rejection risk (the
+             * .catch is there), but work not registered with ctx.waitUntil can be
+             * cancelled the moment the response returns, so old pins were being
+             * left on Pinata at random. ctx is in scope here — saveUserRegistry
+             * already uses it a few lines above for the D1 write. Batched into a
+             * single waitUntil so one slow unpin doesn't serialise the rest. */
+            ctx.waitUntil(Promise.allSettled(
+              listData.rows.slice(3).map((old) => fetch(
+                "https://api.pinata.cloud/pinning/unpin/" + old.ipfs_pin_hash,
+                { method: "DELETE", headers: { "Authorization": "Bearer " + env.PINATA_JWT } }
+              ))
+            ));
           }
         }
       } catch (_) {
@@ -10557,17 +10575,10 @@ I confirm I control this wallet.`;
            * global rate limit to defeat botnet attacks. With the old per-IP-only limit, a 100-IP
            * botnet could make 500 guesses/hr against a single victim. The prefix-keyed limit caps
            * total guesses per (victim-prefix) at 50/hr globally, regardless of attacker IP count. */
-          const rlKey = `recover-rl:${ip}`;
-          const rl = await env.FP_INDEX.get(rlKey, { type: "json" }).catch(() => null) || { count: 0 };
-          if (rl.count >= 3) {
+          /* v532: atomic — recovery-code guessing, the whole point is that 3 means 3. */
+          if (await _rlExceeded(env, `recover-rl:${ip}`, 3, 3600)) {
             return cors(JSON.stringify({ ok: false, error: "Too many recovery attempts. Try later." }), 429);
           }
-          ctx.waitUntil(env.FP_INDEX.put(
-            rlKey,
-            JSON.stringify({ count: rl.count + 1 }),
-            { expirationTtl: 3600 }
-          ).catch(() => {
-          }));
           /* Per-code-prefix global cap: hash the SHA-256 of the candidate code, take first 4 hex
            * chars (16 bits = ~65k buckets), and cap at 50 attempts/hr per bucket across ALL IPs.
            * Legitimate users: 1-2 attempts in their lifetime, never share a prefix-bucket meaningfully.
@@ -10745,17 +10756,10 @@ I confirm I control this wallet.`;
         if (!cleanedWallet) return cors(JSON.stringify({ ok: false, error: "Invalid wallet" }), 400);
         if (!env.FP_INDEX) return cors(JSON.stringify({ ok: false, error: "KV not bound" }), 503);
         const ip = request.headers.get("CF-Connecting-IP") || "unknown";
-        const rlKey = `reset-rl:${ip}`;
-        const rl = await env.FP_INDEX.get(rlKey, { type: "json" }).catch(() => null) || { count: 0 };
-        if (rl.count >= 5) {
+        /* v532: atomic — password-reset challenge issuance. */
+        if (await _rlExceeded(env, `reset-rl:${ip}`, 5, 3600)) {
           return cors(JSON.stringify({ ok: false, error: "Too many requests. Try again later." }), 429);
         }
-        ctx.waitUntil(env.FP_INDEX.put(
-          rlKey,
-          JSON.stringify({ count: rl.count + 1 }),
-          { expirationTtl: 3600 }
-        ).catch(() => {
-        }));
         const nonceBytes = new Uint8Array(16);
         crypto.getRandomValues(nonceBytes);
         const nonce = Array.from(nonceBytes).map((b) => b.toString(16).padStart(2, "0")).join("");
@@ -11680,6 +11684,14 @@ async function verifyChatToken(env, token) {
   if (!timingSafeEqual(tokenSig, expectedSig)) {
     return { ok: false, status: 403, error: "Invalid token" };
   }
+  /* v532 NOTE (reviewed, deliberately not changed): the `nonce` in this token is
+   * entropy, not a replay guard. It exists so two tokens minted in the same
+   * millisecond differ; nothing consumes it, and nothing should. This is a
+   * BEARER token with a 1h TTL that a user re-sends on every chat message, so
+   * enforcing single-use would reject the second message of every session.
+   * Replay resistance here comes from the short-lived session seal
+   * (computeSessionSeal, bound to the session ts and rotated on re-verify) plus
+   * TLS, not from the nonce. Left as-is so the next reader does not "fix" it. */
   const wh = whHex.toLowerCase();
   if (!/^[0-9a-f]{64}$/.test(wh)) {
     return { ok: false, status: 401, error: "Invalid token wallet hash" };
