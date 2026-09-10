@@ -6937,7 +6937,18 @@ var worker_source_default = {
          * `system` and `model` are listed as KNOWN-IGNORED rather than unknown:
          * older clients may still send them, and they must not 400 — but they are
          * deliberately not read (v533 and the model-pinning note above). */
-        const _CHAT_ACCEPTED = ["task", "stats", "memory", "lang", "messages", "max_tokens"];
+        /* v539 FIX: `lounge` was missing. The Operators Lounge assistant call sends
+         * it (buildSystemPrompt appends LOUNGE_ADDENDUM when it is true), so every
+         * lounge message was rejected with "Unknown field(s): lounge" from the
+         * moment v535 shipped. The v535 list was written from the map's main chat
+         * call alone, without checking the other three call sites. */
+        /* v539: declared BEFORE the contract checks below, which reference it.
+         * The first cut of this fix left the declaration further down where v537
+         * had put it — `node --check` passes on that (it is valid syntax) but the
+         * const is in its temporal dead zone at the point of use, so every
+         * /api/chat request would have thrown ReferenceError at runtime. */
+        const _task = typeof body.task === "string" ? body.task : "assistant";
+        const _CHAT_ACCEPTED = ["task", "stats", "memory", "lang", "lounge", "messages", "max_tokens"];
         const _CHAT_IGNORED  = ["system", "model"];
         const _unknown = Object.keys(body).filter(
           (k) => !_CHAT_ACCEPTED.includes(k) && !_CHAT_IGNORED.includes(k)
@@ -6959,8 +6970,17 @@ var worker_source_default = {
          * a prompt whose 29 slots are all "?" — an assistant that knows nothing about
          * the network, answering confidently, with a 200 and no signal anywhere.
          * That is the exact failure we spent a session diagnosing. Fail loudly. */
-        if (!body.stats || Object.keys(body.stats).length === 0) {
-          return cors(JSON.stringify({ error: { message: "stats is required and must be non-empty" } }), 400);
+        /* v539 FIX: scoped to the assistant task. v535 required `stats` on every
+         * request, but only the assistant prompt interpolates them —
+         * moderate_pin and moderate_report send `{task, messages}` and nothing
+         * else, so both were 400ing outright from the moment v535 shipped.
+         *
+         * The check is still worth having for `assistant`: without stats the
+         * prompt's live-data block is empty and the assistant answers about the
+         * network while knowing nothing about it, with a 200 and no signal —
+         * exactly the v570 failure. Fail loudly there, stay quiet elsewhere. */
+        if (_task === "assistant" && (!body.stats || Object.keys(body.stats).length === 0)) {
+          return cors(JSON.stringify({ error: { message: "stats is required for the assistant task" } }), 400);
         }
         if (body.memory !== void 0 && typeof body.memory !== "string") {
           return cors(JSON.stringify({ error: { message: "memory must be a string" } }), 400);
@@ -6978,7 +6998,6 @@ var worker_source_default = {
          * `task` is validated against the registry's own whitelist by letting
          * buildSystemPrompt throw on an unknown value — one source of truth for
          * what tasks exist, rather than a second list here that could drift. */
-        const _task = typeof body.task === "string" ? body.task : "assistant";
         let _built;
         try {
           _built = buildSystemPrompt(_task, {
