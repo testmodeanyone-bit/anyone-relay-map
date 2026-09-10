@@ -13369,6 +13369,23 @@ DOM_PANEL.open     = false;
     const hp = document.getElementById('health-panel');
     if(hp && hp.style.display === 'block') hp.style.display = 'none';
   }
+  /* v571 BUGFIX: #ovc-cluster (Map mode / Relay types) and #domain-panel are both
+   * position:fixed in the same top-right column and overlap by 248x234px —
+   * ovc-cluster sits at z-index 900, domain-panel at 450, so the mode panel
+   * painted on top of the opaque domain panel and swallowed its header (the ✕
+   * close button) and its search box, plus the first rows of the list. Users
+   * could neither search nor close the panel.
+   *
+   * Same treatment as health-panel directly above: the domain panel is a
+   * full-height takeover of that column, so the map-mode control hides while it
+   * is open and comes back on close. Reuses the .ovc-hidden class, which was
+   * already defined in the stylesheet for this purpose but never applied
+   * anywhere. Deliberately not a z-index bump — the ladder here runs up to
+   * 999999 and is load-bearing, so reordering it risks a new collision
+   * elsewhere. No-op on mobile, where ovc-cluster is display:none !important
+   * below 768px anyway. */
+  const ovc = document.getElementById('ovc-cluster');
+  if(ovc) ovc.classList.toggle('ovc-hidden', DOM_PANEL.open);
   panel.classList.toggle('open', DOM_PANEL.open);
   btn.classList.toggle('active', DOM_PANEL.open);
   if(ac) repositionAnyClip();
