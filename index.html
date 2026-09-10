@@ -19789,7 +19789,15 @@ async function acReportUser(e, btn){
     });
     try {
       const result = await res.json();
-      if(result.action === 'block'){
+      /* v538: the server now returns a parsed verdict from parseModerationVerdict,
+         whose vocabulary is {none|mute|ban} — set by the MOD_REPORT prompt, which
+         asks the model for exactly those three. This branch checked 'block', a word
+         the model is never asked to produce and the parser never emits, so a ban
+         verdict fell through to the else and nothing happened. Aligned to the
+         server's vocabulary rather than translating at the boundary: one word per
+         concept, and the registry is canonical. acBlockUser keeps its name — that
+         is the local action, 'ban' is the verdict. */
+      if(result.action === 'ban'){
         acBlockUser(nick);
         acAddMessage('🤖 AnyClip', 'ai', `🚫 ${nick} has been blocked: ${result.reason || 'Violated community guidelines.'}`, Date.now());
         fetch(AC_PROXY + '/api/chat-send', {
