@@ -6978,9 +6978,10 @@ var worker_source_default = {
          * `task` is validated against the registry's own whitelist by letting
          * buildSystemPrompt throw on an unknown value — one source of truth for
          * what tasks exist, rather than a second list here that could drift. */
+        const _task = typeof body.task === "string" ? body.task : "assistant";
         let _built;
         try {
-          _built = buildSystemPrompt(typeof body.task === "string" ? body.task : "assistant", {
+          _built = buildSystemPrompt(_task, {
             stats: body.stats,
             lang: body.lang,
             lounge: body.lounge === true
@@ -7028,7 +7029,34 @@ var worker_source_default = {
             messages: body.messages
           })
         });
-        return cors(JSON.stringify(await anthropicRes.json()), anthropicRes.status);
+        const _aiJson = await anthropicRes.json();
+        /* v538: moderation tasks return a PARSED VERDICT, not the raw Anthropic
+         * envelope.
+         *
+         * The client already reads `result.approve` / `result.action` directly off
+         * this response (acRequestPin, acReportUser). Those live on a verdict
+         * object, not on an Anthropic message — so both were always undefined:
+         * pin requests were always denied and reports never acted, silently, with
+         * a 200 every time. Same shape of bug as the empty system prompt.
+         *
+         * parseModerationVerdict (inlined above) is fail-closed: fences stripped,
+         * JSON.parse, and on ANY ambiguity it returns the safe default. So a
+         * garbled or manipulated model reply can never escalate to an approve or
+         * a ban it did not clearly state.
+         *
+         * Always 200 for these tasks, even when the upstream call failed — an
+         * empty body parses to the safe verdict, which is exactly what the client
+         * should act on. Propagating a 5xx here would make the client's
+         * `result.approve` undefined again, which happens to be safe today but
+         * only by accident. */
+        if (_task === "moderate_pin" || _task === "moderate_report") {
+          const _verdictText = (_aiJson && Array.isArray(_aiJson.content) ? _aiJson.content : [])
+            .filter((b) => b && b.type === "text")
+            .map((b) => b.text)
+            .join("");
+          return cors(JSON.stringify(parseModerationVerdict(_task, _verdictText)), 200);
+        }
+        return cors(JSON.stringify(_aiJson), anthropicRes.status);
       } catch (err) {
         return cors(JSON.stringify({ error: { message: "Internal error" } }), 500);
       }
