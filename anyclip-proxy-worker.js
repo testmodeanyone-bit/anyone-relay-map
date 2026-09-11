@@ -6116,12 +6116,8 @@ var worker_source_default = {
       // per-IP rate limit (mirror /api/relay-info: 30/min)
       if (env.FP_INDEX) {
         const erIp = request.headers.get("CF-Connecting-IP") || "unknown";
-        const erKey = `enrich-rl:${erIp}`;
-        const erRl = await env.FP_INDEX.get(erKey, { type: "json" }).catch(() => null) || { count: 0, ts: Date.now() };
-        if (Date.now() - erRl.ts > 60000) { erRl.count = 0; erRl.ts = Date.now(); }
-        if (erRl.count >= 30) return cors(JSON.stringify({ error: "Rate limit reached" }), 429);
-        erRl.count++;
-        ctx.waitUntil(env.FP_INDEX.put(erKey, JSON.stringify(erRl), { expirationTtl: 120 }).catch(() => {}));
+        /* v546: atomic (see _rlExceededSliding) - same 60s sliding window, now race-free. */
+        if (await _rlExceededSliding(env, `enrich-rl:${erIp}`, 30, 60)) { return cors(JSON.stringify({ error: "Rate limit reached" }), 429); }
       }
       const relays = {};
       let resolved = 0, notFound = 0, failed = 0, cacheHits = 0;
@@ -6342,14 +6338,10 @@ var worker_source_default = {
          * upstream lookup service. */
         if (env.FP_INDEX) {
           const wrcIp = request.headers.get("CF-Connecting-IP") || "unknown";
-          const wrcRlKey = `wrc-rl:${wrcIp}`;
-          const wrcRl = await env.FP_INDEX.get(wrcRlKey, { type: "json" }).catch(() => null) || { count: 0, ts: Date.now() };
-          if (Date.now() - wrcRl.ts > 60000) { wrcRl.count = 0; wrcRl.ts = Date.now(); }
-          if (wrcRl.count >= 30) {
+          /* v546: atomic (see _rlExceededSliding) - same 60s sliding window, now race-free. */
+          if (await _rlExceededSliding(env, `wrc-rl:${wrcIp}`, 30, 60)) {
             return cors(JSON.stringify({ ok: false, error: "Rate limit reached" }), 429);
           }
-          wrcRl.count++;
-          ctx.waitUntil(env.FP_INDEX.put(wrcRlKey, JSON.stringify(wrcRl), { expirationTtl: 120 }).catch(() => {}));
         }
         /* v20: short-lived per-wallet result cache (5 min). Faster than the
          * hourly all_uptimes_v1 cache for repeat queries on the same wallet. */
@@ -6697,14 +6689,10 @@ var worker_source_default = {
        * down enumeration. */
       if (env.FP_INDEX) {
         const riIp = request.headers.get("CF-Connecting-IP") || "unknown";
-        const riRlKey = `relay-info-rl:${riIp}`;
-        const riRl = await env.FP_INDEX.get(riRlKey, { type: "json" }).catch(() => null) || { count: 0, ts: Date.now() };
-        if (Date.now() - riRl.ts > 60000) { riRl.count = 0; riRl.ts = Date.now(); }
-        if (riRl.count >= 30) {
+        /* v546: atomic (see _rlExceededSliding) - same 60s sliding window, now race-free. */
+        if (await _rlExceededSliding(env, `relay-info-rl:${riIp}`, 30, 60)) {
           return cors(JSON.stringify({ error: "Rate limit reached" }), 429);
         }
-        riRl.count++;
-        ctx.waitUntil(env.FP_INDEX.put(riRlKey, JSON.stringify(riRl), { expirationTtl: 120 }).catch(() => {}));
       }
       try {
         let kvHit = false;
@@ -8279,12 +8267,8 @@ I confirm I control this wallet.`;
          * quota. Leaderboard updates over minutes; 60s cache is plenty. */
         if (env.FP_INDEX) {
           const lbIp = request.headers.get("CF-Connecting-IP") || "unknown";
-          const lbRlKey = `lb-rl:${lbIp}`;
-          const lbRl = await env.FP_INDEX.get(lbRlKey, { type: "json" }).catch(() => null) || { count: 0, ts: Date.now() };
-          if (Date.now() - lbRl.ts > 60000) { lbRl.count = 0; lbRl.ts = Date.now(); }
-          if (lbRl.count >= 20) return cors(JSON.stringify({ chatters: [], xp: [], rateLimited: true }), 429);
-          lbRl.count++;
-          ctx.waitUntil(env.FP_INDEX.put(lbRlKey, JSON.stringify(lbRl), { expirationTtl: 120 }).catch(() => {}));
+          /* v546: atomic (see _rlExceededSliding) - same 60s sliding window, now race-free. */
+          if (await _rlExceededSliding(env, `lb-rl:${lbIp}`, 20, 60)) { return cors(JSON.stringify({ chatters: [], xp: [], rateLimited: true }), 429); }
           /* Shared 60s cache served to all callers. */
           const cached = await env.FP_INDEX.get("chat-leaderboard-cache", { type: "json" }).catch(() => null);
           if (cached && Date.now() - cached.ts < 60000) {
@@ -8984,14 +8968,10 @@ I confirm I control this wallet.`;
          * longpoll and reuse it; 5/min/IP is plenty. */
         if (env.FP_INDEX) {
           const lpIp = request.headers.get("CF-Connecting-IP") || "unknown";
-          const lpRlKey = `longpoll-init-rl:${lpIp}`;
-          const lpRl = await env.FP_INDEX.get(lpRlKey, { type: "json" }).catch(() => null) || { count: 0, ts: Date.now() };
-          if (Date.now() - lpRl.ts > 60000) { lpRl.count = 0; lpRl.ts = Date.now(); }
-          if (lpRl.count >= 5) {
+          /* v546: atomic (see _rlExceededSliding) - same 60s sliding window, now race-free. */
+          if (await _rlExceededSliding(env, `longpoll-init-rl:${lpIp}`, 5, 60)) {
             return cors(JSON.stringify({ messages: [], error: "Too many longpoll connections", rateLimited: true }), 429);
           }
-          lpRl.count++;
-          ctx.waitUntil(env.FP_INDEX.put(lpRlKey, JSON.stringify(lpRl), { expirationTtl: 120 }).catch(() => {}));
         }
         const since = parseInt(url.searchParams.get("since") || "0");
         const maxWait = 25e3;
@@ -9061,15 +9041,12 @@ I confirm I control this wallet.`;
         }
         if (!cleanedTypingNick) return cors(JSON.stringify({ ok: false, error: "invalid-nick" }), 400);
         const _typingIp = request.headers.get("CF-Connecting-IP") || "unknown";
-        const _typingRlKey = `typing-rl:${_typingIp}`;
-        const _typingRl = await env.FP_INDEX.get(_typingRlKey, { type: "json" }).catch(() => null) || { count: 0, windowStart: Date.now() };
+        /* v546: atomic (see _rlExceededSliding) - same 60s sliding window, now
+         * race-free. _typingNow is kept: the typing-presence write below uses it. */
         const _typingNow = Date.now();
-        const _typingBucket = _typingNow - _typingRl.windowStart < 60000 ? _typingRl : { count: 0, windowStart: _typingNow };
-        if (_typingBucket.count >= 60) {
+        if (await _rlExceededSliding(env, `typing-rl:${_typingIp}`, 60, 60)) {
           return cors(JSON.stringify({ ok: false, error: "rate-limited" }), 429);
         }
-        _typingBucket.count++;
-        ctx.waitUntil(env.FP_INDEX.put(_typingRlKey, JSON.stringify(_typingBucket), { expirationTtl: 120 }).catch(() => {}));
         await env.FP_INDEX.put(`typing:${cleanedTypingNick}`, JSON.stringify({ nick: cleanedTypingNick, time: _typingNow }), { expirationTtl: 8 });
         return cors(JSON.stringify({ ok: true }), 200);
       } catch (e) {
@@ -9127,12 +9104,8 @@ I confirm I control this wallet.`;
          * in tens of seconds; 30s cache is appropriate. */
         if (env.FP_INDEX) {
           const onIp = request.headers.get("CF-Connecting-IP") || "unknown";
-          const onRlKey = `chat-online-rl:${onIp}`;
-          const onRl = await env.FP_INDEX.get(onRlKey, { type: "json" }).catch(() => null) || { count: 0, ts: Date.now() };
-          if (Date.now() - onRl.ts > 60000) { onRl.count = 0; onRl.ts = Date.now(); }
-          if (onRl.count >= 30) return cors(JSON.stringify({ operators: [], rateLimited: true }), 429);
-          onRl.count++;
-          ctx.waitUntil(env.FP_INDEX.put(onRlKey, JSON.stringify(onRl), { expirationTtl: 120 }).catch(() => {}));
+          /* v546: atomic (see _rlExceededSliding) - same 60s sliding window, now race-free. */
+          if (await _rlExceededSliding(env, `chat-online-rl:${onIp}`, 30, 60)) { return cors(JSON.stringify({ operators: [], rateLimited: true }), 429); }
           const cached = await env.FP_INDEX.get("chat-online-cache", { type: "json" }).catch(() => null);
           if (cached && Date.now() - cached.ts < 30000) {
             return cors(JSON.stringify({ operators: cached.operators, cached: true }), 200);
@@ -9488,12 +9461,8 @@ I confirm I control this wallet.`;
          * uses this to gray out banned chatters, but without a cap it could be used
          * to enumerate the entire ban list. 60/min per IP is plenty for normal use. */
         const bcIp = request.headers.get("CF-Connecting-IP") || "unknown";
-        const bcRlKey = `ban-check-rl:${bcIp}`;
-        const bcRl = await env.FP_INDEX.get(bcRlKey, { type: "json" }).catch(() => null) || { count: 0, ts: Date.now() };
-        if (Date.now() - bcRl.ts > 60000) { bcRl.count = 0; bcRl.ts = Date.now(); }
-        if (bcRl.count >= 60) return cors(JSON.stringify({ banned: false, rateLimit: true }), 429);
-        bcRl.count++;
-        ctx.waitUntil(env.FP_INDEX.put(bcRlKey, JSON.stringify(bcRl), { expirationTtl: 120 }).catch(() => {}));
+        /* v546: atomic (see _rlExceededSliding) - same 60s sliding window, now race-free. */
+        if (await _rlExceededSliding(env, `ban-check-rl:${bcIp}`, 60, 60)) { return cors(JSON.stringify({ banned: false, rateLimit: true }), 429); }
         const wh = await hashWallet(wallet);
         const ban = await env.FP_INDEX.get(`chat:ban:${wh.slice(0, 16)}`);
         if (!ban) return cors(JSON.stringify({ banned: false }), 200);
@@ -9878,13 +9847,10 @@ I confirm I control this wallet.`;
         const tokVerify = await verifyChatToken(env, request.headers.get("x-chat-token"));
         if (!tokVerify.ok) return cors(JSON.stringify({ ok: false, error: tokVerify.error, banned: tokVerify.banned }), tokVerify.status);
         const fromWh = tokVerify.wh;
-        const dmRlKey = `dm-send-rl:${fromWh.slice(0, 16)}`;
-        const dmRl = await env.FP_INDEX.get(dmRlKey, { type: "json" }).catch(() => null) || { count: 0, ts: Date.now() };
-        if (Date.now() - dmRl.ts > 60000) { dmRl.count = 0; dmRl.ts = Date.now(); }
-        if (dmRl.count >= 10) {
+        /* v546: atomic (see _rlExceededSliding) - same 60s sliding window, now race-free. */
+        if (await _rlExceededSliding(env, `dm-send-rl:${fromWh.slice(0, 16)}`, 10, 60)) {
           return cors(JSON.stringify({ ok: false, error: "DM rate limit (10/min) reached" }), 429);
         }
-        ctx.waitUntil(env.FP_INDEX.put(dmRlKey, JSON.stringify({ count: dmRl.count + 1, ts: dmRl.ts }), { expirationTtl: 120 }).catch(() => {}));
         const body = await request.json();
         const { to, text, time, avatar, ct, iv, encV } = body || {};
         const isEncrypted = typeof ct === "string" && typeof iv === "string";
@@ -10379,12 +10345,8 @@ I confirm I control this wallet.`;
          * fast enough to need second-by-second freshness. */
         if (env.FP_INDEX) {
           const rhIp = request.headers.get("CF-Connecting-IP") || "unknown";
-          const rhRlKey = `relay-health-rl:${rhIp}`;
-          const rhRl = await env.FP_INDEX.get(rhRlKey, { type: "json" }).catch(() => null) || { count: 0, ts: Date.now() };
-          if (Date.now() - rhRl.ts > 60000) { rhRl.count = 0; rhRl.ts = Date.now(); }
-          if (rhRl.count >= 20) return cors(JSON.stringify({ relays: [], error: "Rate limit reached" }), 429);
-          rhRl.count++;
-          ctx.waitUntil(env.FP_INDEX.put(rhRlKey, JSON.stringify(rhRl), { expirationTtl: 120 }).catch(() => {}));
+          /* v546: atomic (see _rlExceededSliding) - same 60s sliding window, now race-free. */
+          if (await _rlExceededSliding(env, `relay-health-rl:${rhIp}`, 20, 60)) { return cors(JSON.stringify({ relays: [], error: "Rate limit reached" }), 429); }
           /* 30s cache served to all callers — relay up/down state changes
            * over minutes, not seconds. */
           const cached = await env.FP_INDEX.get("relay-health-cache", { type: "json" }).catch(() => null);
@@ -11436,24 +11398,15 @@ Issued: ${(/* @__PURE__ */ new Date()).toISOString()}
          * catches multi-account churn. Limits are generous so catching up on a
          * busy thread with many reactions still works. */
         if (env.FP_INDEX) {
-          const _rxNow = Date.now();
-          const _rxWhKey = `react-wh-rl:${wh.slice(0, 16)}`;
-          const _rxWh = await env.FP_INDEX.get(_rxWhKey, { type: "json" }).catch(() => null) || { count: 0, ts: _rxNow };
-          if (_rxNow - _rxWh.ts > 60000) { _rxWh.count = 0; _rxWh.ts = _rxNow; }
-          if (_rxWh.count >= 40) {
+          /* v546: atomic (see _rlExceededSliding) - same 60s sliding window, now race-free. */
+          if (await _rlExceededSliding(env, `react-wh-rl:${wh.slice(0, 16)}`, 40, 60)) {
             return cors(JSON.stringify({ ok: false, error: "Reacting too fast \u2014 slow down.", rateLimit: true }), 429);
           }
-          _rxWh.count++;
-          ctx.waitUntil(env.FP_INDEX.put(_rxWhKey, JSON.stringify(_rxWh), { expirationTtl: 120 }).catch(() => {}));
           const _rxIp = request.headers.get("CF-Connecting-IP") || "unknown";
-          const _rxIpKey = `react-ip-rl:${_rxIp}`;
-          const _rxIpRl = await env.FP_INDEX.get(_rxIpKey, { type: "json" }).catch(() => null) || { count: 0, ts: _rxNow };
-          if (_rxNow - _rxIpRl.ts > 60000) { _rxIpRl.count = 0; _rxIpRl.ts = _rxNow; }
-          if (_rxIpRl.count >= 80) {
+          /* v546: atomic (see _rlExceededSliding) - same 60s sliding window, now race-free. */
+          if (await _rlExceededSliding(env, `react-ip-rl:${_rxIp}`, 80, 60)) {
             return cors(JSON.stringify({ ok: false, error: "Reacting too fast \u2014 slow down.", rateLimit: true }), 429);
           }
-          _rxIpRl.count++;
-          ctx.waitUntil(env.FP_INDEX.put(_rxIpKey, JSON.stringify(_rxIpRl), { expirationTtl: 120 }).catch(() => {}));
         }
         const reactKey = `react:${msgId}`;
         const existing = await env.FP_INDEX.get(reactKey, { type: "json" }).catch(() => null) || {};
