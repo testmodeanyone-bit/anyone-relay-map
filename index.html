@@ -7701,7 +7701,15 @@ input:focus-visible, textarea:focus-visible, select:focus-visible{
      immediately to its LEFT, adjacent rather than stranded across the map.
      Same bottom:28px as the other dock so both align with the panel's lower
      edge and the ticker. */
-  #ovc-cluster.ovc-dockhl{top:auto;left:auto;right:616px;bottom:28px;}
+  /* v581: TOP band, not bottom. v579 put this at bottom:28px and v580 then moved
+     the AnyClip assistant to right:624px — 8px apart, both several hundred wide,
+     so they overlapped by 240px. Horizontal space left of the health panel only
+     fits one of them.
+     Separating them on the Y axis instead: the map-mode control keeps its natural
+     top:88px band (y 88-338) and AnyClip stays anchored to the bottom (y ~650-930).
+     They now share a column without competing for it, and the layout no longer
+     depends on guessing AnyClip's width. */
+  #ovc-cluster.ovc-dockhl{top:88px;left:auto;right:616px;bottom:auto;}
   /* v561: the overlay cluster is a desktop map-layer control. On mobile the same
      HW/Health/ISP toggles live in the sidebar sheet, and a 248px fixed panel would
      cover the map + collide with mobile top chrome — so hide it at <=768px. */
