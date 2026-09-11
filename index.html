@@ -13443,18 +13443,7 @@ function _ovcRelayout(){
    *     #anyclip{ position:fixed; right:24px; z-index:9999;
    *               transition:right .25s cubic-bezier(.4,0,.2,1); }
    *     #anyclip.domain-open{ right:624px; }
-  /* v582: below ~1190px there is no room for the shifted assistant. The widget is
-     60px collapsed but ~340px with the bubble open, and the shift needs
-     W - 624 - 340 >= 226 to clear the sidebar (which ends at 210 + a 16px gutter).
-     Above that it fits; below it the open bubble runs onto the sidebar.
-     Shrinking the bubble instead was the alternative — at 1024px it would be
-     174px wide, too narrow to type in — so it hides while a right-hand panel is
-     open, same call as the map-mode control. Closing the panel brings it back.
-     Only the .domain-open state is affected: with no panel open the assistant
-     behaves normally at every width. */
-  @media (max-width: 1200px){
-    #anyclip.domain-open{ display:none !important; }
-  }
+
    *
    * `.domain-open` appears exactly once in the whole file — that rule. No JS ever
    * added it, so the shift never happened and the transition never ran. Same
@@ -25877,6 +25866,18 @@ if('serviceWorker' in navigator){
 }
 /* When domain panel is open, push AnyClip left past BOTH domain(300) + health(300) panels */
 #anyclip.domain-open{ right:624px; }
+/* v582: below ~1190px there is no room for that shift. The widget is 60px
+   collapsed but ~340px with the bubble open, and the shift needs
+   W - 624 - 340 >= 226 to clear the sidebar (ends at 210, plus a 16px gutter).
+   Above that it fits; below it the open bubble runs onto the sidebar. Shrinking
+   the bubble was the alternative - at 1024px that is a 174px chat box, too narrow
+   to type in - so it hides while a right-hand panel is open, the same call made
+   for the map-mode control. Closing the panel brings it back. Only the
+   .domain-open state is affected; with no panel open it behaves normally at every
+   width. */
+@media (max-width: 1200px){
+  #anyclip.domain-open{ display:none !important; }
+}
 /* Ensure AnyClip avatar is always clickable on screen */
 #anyclip{ min-width:60px; }
 
