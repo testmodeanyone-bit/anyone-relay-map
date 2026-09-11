@@ -13381,14 +13381,56 @@ DOM_PANEL.open     = false;
 /* Stub for missing repositionAnyClip — prevents ReferenceError crashing domain/health panels */
   if(typeof repositionAnyClip === 'undefined'){ window.repositionAnyClip = function(){}; }
   
-  function toggleDomainPanel(){
+  /* v578: one place that decides where the map-mode control goes, instead of each
+ * panel toggle guessing. Every previous fix here moved ovc-cluster out of one
+ * collision and into the next — v571 hid it (made the mode buttons unreachable),
+ * v572 docked it bottom-LEFT (stranded it, and sat on the AnyClip character),
+ * v573 docked it bottom-RIGHT at right:316px (landed on the health panel).
+ *
+ * The right-hand column is two 300px slots: health-panel at right:300 and
+ * domain-panel at right:0. The rule follows from that geometry:
+ *
+ *   neither open   -> home (top-right). Nothing to collide with.
+ *   health only    -> home. health ends at x1620, ovc starts at x1656. 36px clear.
+ *   domains only   -> dock bottom-right at right:316, in the empty health slot.
+ *   both open      -> no free slot. Hide it.
+ *
+ * "Both open" should be unreachable now that the mutual-exclusion guard above is
+ * fixed, but it is handled rather than assumed — that assumption is what produced
+ * the last three rounds of this. */
+function _ovcRelayout(){
+  const ovc = document.getElementById('ovc-cluster');
+  if(!ovc) return;
+  const dp = document.getElementById('domain-panel');
+  const hp = document.getElementById('health-panel');
+  const domOpen = !!dp && dp.classList.contains('open');
+  const hpOpen  = !!hp && getComputedStyle(hp).display !== 'none';
+  ovc.classList.toggle('ovc-hidden', domOpen && hpOpen);
+  ovc.classList.toggle('ovc-dockbr', domOpen && !hpOpen);
+}
+
+function toggleDomainPanel(){
   DOM_PANEL.open = !DOM_PANEL.open;
   const panel = document.getElementById('domain-panel');
   const btn   = document.getElementById('btn-domains');
   const ac    = document.getElementById('anyclip');
   if(DOM_PANEL.open){
     const hp = document.getElementById('health-panel');
-    if(hp && hp.style.display === 'block') hp.style.display = 'none';
+    /* v578 BUGFIX: this checked for 'block', but openHealthPanel sets the panel to
+     * 'flex'. So the guard never matched and the mutual exclusion only worked in
+     * one direction: Domains-then-Health closed Domains (openHealthPanel removes
+     * its .open class), but Health-then-Domains left BOTH open.
+     *
+     * Both open is not a layout the right-hand column can take. health-panel sits
+     * at x1320-1620 and domain-panel at x1620-1920, which is fine on its own — but
+     * the v573 map-mode dock anchors at right:316px, landing on x1356-1604, i.e.
+     * squarely on top of the health panel (62,000px of overlap, z900 over z500).
+     * It hid Hardware Relay Ratio and Network Size behind the Relay Types chips.
+     *
+     * Checking !== 'none' rather than a specific value, so this cannot drift again
+     * if the display mode changes. */
+    if(hp && hp.style.display !== 'none') hp.style.display = 'none';
+    if(window._healthWaitInterval){ clearInterval(window._healthWaitInterval); window._healthWaitInterval = null; }
   }
   /* v571/v572 BUGFIX: #ovc-cluster (Map mode / Relay types) and #domain-panel are
    * both position:fixed in the same top-right column and overlap by 248x234px —
@@ -13408,8 +13450,7 @@ DOM_PANEL.open     = false;
    * Deliberately not a z-index bump — the ladder here runs up to 999999 and is
    * load-bearing, so reordering it risks a new collision elsewhere. No-op on
    * mobile, where ovc-cluster is display:none !important below 768px. */
-  const ovc = document.getElementById('ovc-cluster');
-  if(ovc) ovc.classList.toggle('ovc-dockbr', DOM_PANEL.open);
+  _ovcRelayout();
   panel.classList.toggle('open', DOM_PANEL.open);
   btn.classList.toggle('active', DOM_PANEL.open);
   if(ac) repositionAnyClip();
@@ -25151,6 +25192,7 @@ function openHealthPanel(){
   const isOpen = panel.style.display === 'flex';
   if(isOpen){
     panel.style.display='none';
+    if(typeof _ovcRelayout === 'function') _ovcRelayout();   /* v578 */
     /* v246 (Bug #5): clear any in-flight wait interval on close. */
     if(window._healthWaitInterval){ clearInterval(window._healthWaitInterval); window._healthWaitInterval = null; }
     return;
@@ -25158,6 +25200,7 @@ function openHealthPanel(){
   const dp = document.getElementById('domain-panel');
   if(dp && dp.classList.contains('open')) dp.classList.remove('open');
   panel.style.display = 'flex';
+  if(typeof _ovcRelayout === 'function') _ovcRelayout();     /* v578 */
   if(typeof i18nApply === 'function' && _i18nLang !== 'en') setTimeout(i18nApply, 200);
   const totalBW = relayData.reduce((s,z)=>s+(z.bwMibs||0),0);
   const bwFromHeader = (() => {
