@@ -7696,6 +7696,12 @@ input:focus-visible, textarea:focus-visible, select:focus-visible{
      Measured at 1920x951: x 1356-1604, y 689-923, 16px gutter to the panel,
      zero overlap with #ticker, #domain-panel, #relay-legend or #sidebar. */
   #ovc-cluster.ovc-dockbr{top:auto;left:auto;right:316px;bottom:28px;}
+  /* v579: parked beside the health panel. health-panel occupies right:300 to
+     right:600, so 616px = its outer edge + a 16px gutter — the control sits
+     immediately to its LEFT, adjacent rather than stranded across the map.
+     Same bottom:28px as the other dock so both align with the panel's lower
+     edge and the ticker. */
+  #ovc-cluster.ovc-dockhl{top:auto;left:auto;right:616px;bottom:28px;}
   /* v561: the overlay cluster is a desktop map-layer control. On mobile the same
      HW/Health/ISP toggles live in the sidebar sheet, and a 248px fixed panel would
      cover the map + collide with mobile top chrome — so hide it at <=768px. */
@@ -13405,8 +13411,20 @@ function _ovcRelayout(){
   const hp = document.getElementById('health-panel');
   const domOpen = !!dp && dp.classList.contains('open');
   const hpOpen  = !!hp && getComputedStyle(hp).display !== 'none';
-  ovc.classList.toggle('ovc-hidden', domOpen && hpOpen);
+  /* v579: three placements rather than two. Health open now MOVES the control
+   * beside the health panel instead of leaving it at home — requested so the
+   * mode switcher sits next to the panel you are reading, not diagonally across
+   * the map. Home is only for the bare map.
+   *
+   *   neither open  -> home (top-right)
+   *   health open   -> ovc-dockhl, right:616 — immediately left of health
+   *   domains only  -> ovc-dockbr, right:316 — in the empty health slot
+   *
+   * Health takes precedence when both are somehow open: right:616 clears both
+   * columns, so it stays visible rather than disappearing. */
+  ovc.classList.toggle('ovc-dockhl', hpOpen);
   ovc.classList.toggle('ovc-dockbr', domOpen && !hpOpen);
+  ovc.classList.toggle('ovc-hidden', false);
 }
 
 function toggleDomainPanel(){
@@ -13450,8 +13468,14 @@ function toggleDomainPanel(){
    * Deliberately not a z-index bump — the ladder here runs up to 999999 and is
    * load-bearing, so reordering it risks a new collision elsewhere. No-op on
    * mobile, where ovc-cluster is display:none !important below 768px. */
-  _ovcRelayout();
   panel.classList.toggle('open', DOM_PANEL.open);
+  /* v579 ORDER FIX: this call used to sit ABOVE the line before it. _ovcRelayout
+   * reads `.open` off the DOM, so running it first meant it saw the PREVIOUS
+   * state — domOpen false — and left the control at home, straight back on top of
+   * the domain panel. The v573 code it replaced used the DOM_PANEL.open variable
+   * (set at the top of this function), which is why the ordering did not matter
+   * then. Read-after-write. */
+  _ovcRelayout();
   btn.classList.toggle('active', DOM_PANEL.open);
   if(ac) repositionAnyClip();
   if(DOM_PANEL.open){
