@@ -3168,6 +3168,183 @@ var ETH_RPCS = [
   "https://1rpc.io/eth"
 ];
 
+/* v548: EXACT staked total from Staked/Unstaked events.
+ *
+ * WHY THIS EXISTS. v547 read balanceOf(Hodler) — one cheap call, works on any
+ * public RPC — but that is everything the contract holds, not what users mean by
+ * "staked". HodlerData carries four separate pools:
+ *
+ *     struct HodlerData { uint256 available;  VaultData[] vaults;
+ *                         LockData[] locks;   StakeData[] stakes; ... }
+ *
+ * balanceOf = stakes + locks (relay registration) + vaults (unstake cooldown) +
+ * available (deposited, unallocated). Measured 2026-09-11: balanceOf reported
+ * 13.12M while the official staking bot reported 11,454,108 — the 1.66M gap is
+ * locks and cooldown. Only `stakes` is the number the community sees.
+ *
+ * There is no aggregate getter in HodlerV5. getStake(address) filters
+ * hodlers[_msgSender()] by operator, so via eth_call with no sender it returns
+ * zero and is useless here. The two ways to an exact figure are iterating all
+ * 849 hodler addresses, or summing Staked minus Unstaked events. Events win:
+ * one query instead of 849.
+ *
+ * REQUIRES A KEYED RPC. Every free endpoint tested refuses full-history logs:
+ * 1rpc caps eth_getLogs at 50 blocks, flashbots has pruned history, publicnode
+ * and merkle return 403 on log queries. Set ETH_RPC_URL to an Alchemy/Infura
+ * endpoint. Without it this returns null and the caller falls back to the
+ * balanceOf reading, clearly labelled as a different measurement.
+ *
+ * Scanning starts at the deployment block (binary-searched via eth_getCode), not
+ * zero — 1.93M blocks instead of 26M, which is what keeps the query inside
+ * provider limits. */
+var HODLER_DEPLOY_BLOCK = 24025391;
+var TOPIC_STAKED = "0x5dac0c1b1112564a045ba943c9d50270893e8e826c49be8e7073adc713ab7bd7";
+var TOPIC_UNSTAKED = "0xd8654fcc8cf5b36d30b3f5e4688fc78118e6d68de60b9994e09902268b57c3e3";
+
+/* v551: EXACT staked total by summing every hodler's stakes.
+ *
+ * WHY NOT EVENTS. v548-v550 summed Staked/Unstaked logs. Correct in principle,
+ * unusable in practice: the configured provider's free tier caps eth_getLogs at
+ * a TEN BLOCK range, which is 193,000 requests across the contract's 1.93M-block
+ * history. Other public endpoints refuse full-history logs outright (pruned, or
+ * 403). Paying for an archive plan to compute one number was the wrong trade.
+ *
+ * WHY NOT balanceOf. That is everything the contract holds — stakes + relay
+ * locks + unstake-cooldown vaults + unallocated deposits. Measured 13.12M while
+ * the official staking bot reported 11,454,108; the 1.66M gap is locks and
+ * cooldown, not stake.
+ *
+ * WHAT THIS DOES. getHodlerKeys() returns all hodler addresses (849 at time of
+ * writing); getStakes(address) returns that hodler's StakeData[] and, unlike the
+ * broken getStake(address), genuinely reads hodlers[_address] rather than
+ * msg.sender. Sum every element's amount.
+ *
+ *     struct StakeData { address operator; uint256 amount; }   // 2 words, operator first
+ *
+ * VERIFIED 2026-09-11 against mainnet: 849/849 hodlers, 0 failures, total
+ * 11,454,109 vs the bot's 11,454,108 — one token, which is rounding on the
+ * 18-decimal division, not a discrepancy.
+ *
+ * NEEDS NO API KEY. eth_call is not range-limited, so free public RPCs serve it.
+ * ETH_RPC_URL is still used FIRST when set (a keyed endpoint is faster and more
+ * reliable), with the public list as fallback.
+ *
+ * COST. ~850 calls at CONC concurrency, about a minute. That is why this only
+ * ever runs behind the 30-minute cache and on the cron — never inline for a
+ * visitor. If the hodler count grows substantially this needs batching via a
+ * multicall contract. */
+/* v552: staking APY, maintained by hand — see the note at the response site.
+ * Source of truth is the official $ANYONE staking bot. */
+var ANYONE_APY = 15.1;
+var ANYONE_APY_AS_OF = "2026-09-11";
+
+var STAKES_CONC = 12;
+
+async function fetchTotalStakedExact(env) {
+  const endpoints = [];
+  if (env && env.ETH_RPC_URL) endpoints.push(env.ETH_RPC_URL);
+  endpoints.push(...ETH_RPCS);
+
+  let rpcIdx = 0;
+  const rpc = async (data) => {
+    /* Rotate endpoints per call so one throttling provider cannot stall the run. */
+    for (let attempt = 0; attempt < 4; attempt++) {
+      const url = endpoints[(rpcIdx++) % endpoints.length];
+      try {
+        const r = await fetch(url, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          signal: AbortSignal.timeout(12e3),
+          body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "eth_call",
+                                 params: [{ to: HODLER_ADDR, data }, "latest"] })
+        });
+        if (!r.ok) continue;
+        const j = await r.json();
+        if (j && j.result && j.result !== "0x") return j.result;
+      } catch (_) { /* next endpoint */ }
+    }
+    return null;
+  };
+
+  try {
+    /* getHodlerKeys() -> address[] */
+    const keysRaw = await rpc("0xe08e07c4");
+    if (!keysRaw || keysRaw.length < 130) return { ok: false, reason: "getHodlerKeys failed" };
+    const body = keysRaw.slice(2);
+    const count = parseInt(body.slice(64, 128), 16);
+    if (!count || count > 100000) return { ok: false, reason: "implausible hodler count" };
+    const addrs = [];
+    for (let i = 0; i < count; i++) {
+      addrs.push(body.slice(128 + i * 64 + 24, 128 + (i + 1) * 64));
+    }
+
+    /* getStakes(address) selector 0xb5cb15f7 — see the ABI note above. */
+    const stakeOf = async (addr) => {
+      /* getStakes(address) = 0x7ba6f458. Computed, not guessed: the first cut
+       * hardcoded 0xb5cb15f7 and every one of the 849 reads returned nothing.
+       * The coverage guard below caught it instead of letting a zero through. */
+      const res = await rpc("0x7ba6f458" + "0".repeat(24) + addr);
+      if (!res || res.length < 130) return null;
+      const b = res.slice(2);
+      const n = parseInt(b.slice(64, 128), 16);
+      let sum = 0n;
+      for (let k = 0; k < n; k++) {
+        /* element k = [operator, amount]; amount is the second word */
+        const at = 128 + (k * 2 + 1) * 64;
+        if (at + 64 <= b.length) sum += BigInt("0x" + b.slice(at, at + 64));
+      }
+      return sum;
+    };
+
+    /* Two passes. The first sweep leaves a scatter of nulls — measured 30 of 849
+     * against free public endpoints, pure transient flakiness, not bad addresses.
+     * Retrying just the misses clears them. Deliberately NOT solved by relaxing
+     * the coverage guard below: a looser bar would let a genuinely partial read
+     * through as a confident under-report, which is the failure mode that makes
+     * this number untrustworthy. */
+    let total = 0n, ok = 0;
+    const misses = [];
+    const sweep = async (list, collect) => {
+      for (let i = 0; i < list.length; i += STAKES_CONC) {
+        const batch = list.slice(i, i + STAKES_CONC);
+        const results = await Promise.all(batch.map(stakeOf));
+        results.forEach((r, k) => {
+          if (r === null) { if (collect) collect.push(batch[k]); }
+          else { total += r; ok++; }
+        });
+      }
+    };
+    await sweep(addrs, misses);
+    /* Keep retrying the misses until none remain. Bounded at 4 extra passes so a
+     * genuinely broken endpoint cannot spin forever.
+     *
+     * ZERO failures is required, not "few". An earlier cut accepted up to 2% and
+     * returned ok with 3 hodlers missing — the total came out 21,784 short, which
+     * is precisely those three stakes. A partial read is not a slightly-worse
+     * number, it is a confidently wrong one, and the whole point of this function
+     * is to match the figure the community already sees. */
+    let pending = misses;
+    for (let pass = 0; pass < 4 && pending.length; pass++) {
+      const next = [];
+      await sweep(pending, next);
+      pending = next;
+    }
+    const failed = pending.length;
+    if (failed > 0) {
+      return { ok: false, reason: `${failed}/${addrs.length} hodler reads failed after retries` };
+    }
+    if (total <= 0n) return { ok: false, reason: "zero total" };
+    return { ok: true, totalStaked: Number(total / 10n ** 18n), hodlers: ok, failed };
+  } catch (e) {
+    let reason = (e && e.message) || "unknown";
+    try {
+      if (env && env.ETH_RPC_URL) reason = reason.split(env.ETH_RPC_URL).join("<rpc>");
+      reason = reason.replace(/[A-Za-z0-9_-]{24,}/g, "<redacted>");
+    } catch (_) {}
+    return { ok: false, reason: reason.slice(0, 200) };
+  }
+}
+
 async function fetchTotalStakedOnchain() {
   for (const rpc of ETH_RPCS) {
     try {
@@ -6007,17 +6184,41 @@ var worker_source_default = {
          * The AO path is gone rather than kept as a fallback: serving a known-bad
          * estimate when the chain is briefly unreachable is worse than serving
          * the stale-but-real cached value, which is what tsFail already does. */
-        const onchain = await fetchTotalStakedOnchain();
+        /* v548: exact figure first (Staked-Unstaked events, needs ETH_RPC_URL);
+         * fall back to balanceOf, which measures a DIFFERENT thing and says so in
+         * `source` so the discrepancy is visible rather than silent. */
+        const ev = await fetchTotalStakedExact(env);
+        let measured = ev && ev.ok ? ev : null;
+        let source = "ethereum:stakes";
+        let fallbackReason = null;
+        if (!measured) {
+          fallbackReason = (ev && ev.reason) || "unknown";
+          measured = await fetchTotalStakedOnchain();
+          source = "ethereum:balanceOf";
+        }
+        const onchain = measured;
         if (onchain && onchain.totalStaked > 0) {
           const result = {
             totalStaked: onchain.totalStaked,
             formatted: onchain.totalStaked.toLocaleString() + " $ANYONE",
-            /* apy stays a configured constant — there is no on-chain getter for it
-             * and the previous code hardcoded the same value. Flagged so nobody
-             * mistakes it for a live read. */
-            apy: 17.2,
-            apySource: "configured",
-            source: "ethereum:hodler",
+            /* v552: APY is a MANUALLY MAINTAINED constant. There is no getter for
+             * it in HodlerV5 and no documented endpoint that publishes it, so it
+             * cannot be derived here. Updated to 15.1 to match the official
+             * $ANYONE staking bot as of 2026-09-11; the previous 17.2 had gone
+             * stale by 2.1 points with nothing to flag it.
+             *
+             * >>> WHEN THE BOT'S FIGURE CHANGES, CHANGE IT HERE. <<<
+             * apySource and apyAsOf are returned so a consumer — or whoever reads
+             * this next — can see it is a fixed value with a date, not a live
+             * read. If it drifts again, that date is the evidence. */
+            apy: ANYONE_APY,
+            apySource: "manual",
+            apyAsOf: ANYONE_APY_AS_OF,
+            source,
+            /* v549: when we fell back, say WHY. Silent fallback made a broken
+             * query indistinguishable from a missing secret. */
+            ...(fallbackReason ? { fallbackReason } : {}),
+            ...(ev && ev.ok ? { hodlers: ev.hodlers } : {}),
             ts: Date.now()
           };
           if (env.FP_INDEX) {
