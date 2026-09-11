@@ -130,7 +130,119 @@ jobs:
           # `[ "$PREV_SRC" = "bitnodes" ]` was ALWAYS false. The fail-closed guard
           # added in the previous fix could therefore never fire: every primary miss
           # was free to clobber a perfectly good 27k-node snapshot with seeder data.
-          jq '. + {source: "bitnodes"}' /tmp/bitnodes-raw.json > /tmp/snapshot.json
+          #
+          # ─── 2026 FIX #6: GEOLOCATE THE SAMPLE ───────────────────────────────
+          # The btcnodes.io move was not just a redirect — the PAYLOAD SCHEMA
+          # changed. bitnodes.io shipped 14-element node arrays with geo baked in:
+          #   [0]proto [1]user-agent [2]last-seen [3]services [4]height [5]host
+          #   [6]port  [7]country    [8]lat       [9]lon      [10]tz    [11]asn
+          #   [12]org  [13]city
+          # btcnodes.io ships FIVE elements and no geography at all:
+          #   [70016, "/Satoshi:27.0.0/", 1789110182, 3077, 0]
+          #
+          # The AnyoneMap worker filters on `if (n[8] && n[9] && n[7])` — lat, lon,
+          # country. On a 5-element array those are all undefined, so every one of
+          # the ~26k nodes was skipped, the reduced sample came out empty, and the
+          # cron bailed before writing KV. Net effect: fix #0 restored the FEED but
+          # the /bitcoin panel stayed frozen on June data, because the records no
+          # longer contained what the consumer reads. Confirmed by the worker's
+          # cron heartbeat: trigger alive, lastRun ticking every 30 min,
+          # lastSuccess null.
+          #
+          # btcnodes.io has no per-node geo to ask for. ?field=coordinates returns
+          # a flat unkeyed [lat,lon] list; every other ?field= value silently
+          # returns the default shape; the leaderboard endpoint carries country and
+          # ASN but no coordinates. So the mirror enriches it here.
+          #
+          # We geolocate a SAMPLE, not all 26k. The worker displays ~200 stratified
+          # nodes, so 500 is comfortably more than it needs: 5 ip-api batches of
+          # 100, a few seconds, well inside the ~15-batch-per-minute free limit
+          # (x-rl header confirms 14 remaining after one batch). Geolocating the
+          # full set would be ~266 batches and six minutes of wall time for data
+          # nobody renders.
+          #
+          # TRADE-OFF, stated plainly: the worker's stratification now runs over a
+          # random 500 rather than the full 26k. For a 200-node display sample the
+          # geographic spread is comparable, but it is a real reduction in rigour.
+          # And ip-api.com is now a dependency on the PRIMARY path, not just the
+          # fallback — free tier, unauthenticated, HTTP-only, rate-limited per IP
+          # on shared GitHub runner IPs. At 5 batches x 8 runs/day there is ample
+          # headroom, but it is a new way for the panel to go stale. If it fails we
+          # emit ok=false and the existing fail-closed logic preserves last-good.
+          SAMPLE=500
+          jq -r '.nodes | keys_unsorted[]' /tmp/bitnodes-raw.json \
+            | grep -oE '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+' \
+            | shuf --random-source=<(yes) -n "$SAMPLE" > /tmp/sample-ips.txt
+          SAMPLE_COUNT=$(wc -l < /tmp/sample-ips.txt)
+          echo "Geolocating $SAMPLE_COUNT sampled IPs via ip-api.com..."
+
+          > /tmp/geo-all.json
+          split -l 100 /tmp/sample-ips.txt /tmp/ipchunk-
+          GEO_OK=0
+          for chunk in /tmp/ipchunk-*; do
+            jq -R -s 'split("\n") | map(select(length > 0)) |
+                      map({query: ., fields: "status,query,country,countryCode,city,lat,lon,org,as,isp"})' \
+              "$chunk" > /tmp/geo-req.json
+            GS=$(curl -sS -o /tmp/geo-res.json -w '%{http_code}' -X POST \
+                   -H 'Content-Type: application/json' --max-time 30 \
+                   -d @/tmp/geo-req.json 'http://ip-api.com/batch' || echo 000)
+            if [ "$GS" != "200" ]; then
+              echo "::warning::ip-api.com returned HTTP $GS for a batch; continuing"
+              continue
+            fi
+            jq -c '.[] | select(.status == "success")' /tmp/geo-res.json >> /tmp/geo-all.json
+            GEO_OK=$(wc -l < /tmp/geo-all.json)
+            # Stay under the per-minute limit even if the sample grows later.
+            sleep 5
+          done
+          echo "Geolocated $GEO_OK of $SAMPLE_COUNT sampled nodes"
+
+          # Fail closed rather than commit a snapshot the worker will discard.
+          if [ "$GEO_OK" -lt 100 ]; then
+            echo "::warning::only $GEO_OK nodes geolocated — not enough for a useful map sample"
+            echo "ok=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # Re-emit in the 14-element schema the worker parses. Indices must match
+          # its comment block exactly: [7]=country [8]=lat [9]=lon [13]=city.
+          # total_nodes/latest_height/timestamp stay from the real upstream, so the
+          # headline count remains the true network size (~26k) even though the
+          # node sample is 500.
+          jq -s --argjson meta "$(jq '{timestamp, total_nodes, latest_height}' /tmp/bitnodes-raw.json)" '
+            {
+              timestamp: $meta.timestamp,
+              total_nodes: $meta.total_nodes,
+              latest_height: $meta.latest_height,
+              source: "bitnodes",
+              sampled_nodes: length,
+              nodes: (
+                reduce .[] as $n ({};
+                  . + {
+                    ($n.query + ":8333"): [
+                      70016,
+                      "/Satoshi:unknown/",
+                      $meta.timestamp,
+                      1033,
+                      $meta.latest_height,
+                      $n.query,
+                      8333,
+                      $n.countryCode,
+                      $n.lat,
+                      $n.lon,
+                      0,
+                      0,
+                      ($n.org // $n.isp // ""),
+                      ($n.city // "")
+                    ]
+                  }
+                )
+              )
+            }
+          ' /tmp/geo-all.json > /tmp/snapshot.json
+
+          FINAL=$(jq '.nodes | length' /tmp/snapshot.json)
+          echo "Snapshot: $FINAL geolocated nodes, total_nodes=$TOTAL (real network size)"
 
       # ─── Decide whether the fallback may run ─────────────────────────
       # Fail-closed: if we already have a fresh (<24h) bitnodes-sourced
