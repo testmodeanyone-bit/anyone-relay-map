@@ -3785,6 +3785,69 @@ async function _atomicIncrCounter(env, key, ttlSeconds) {
   }
 }
 
+/* v545: atomic SLIDING-window rate limiting.
+ *
+ * WHY THIS EXISTS. _rlExceeded (below) is a FIXED window — the D1 row's
+ * expires_at resets the count wholesale, so an attacker who exhausts a limit
+ * gets a full fresh budget the instant the hour rolls over. That is fine for
+ * cost limiters, where the only question is calls-per-hour. It is NOT
+ * equivalent for brute-force gates: login-rl, login-nick-rl, register-rl,
+ * guest-rl and ban-check-rl all deliberately used a SLIDING window
+ * (`if (Date.now() - rl.ts > WINDOW) rl.count = 0`), and swapping them to fixed
+ * would change when an attacker's budget resets.
+ *
+ * That left those five stuck: racy (a parallel burst of password guesses counts
+ * as ~one attempt, because N requests all read the same count and all write
+ * count+1) but not safely convertible. This removes the dilemma rather than
+ * forcing a choice between atomicity and correct window semantics.
+ *
+ * HOW. The standard two-bucket sliding-window counter. Time is divided into
+ * fixed buckets of WINDOW length; we keep the current bucket's exact count and
+ * the previous bucket's, then estimate the trailing-window total by weighting
+ * the previous bucket by how much of it still falls inside the window:
+ *
+ *     estimate = prev * (1 - elapsedInCurrent / WINDOW) + current
+ *
+ * Each increment is a single atomic UPSERT on the current bucket's own row, so
+ * it inherits _atomicIncrCounter's concurrency guarantee. The previous bucket is
+ * a plain read — it is immutable by then, so no race.
+ *
+ * ACCURACY. This is an approximation, and knowingly so: it assumes requests are
+ * spread evenly within the previous bucket. Worst case it over-counts by up to
+ * the previous bucket's total when traffic was front-loaded, which fails SAFE
+ * for a security gate (rejects slightly early, never late). Exact sliding would
+ * need a timestamp list per key — more storage and more round trips for accuracy
+ * a brute-force limiter does not need.
+ *
+ * Returns true when the caller is OVER the limit. Fails OPEN when D1 is
+ * unavailable, matching _rlExceeded and the existing login limiter: a D1 blip
+ * must not lock every user out of authentication. */
+async function _rlExceededSliding(env, key, limit, windowSeconds) {
+  if (!env.USER_DB) return false;
+  if (typeof key !== "string" || !key) return false;
+  const windowMs = windowSeconds * 1e3;
+  const now = Date.now();
+  const bucket = Math.floor(now / windowMs);
+  const elapsedInBucket = now - bucket * windowMs;
+
+  /* Rows live two buckets so the previous one is still readable; anything older
+   * is irrelevant to the estimate. */
+  const ttlSeconds = windowSeconds * 2 + 60;
+  const current = await _atomicIncrCounter(env, `${key}|${bucket}`, ttlSeconds);
+  if (current === null) return false;            // D1 unavailable -> fail open
+
+  let prev = 0;
+  try {
+    const row = await env.USER_DB.prepare(
+      "SELECT count, expires_at FROM counters WHERE key = ?1"
+    ).bind(`${key}|${bucket - 1}`).first();
+    if (row && row.expires_at > now) prev = row.count || 0;
+  } catch (_) { /* treat a missing previous bucket as zero */ }
+
+  const estimate = prev * (1 - elapsedInBucket / windowMs) + current;
+  return estimate > limit;
+}
+
 /* v532: single entry point for fixed-window rate limiting.
  *
  * Every rate-limited route in this file used the same read-modify-write shape:
@@ -8087,27 +8150,30 @@ I confirm I control this wallet.`;
           return false;
         })();
         if (!magicOK) return cors(JSON.stringify({ ok: false, error: "Image content does not match declared type" }), 400);
-        const imgNow = Date.now();
-        /* Per-wallet rate limit (existing). */
-        const imgRK = `img-rl:${imgWh.slice(0, 16)}`;
-        const stored = await env.FP_INDEX.get(imgRK, { type: "json" }).catch(() => null);
-        let bucket = stored && imgNow - stored.windowStart < 6e4 ? stored : { count: 0, windowStart: imgNow };
-        if (bucket.count >= 2) {
+        /* v545: both image limiters are now atomic via _rlExceededSliding.
+         *
+         * These are cost paths — the route's own comment below says each Anthropic
+         * vision call costs real money — and they were still the read-modify-write
+         * shape: N concurrent uploads all read the same count and all wrote
+         * count+1, so a parallel burst registered as one upload against a 2-per-
+         * minute cap.
+         *
+         * v534 skipped them deliberately: they use a SLIDING window
+         * (`imgNow - stored.windowStart < 6e4`) and _rlExceeded is fixed-window,
+         * so converting would have changed when the budget resets. That is no
+         * longer a trade-off — _rlExceededSliding keeps sliding semantics AND is
+         * atomic, so these convert without changing behaviour except to actually
+         * enforce the limit under concurrency. */
+        const imgWhKey = `img-rl:${imgWh.slice(0, 16)}`;
+        if (await _rlExceededSliding(env, imgWhKey, 2, 60)) {
           return cors(JSON.stringify({ ok: false, error: "Image rate limit \u2014 max 2 uploads per minute.", rateLimit: true }), 429);
         }
-        bucket.count++;
-        ctx.waitUntil(env.FP_INDEX.put(imgRK, JSON.stringify(bucket), { expirationTtl: 120 }).catch(() => {}));
         /* v20: per-IP rate limit so a single attacker can't burn quota by churning
          * wallets. Each Anthropic vision call costs real money. */
         const imgIp = request.headers.get("CF-Connecting-IP") || "unknown";
-        const ipRK = `img-ip-rl:${imgIp}`;
-        const ipStored = await env.FP_INDEX.get(ipRK, { type: "json" }).catch(() => null);
-        let ipBucket = ipStored && imgNow - ipStored.windowStart < 600000 ? ipStored : { count: 0, windowStart: imgNow };
-        if (ipBucket.count >= 5) {
+        if (await _rlExceededSliding(env, `img-ip-rl:${imgIp}`, 5, 600)) {
           return cors(JSON.stringify({ ok: false, error: "Image rate limit \u2014 5 per 10 minutes per IP.", rateLimit: true }), 429);
         }
-        ipBucket.count++;
-        ctx.waitUntil(env.FP_INDEX.put(ipRK, JSON.stringify(ipBucket), { expirationTtl: 700 }).catch(() => {}));
         if (!env.ANTHROPIC_KEY) {
           return cors(JSON.stringify({ ok: false, error: "Image moderation not configured. Upload disabled." }), 503);
         }
