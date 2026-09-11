@@ -7028,7 +7028,15 @@ var worker_source_default = {
          * the pinned Haiku model that is well under a cent per call, and the
          * per-IP request limits above are unchanged. Revisit if the pinned model
          * changes to a more expensive one. */
-        if (_aiInputChars > 40000) {
+        /* v540: back down from 40000. v531 raised the cap specifically to fit the
+         * client-built prompt, which was ~26k chars of knowledge-base dumped from
+         * the SPA. v537 replaced that with the server-side prompt registry, and
+         * the assistant prompt is now 6,369 chars (moderation ~1.3-1.5k). The
+         * reason for the higher ceiling is gone, so restore the tighter cost
+         * bound: 24000 leaves ~17k for the capped 20-message history, which is
+         * ample, while keeping a single request from running away with input
+         * tokens on our key. */
+        if (_aiInputChars > 24000) {
           return cors(JSON.stringify({ error: { message: "Request too large" } }), 400);
         }
         const anthropicRes = await fetch("https://api.anthropic.com/v1/messages", {
