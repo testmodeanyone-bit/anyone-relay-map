@@ -1,4 +1,28 @@
 /* ============================================================================
+ * anyonemap-worker.js — AUTO-GENERATED. DO NOT EDIT BY HAND.
+ * ============================================================================
+ *
+ * This file is the deployable Cloudflare Worker. It is built from:
+ *   - worker-shell.js  (worker logic and request handlers)
+ *   - kv-schema.js     (shared cross-worker KV schema and validators)
+ *   - index.html       (the SPA — HTML+CSS+JS in one document)
+ *
+ * To make a change:
+ *   1. Edit worker-shell.js, kv-schema.js, OR index.html
+ *   2. Run: node scripts/build-worker.js worker-shell.js kv-schema.js index.html anyonemap-worker.js
+ *      (Auto-bumps WORKER_VERSION. Pass --no-bump for a build that keeps the
+ *      current version — required when verifying that the committed output
+ *      matches a fresh build of the sources.)
+ *   3. Commit the result of step 2 alongside the source change
+ *
+ * CI verifies that this file matches the build output of the sources on
+ * every push/PR. Direct edits will be rejected by CI.
+ *
+ * Deploy by pasting this entire file into the Cloudflare Workers dashboard.
+ * ============================================================================
+ */
+
+/* ============================================================================
  * worker-shell.js — anyonemap worker logic (without the SPA)
  * ============================================================================
  *
@@ -34,14 +58,14 @@
  * on next page navigation, which deletes the old cache (the activate
  * handler filters keys !== CACHE) and re-precaches STATIC against the
  * current worker. Bump per release. */
-const WORKER_VERSION = 'v556';
+const WORKER_VERSION = 'v560';
 
 /* v410: shared cross-worker KV schema. Inlined at build time from kv-schema.js
  * (single source of truth). Exposes _kvSchema.validate(obj, schema, opts) and
  * _kvSchema.extract(obj, schema). The placeholder below is the contract that
  * build-worker.js fills — if you edit this file by hand and remove the
  * placeholder, the build will fail with a clear error. */
-const _kvSchema = (function(){ var module = undefined;
+const _kvSchema = (function() {
 /* ============================================================================
  * kv-schema.js — shared schema for AnyoneMap KV writes
  * ============================================================================
@@ -234,22 +258,8 @@ function extract(obj, schema) {
   return out;
 }
 
-/* Module exports — both workers will rebind these to local names when inlined.
- * In CommonJS context (Node tests, build scripts), this binds to module.exports.
- * In the inlined worker context, the build script wraps everything in an IIFE
- * that returns this same object literal.
- */
-if (typeof module !== 'undefined' && module.exports) {
-  module.exports = {
-    SCHEMA_VERSION,
-    SNAPSHOT_KEY,
-    EXIT_RELAYS_LATEST,
-    validate,
-    extract
-  };
-}
 
-return { SCHEMA_VERSION: SCHEMA_VERSION, SNAPSHOT_KEY: SNAPSHOT_KEY, EXIT_RELAYS_LATEST: EXIT_RELAYS_LATEST, validate: validate, extract: extract };
+  return { SCHEMA_VERSION, SNAPSHOT_KEY, EXIT_RELAYS_LATEST, validate, extract };
 })();
 
 
