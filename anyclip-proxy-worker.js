@@ -3137,6 +3137,65 @@ function parseModerationVerdict(task, modelText) {
 }
 
 // === END ANYCLIP_PROMPTS_INLINE ===
+/* v547: staking moved to Ethereum. Anyone's own docs (docs.anyone.io, "Tracking"
+ * reference) state that staked balances live in the HodlerV5 contract on Ethereum
+ * Mainnet, not in the AO registry. The AO path this replaces never measured
+ * staking at all — it did `registeredFps * 977`, a hardcoded per-relay estimate —
+ * so the number was wrong even while the CU was healthy. The CU outage merely
+ * froze a wrong estimate in place.
+ *
+ * Reading the token balance held by the Hodler contract is the closest
+ * network-wide figure available: the docs only document getStake(address) for
+ * per-wallet queries, and there is no documented aggregate getter. Verified
+ * 2026-09-11: 13,118,209 ANYONE, against the 0.1M the map was showing.
+ *
+ * CAVEAT worth keeping: the docs note staked tokens exclude balances that are
+ * unstaked and in cooldown. If those remain in the contract they are counted
+ * here, so this can read slightly high. Compare against the staking bot before
+ * treating it as exact. */
+var ANYONE_TOKEN_ADDR = "0xFeAc2Eae96899709a43E252B6B92971D32F9C0F9";
+var HODLER_ADDR = "0x0d9a1ca7bc756ae009672db626cde3c9bef583ef";
+/* balanceOf(address) selector + 32-byte left-padded Hodler address. */
+var HODLER_BALANCE_CALLDATA = "0x70a08231" + "0".repeat(24) + HODLER_ADDR.slice(2).toLowerCase();
+/* Several public endpoints, tried in order. llamarpc and cloudflare-eth both
+ * returned 403 from a datacentre IP during testing, so they are not first.
+ * A keyed provider would be better for production — these can rate-limit
+ * without warning. */
+var ETH_RPCS = [
+  "https://ethereum-rpc.publicnode.com",
+  "https://eth.drpc.org",
+  "https://rpc.flashbots.net",
+  "https://1rpc.io/eth"
+];
+
+async function fetchTotalStakedOnchain() {
+  for (const rpc of ETH_RPCS) {
+    try {
+      const r = await fetch(rpc, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        signal: AbortSignal.timeout(8e3),
+        body: JSON.stringify({
+          jsonrpc: "2.0", id: 1, method: "eth_call",
+          params: [{ to: ANYONE_TOKEN_ADDR, data: HODLER_BALANCE_CALLDATA }, "latest"]
+        })
+      });
+      if (!r.ok) continue;
+      const j = await r.json();
+      const hex = j && j.result;
+      if (typeof hex !== "string" || hex === "0x" || hex.length < 3) continue;
+      /* 18 decimals, and the value exceeds Number.MAX_SAFE_INTEGER in wei, so do
+       * the division in BigInt and only then convert. */
+      const wei = BigInt(hex);
+      if (wei <= 0n) continue;
+      const whole = Number(wei / 10n ** 18n);
+      if (!isFinite(whole) || whole <= 0) continue;
+      return { totalStaked: whole, rpc };
+    } catch (_) { /* try the next endpoint */ }
+  }
+  return null;
+}
+
 var AO_CU_BASE = "https://cu.anyone.tech";
 var AO_REGISTRY_ID = "W5XIwvQ6pJBtL_Hhvx9KH4fj4LNoyHDLtbAILMM_lCs";
 var AO_CU = `${AO_CU_BASE}/dry-run?process-id=${AO_REGISTRY_ID}`;
@@ -5938,52 +5997,38 @@ var worker_source_default = {
         }
       }
       try {
-        /* v530: was an inline cu.anyone.tech literal and a local re-declaration of
-         * the registry id; both now come from the module constants. The 10s timeout
-         * matches fetchHardwareFPs — without it a hanging CU could block this route
-         * for the whole request budget. */
-        const aoRes = await fetch(`${AO_CU_BASE}/dry-run?process-id=${AO_REGISTRY_ID}`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          signal: AbortSignal.timeout(10e3),
-          body: JSON.stringify({
-            Id: "1234",
-            Target: AO_REGISTRY_ID,
-            Owner: "1234",
-            Anchor: "0",
-            Data: "1234",
-            Tags: [
-              { name: "Action", value: "Info" },
-              { name: "Data-Protocol", value: "ao" },
-              { name: "Type", value: "Message" },
-              { name: "Variant", value: "ao.TN.1" }
-            ]
-          })
-        });
-        if (aoRes.ok) {
-          const aoData = await aoRes.json();
-          const info = JSON.parse(aoData?.Messages?.[0]?.Data || "{}");
-          const registeredFps = info.total || info.claimed || 0;
-          if (registeredFps > 0) {
-            const totalStaked = Math.round(registeredFps * 977);
-            const result = {
-              totalStaked,
-              formatted: totalStaked.toLocaleString() + " $ANYONE",
-              registeredFps,
-              hardware: info.hardware || 0,
-              apy: 17.2,
-              ts: Date.now()
-            };
-            if (env.FP_INDEX) {
-              ctx.waitUntil(env.FP_INDEX.put("total_staked_v2", JSON.stringify(result), { expirationTtl: KV_TTL_SECS }).catch(() => {
-              }));
-            }
-            return new Response(JSON.stringify(result), {
-              headers: jsonHeaders({ "X-Cache": "MISS", "Cache-Control": "max-age=300" })
-            });
+        /* v547: read the real staked total from Ethereum instead of the AO
+         * registry. The previous implementation asked the AO CU for a relay count
+         * and multiplied it by 977 — a hardcoded per-relay guess, never a
+         * measurement. That is why the map showed 0.1M against an actual
+         * 13.12M. Staking lives in the HodlerV5 contract on Ethereum Mainnet per
+         * Anyone's own tracking docs; see fetchTotalStakedOnchain.
+         *
+         * The AO path is gone rather than kept as a fallback: serving a known-bad
+         * estimate when the chain is briefly unreachable is worse than serving
+         * the stale-but-real cached value, which is what tsFail already does. */
+        const onchain = await fetchTotalStakedOnchain();
+        if (onchain && onchain.totalStaked > 0) {
+          const result = {
+            totalStaked: onchain.totalStaked,
+            formatted: onchain.totalStaked.toLocaleString() + " $ANYONE",
+            /* apy stays a configured constant — there is no on-chain getter for it
+             * and the previous code hardcoded the same value. Flagged so nobody
+             * mistakes it for a live read. */
+            apy: 17.2,
+            apySource: "configured",
+            source: "ethereum:hodler",
+            ts: Date.now()
+          };
+          if (env.FP_INDEX) {
+            ctx.waitUntil(env.FP_INDEX.put("total_staked_v2", JSON.stringify(result), { expirationTtl: KV_TTL_SECS }).catch(() => {
+            }));
           }
+          return new Response(JSON.stringify(result), {
+            headers: jsonHeaders({ "X-Cache": "MISS", "Cache-Control": "max-age=300" })
+          });
         }
-        return tsFail(cached, "AO Registry unavailable");
+        return tsFail(cached, "Staking contract unreachable");
       } catch (err) {
         return tsFail(cached, "Upstream error");
       }
