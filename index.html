@@ -23795,39 +23795,20 @@ async function fetchStakingData(){
     }
   } catch(_){}
 
-  try {
-    const r = await fetch(AC_PROXY + '/api/exit-relays');
-    if(r.ok){
-      const d = await r.json();
-      const wallets = d.wallet_list ? d.wallet_list.length : 0;
-      if(wallets > 0){
-        const aoR = await fetch('https://cu.anyone.tech/dry-run?process-id=W5XIwvQ6pJBtL_Hhvx9KH4fj4LNoyHDLtbAILMM_lCs', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            Id: '1234', Target: 'W5XIwvQ6pJBtL_Hhvx9KH4fj4LNoyHDLtbAILMM_lCs',
-            Owner: '1234', Anchor: '0', Data: '1234',
-            Tags: [
-              { name: 'Action', value: 'Info' },
-              { name: 'Data-Protocol', value: 'ao' },
-              { name: 'Type', value: 'Message' },
-              { name: 'Variant', value: 'ao.TN.1' },
-            ],
-          }),
-        }).catch(() => null);
-        let registeredFps = 0;
-        if(aoR && aoR.ok){
-          const aoD = await aoR.json();
-          const info = JSON.parse(aoD?.Messages?.[0]?.Data || '{}');
-          registeredFps = info.total || info.claimed || 0;
-        }
-        const estimated = registeredFps > 0 ? Math.round(registeredFps * 975) : wallets * 100;
-        stakedEl.textContent = (estimated / 1e6).toFixed(1) + 'M';
-        stakedEl.title = estimated.toLocaleString() + ' $ANYONE (estimated)';
-        if(apyEl) apyEl.textContent = '17.2%';
-      }
-    }
-  } catch(_){}
+  /* v552 BUGFIX: the fallback that used to sit here INVENTED a number, and it is
+   * where the long-standing "0.1M" on the sidebar came from.
+   *
+   * It called the (long-dead) AO CU directly from the browser, and when that
+   * failed — which it has since July — fell back to `wallets * 100`. With 569
+   * wallets that is 56,900, rendered as "0.1M". Against a real 11,454,108 it was
+   * wrong by two orders of magnitude, displayed with no hint that it was a guess
+   * beyond a title attribute nobody hovers. It also hardcoded '17.2%' APY,
+   * shadowing whatever the server returned.
+   *
+   * Nothing replaces it. /api/total-staked now reads the chain and has its own
+   * KV cache with a stale fallback, so if it cannot answer, the honest display is
+   * the loading placeholder — not a fabricated figure. A blank is a question; a
+   * wrong number is an answer people act on. */
 }
 
 /* ══════════════════════════════════════════
