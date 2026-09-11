@@ -13425,6 +13425,27 @@ function _ovcRelayout(){
   ovc.classList.toggle('ovc-dockhl', hpOpen);
   ovc.classList.toggle('ovc-dockbr', domOpen && !hpOpen);
   ovc.classList.toggle('ovc-hidden', false);
+
+  /* v580: the AnyClip assistant is the other floating thing in this column, and
+   * at z-index 9999 it sits over everything — including the health panel, which
+   * is what the reported screenshot shows.
+   *
+   * The mechanism for this already existed and was never connected:
+   *
+   *     #anyclip{ position:fixed; right:24px; z-index:9999;
+   *               transition:right .25s cubic-bezier(.4,0,.2,1); }
+   *     #anyclip.domain-open{ right:624px; }
+   *
+   * `.domain-open` appears exactly once in the whole file — that rule. No JS ever
+   * added it, so the shift never happened and the transition never ran. Same
+   * shape as .ovc-hidden before v571.
+   *
+   * 624px clears BOTH columns (health occupies right:300-600, domains right:0-300),
+   * so one class covers either panel being open — the name is domain-specific but
+   * the geometry is not. Kept the existing class rather than adding a second one:
+   * a new rule would mean two sources of truth for the same offset. */
+  const acw = document.getElementById('anyclip');
+  if (acw) acw.classList.toggle('domain-open', domOpen || hpOpen);
 }
 
 function toggleDomainPanel(){
