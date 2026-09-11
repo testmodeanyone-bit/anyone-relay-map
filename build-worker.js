@@ -41,6 +41,38 @@ if (noLint) {
   }
 }
 
+/* ---- SYNTAX GATE ---------------------------------------------------------
+ * Block the build if any inline <script> in the SPA fails to parse.
+ *
+ * Added after a CSS insert landed inside a JS comment block: its closing
+ * marker terminated the comment early, leaving a bare @media rule as
+ * JavaScript. That produced "SyntaxError: Invalid or unexpected token", which
+ * killed the whole script block and cascaded into "AC is not defined" and
+ * "dismissOnboarding is not defined". The map shipped with a blank canvas,
+ * every counter on em-dash, a stopped clock and a ticker stuck on LOADING.
+ *
+ * Neither existing gate could see it, and not by accident:
+ *   - `node --check` on the BUILT worker passes, because the SPA is embedded as
+ *     a string literal. A syntax error inside it is just an odd-looking string.
+ *   - lint-xss.js looks for HTML sinks, not syntax.
+ * Both were green on a build that could not run.
+ *
+ * Deliberately NOT skipped by --no-lint. That flag is an emergency override for
+ * POLICY findings, where a human can weigh the risk. Shipping a file that does
+ * not parse is never a judgement call, so this gate has no override. */
+const syntaxGate = path.join(__dirname, 'check-scripts.mjs');
+if (!fs.existsSync(syntaxGate)) {
+  console.error('\x1b[33m⚠  check-scripts.mjs not found beside build-worker.js — syntax gate NOT enforced.\x1b[0m');
+} else {
+  try {
+    execFileSync(process.execPath, [syntaxGate, indexPath], { stdio: 'inherit' });
+  } catch (_) {
+    console.error('\x1b[31mFATAL: SPA syntax gate failed — build aborted, no artifact written.\x1b[0m');
+    console.error('An inline <script> in ' + indexPath + ' does not parse. Fix it; there is no override.');
+    process.exit(6);
+  }
+}
+
 let shell = fs.readFileSync(shellPath, 'utf8');
 const kv = fs.readFileSync(kvPath, 'utf8');
 const index = fs.readFileSync(indexPath, 'utf8');
