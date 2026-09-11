@@ -5458,6 +5458,86 @@ var ENRICH_NONWALLET_KEY = "enriched_nonwallet_v1";
 var ENRICH_CURSOR_KEY = "enriched_nonwallet_cursor";
 var ENRICH_SLICE = 120;     // relays per tick (~2.5 min at conc 3)
 var ENRICH_CONC = 3;        // sustainable upstream concurrency (measured)
+/* v543: incremental wallet-ips cache warming.
+ *
+ * THE PROBLEM. buildAndStoreIndex fans out to ~637 wallets. Measured 2026-09-11:
+ * 127 of them time out (dropRate 0.249), which marks the index `partial: true`,
+ * which makes storeSnapshot correctly refuse to write a growth snapshot. The
+ * series has been frozen since 2026-09-07 as a result.
+ *
+ * v536 gave /api/wallet-ips a KV cache with a stale fallback, which fixes the
+ * timeouts — but only for a build that COMPLETES. The index has not rebuilt once
+ * in four days: STALE_MS is 55 min so a rebuild fires on nearly every request,
+ * and each one is killed before finishing (the last successful build reported
+ * elapsed 856). Chicken and egg — the cache that would make the build fast can
+ * only be filled by a build that finishes.
+ *
+ * THE FIX. Stop asking one invocation to do all the work. This warms a SLICE of
+ * wallets per cron tick, exactly like warmNonWalletEnrichment above: cursor in
+ * KV, low concurrency, fire-and-forget. Each tick populates a few dozen
+ * wallet-ips entries; after a few ticks the next real build reads most wallets
+ * from KV instead of the flaky upstream and finishes inside its budget.
+ *
+ * Deliberately reuses the v536 route cache (same `wallet-ips:<addr>` keys, same
+ * shape) rather than a parallel store — one cache, one source of truth, and the
+ * route's stale fallback benefits from the warmth too.
+ *
+ * Sized to stay well inside a tick: WALLET_WARM_SLICE x the 10s per-wallet
+ * timeout at WALLET_WARM_CONC gives a worst case around 2 minutes, and it is in
+ * waitUntil alongside the existing warms. */
+var WALLET_WARM_CURSOR_KEY = "wallet_ips_warm_cursor";
+var WALLET_WARM_SLICE = 40;   // wallets per tick
+var WALLET_WARM_CONC = 3;     // matches ENRICH_CONC — the measured sustainable rate
+
+async function warmWalletIpsCache(env) {
+  if (!env.FP_INDEX) return;
+  /* The wallet list comes from the same place buildAndStoreIndex gets it, so the
+   * warm set and the build set cannot drift. */
+  let wallets = null;
+  try {
+    const snap = await env.FP_INDEX.get(SNAPSHOT_KEY, { type: "json" });
+    if (snap && Array.isArray(snap.wallet_list)) wallets = snap.wallet_list;
+  } catch (_) {}
+  if (!wallets || !wallets.length) { console.log("[warm-wallet-ips] no wallet_list yet — skip"); return; }
+  wallets = wallets.slice().sort();   // stable order so the cursor means something
+
+  let cursor = 0;
+  try { const c = await env.FP_INDEX.get(WALLET_WARM_CURSOR_KEY); if (c) cursor = parseInt(c, 10) || 0; } catch (_) {}
+  if (cursor >= wallets.length) cursor = 0;
+
+  const slice = wallets.slice(cursor, cursor + WALLET_WARM_SLICE);
+  let warmed = 0, skipped = 0, failed = 0;
+  for (let i = 0; i < slice.length; i += WALLET_WARM_CONC) {
+    const batch = slice.slice(i, i + WALLET_WARM_CONC);
+    await Promise.all(batch.map(async (wallet) => {
+      if (typeof wallet !== "string" || !/^0x[a-fA-F0-9]{40}$/.test(wallet)) { skipped++; return; }
+      const key = `wallet-ips:${wallet.toLowerCase()}`;
+      /* Don't spend an upstream fetch on something already fresh — the whole
+       * point is to reduce load, not add a second source of it. */
+      try {
+        const c = await env.FP_INDEX.get(key, { type: "json" });
+        if (c && Array.isArray(c.relays) && (Date.now() - (c.builtAt || 0)) < 30 * 60 * 1e3) { skipped++; return; }
+      } catch (_) {}
+      try {
+        const r = await fetch(`${IPS_BASE}${encodeURIComponent(wallet)}`, { signal: AbortSignal.timeout(10e3) });
+        if (!r.ok) { failed++; return; }
+        const data = await r.json();
+        const relays = (data.ips || []).map((x) => ({
+          fp: x.fingerprint, n: x.descriptor_nickname, ip: x.ip,
+          cc: x.country_code, co: x.country, bw: x.bandwidth,
+          up: x.uptime_seconds, cw: x.consensus_weight, fl: x.flags,
+          ic: x.in_consensus, hw: x.ao_is_hardware, lm: x.ao_location_multiplier, fm: x.ao_family_multiplier
+        }));
+        await env.FP_INDEX.put(key, JSON.stringify({ relays, builtAt: Date.now() }), { expirationTtl: KV_TTL_SECS });
+        warmed++;
+      } catch (_) { failed++; }
+    }));
+  }
+  const nextCursor = (cursor + WALLET_WARM_SLICE >= wallets.length) ? 0 : cursor + WALLET_WARM_SLICE;
+  try { await env.FP_INDEX.put(WALLET_WARM_CURSOR_KEY, String(nextCursor), { expirationTtl: 86400 }); } catch (_) {}
+  console.log(`[warm-wallet-ips] cursor ${cursor}/${wallets.length} slice ${slice.length}: warmed ${warmed}, already-fresh ${skipped}, failed ${failed} -> next ${nextCursor}`);
+}
+
 async function warmNonWalletEnrichment(env) {
   if (!env.FP_INDEX) return;
   // 1. gap set = registry fps not present in the wallet-scoped all-uptimes set
@@ -11759,6 +11839,9 @@ Issued: ${(/* @__PURE__ */ new Date()).toISOString()}
     /* Incremental non-wallet enrichment: one slice per tick (cursor-based). Fire-
      * and-forget; a failure here must not affect snapshot/registry/uptimes warms. */
     ctx.waitUntil(warmNonWalletEnrichment(env).then(() => recordCronOutcome(env, "enrich", true)).catch(e => { console.warn("[cron] non-wallet enrich failed:", e.message); return recordCronOutcome(env, "enrich", false, e.message); }));
+    /* v543: warm a slice of wallet-ips per tick so the next fp-index build reads
+     * from KV instead of the flaky upstream. See warmWalletIpsCache. */
+    ctx.waitUntil(warmWalletIpsCache(env).then(() => recordCronOutcome(env, "walletwarm", true)).catch(e => { console.warn("[cron] wallet-ips warm failed:", e.message); return recordCronOutcome(env, "walletwarm", false, e.message); }));
     /* v57 FIX: warm fp-index on the cron. Previously NOTHING warmed fp-index —
      * it was (re)built only by organic cache-MISS traffic, and combined with the
      * old 1h TTL a transient upstream slowdown evicted the only copy and blanked
@@ -11958,6 +12041,35 @@ async function buildAndStoreIndex(env) {
    * silently overwrite a good cache. */
   async function fetchWalletIps(wallet, attempt) {
     attempt = attempt || 1;
+    /* v543: read the shared wallet-ips cache FIRST.
+     *
+     * This function had its own direct IPS_BASE fetch and never touched the cache
+     * the /api/wallet-ips route writes (v536) — so a warm cache did nothing for the
+     * build, which is the only consumer whose failures matter. 127 of ~637 wallets
+     * time out here, that marks the index partial, and storeSnapshot then refuses
+     * to write a growth snapshot.
+     *
+     * A cached entry is used when it exists at all, not only when it is fresh: a
+     * wallet's relay set moves slowly, and a slightly old answer is strictly better
+     * than the timeout it replaces — a timeout drops the wallet from the index
+     * entirely. Freshness is maintained separately by warmWalletIpsCache on the
+     * cron and by organic route traffic. */
+    if (attempt === 1 && env.FP_INDEX) {
+      try {
+        const c = await env.FP_INDEX.get(`wallet-ips:${String(wallet).toLowerCase()}`, { type: "json" });
+        if (c && Array.isArray(c.relays)) {
+          /* The cache stores the mapped shape; the build wants the upstream shape.
+           * Map back so the caller below is unchanged. */
+          return { ok: true, wallet, cached: true, ips: c.relays.map((x) => ({
+            fingerprint: x.fp, descriptor_nickname: x.n, ip: x.ip,
+            country_code: x.cc, country: x.co, bandwidth: x.bw,
+            uptime_seconds: x.up, consensus_weight: x.cw, flags: x.fl,
+            in_consensus: x.ic, ao_is_hardware: x.hw,
+            ao_location_multiplier: x.lm, ao_family_multiplier: x.fm
+          })) };
+        }
+      } catch (_) {}
+    }
     try {
       const r = await fetch(`${IPS_BASE}${encodeURIComponent(wallet)}`, { signal: AbortSignal.timeout(8e3) });
       if (!r.ok) {
@@ -11968,6 +12080,29 @@ async function buildAndStoreIndex(env) {
         return { ok: false, wallet, reason: "http_" + r.status };
       }
       const d = await r.json();
+      /* v543: write back, so every wallet this build successfully fetches is one
+       * the NEXT build gets for free. Combined with the cron warmer this converges
+       * on a fully-cached set even though no single invocation can fetch them all.
+       * Fire-and-forget — a KV write failure must not fail the wallet. */
+      /* No ctx here — buildAndStoreIndex(env) takes no execution context, and
+       * referencing an undeclared `ctx` would throw ReferenceError on every
+       * successful wallet fetch. Fire-and-forget with a catch instead: the build
+       * runs for a while after this point, so the write has ample time to land,
+       * and a lost write only costs the next build one cache miss. */
+      if (env.FP_INDEX) {
+        const mapped = (d.ips || []).map((x) => ({
+          fp: x.fingerprint, n: x.descriptor_nickname, ip: x.ip,
+          cc: x.country_code, co: x.country, bw: x.bandwidth,
+          up: x.uptime_seconds, cw: x.consensus_weight, fl: x.flags,
+          ic: x.in_consensus, hw: x.ao_is_hardware,
+          lm: x.ao_location_multiplier, fm: x.ao_family_multiplier
+        }));
+        env.FP_INDEX.put(
+          `wallet-ips:${String(wallet).toLowerCase()}`,
+          JSON.stringify({ relays: mapped, builtAt: Date.now() }),
+          { expirationTtl: KV_TTL_SECS }
+        ).catch(() => {});
+      }
       return { ok: true, wallet, ips: d.ips || [] };
     } catch (e) {
       if (attempt < 3) {
