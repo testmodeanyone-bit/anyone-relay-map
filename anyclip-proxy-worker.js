@@ -9285,15 +9285,30 @@ I confirm I control this wallet.`;
           const modSession = await env.FP_INDEX.get(`verified-session:${modWh}`, { type: "json" }).catch(() => null);
           const modTier = modSession && (modSession.tier === "hw" || modSession.tier === "op") ? modSession.tier : "guest";
           if (modTier !== "hw") {
+            /* v544: atomic. This is the FOURTH path that bills ANTHROPIC_KEY —
+             * /api/moderate makes a paid model call per message — and v532 missed
+             * it. That pass converted chat-rl, token-rl and ai-op as "the three
+             * that cost money", selected by grepping for chat/ai/token in the key
+             * name. This limiter is called mod-rl and lives in a different route,
+             * so it never surfaced. The right first step was enumerating every
+             * limiter and asking what each one guards, not pattern-matching names.
+             *
+             * The manual ts-based window is dropped: the D1 counter carries its own
+             * expires_at and resets itself. That makes this a FIXED hourly window
+             * rather than the sliding one it was. For a cost limiter the difference
+             * is immaterial — the ceiling per hour is the same — and it buys
+             * atomicity, which the sliding version never had: N concurrent requests
+             * all read the same count and all wrote count+1, so a parallel burst
+             * registered as one call.
+             *
+             * NOT applied to login-rl / login-nick-rl / register-rl, which are also
+             * still racy. Those are brute-force gates where moving from a sliding
+             * to a fixed window is a security-relevant timing change, and that
+             * decision has not been made yet. */
             const limit = modTier === "op" ? 30 : 20;
-            const rlKey = `mod-rl:${modWh.slice(0, 16)}`;
-            const rl = await env.FP_INDEX.get(rlKey, { type: "json" }).catch(() => null) || { count: 0, ts: Date.now() };
-            if (Date.now() - rl.ts > 3600000) { rl.count = 0; rl.ts = Date.now(); }
-            if (rl.count >= limit) {
+            if (await _rlExceeded(env, `mod-rl:${modWh.slice(0, 16)}`, limit, 3600)) {
               return cors(JSON.stringify({ allow: true, warn: false, ban: false, error: "Moderation rate limit reached" }), 429);
             }
-            rl.count++;
-            ctx.waitUntil(env.FP_INDEX.put(rlKey, JSON.stringify(rl), { expirationTtl: 3700 }).catch(() => {}));
           }
         }
         const body = await request.json();
