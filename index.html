@@ -887,7 +887,7 @@ function updateExploreCard(){
     return null;
   };
   // Relay count
-  var relayEl = pick('sR', 'stats-relays');
+  var relayEl = pick('sR');
   var exRelay = document.getElementById('ex-relay-count');
   if(relayEl && exRelay && relayEl.textContent.trim() !== '—'){
     exRelay.textContent = relayEl.textContent.trim();
@@ -900,13 +900,13 @@ function updateExploreCard(){
     if(grade && grade !== '—') exHealth.textContent = grade;
   }
   // Bandwidth
-  var bwEl = pick('sBW', 'stats-bw');
+  var bwEl = pick('sBW');
   var exBw = document.getElementById('ex-bw');
   if(bwEl && exBw && bwEl.textContent.trim() !== '—'){
     exBw.textContent = bwEl.textContent.trim();
   }
   // Countries
-  var countryEl = pick('rs-countries', 'stats-countries');
+  var countryEl = pick('rs-countries');
   var exCountries = document.getElementById('ex-countries');
   if(countryEl && exCountries && countryEl.textContent.trim() !== '—'){
     exCountries.textContent = countryEl.textContent.trim();
@@ -1037,7 +1037,7 @@ function tickerMakeClickable(){
   /* v556: was 'bottom-ticker'; the element's id is 'ticker'. The guard
    `if(!ticker) return;` turned that into a silent no-op, so the tappable
    ticker never attached its click handler. */
-  var ticker = document.getElementById('ticker') || document.getElementById('bottom-ticker');
+  var ticker = document.getElementById('ticker');
   if(!ticker) return;
   // Delegate clicks on ticker items
   if(ticker._clickAttached) return;
@@ -1100,7 +1100,7 @@ function tickerEnhanceItems(){
   /* v556: was 'bottom-ticker'; the element's id is 'ticker'. The guard
    `if(!ticker) return;` turned that into a silent no-op, so the tappable
    ticker never attached its click handler. */
-  var ticker = document.getElementById('ticker') || document.getElementById('bottom-ticker');
+  var ticker = document.getElementById('ticker');
   if(!ticker) return;
   // Find spans that contain relay info but aren't wrapped
   var spans = ticker.querySelectorAll('span:not(.ticker-item)');
@@ -1196,7 +1196,7 @@ function acApplyAriaLabels(){
     mapSvg.setAttribute('role', 'img');
     /* v555: same dead id as updateExploreCard. Reads sR now, and the fallback no
      * longer quotes the 7,500+ overcount. */
-    var relayCount = (document.getElementById('sR') || document.getElementById('stats-relays'))?.textContent || 'thousands of';
+    var relayCount = document.getElementById('sR')?.textContent || 'thousands of';
     mapSvg.setAttribute('aria-label', 'World map showing ' + relayCount + ' relay nodes in the Anyone Protocol network');
   }
 
@@ -9469,7 +9469,7 @@ function drawOceanLabels(){
     function syncAlertBadge() {
       /* v556: was 'hdr-alert-count'; the element's id is 'alert-badge'. Same silent
          no-op — the unread count never synced. */
-      var badge = document.getElementById('alert-badge') || document.getElementById('hdr-alert-count');
+      var badge = document.getElementById('alert-badge');
       if (!badge) return;
       var unread = document.querySelectorAll('.alert-item.unread').length;
       badge.textContent = unread > 0 ? unread : '';
@@ -17727,16 +17727,23 @@ function acPlayDimensionEntry(callback){
   var duration = 4500;
 
   // ═══ LIVE STATS — populate from current map data ═══
-  var sr = document.getElementById('stats-relays');
-  var sc = document.getElementById('stats-countries');
-  var sb = document.getElementById('stats-bw');
+  /* v557: same dead ids as updateExploreCard (v555) — stats-relays /
+   * stats-countries / stats-bw do not exist; the sidebar uses sR / rs-countries /
+   * sBW. All three lookups returned null, so this animation counted up to its
+   * hardcoded fallbacks (7500 relays, 60 countries, 78 GB/s) instead of to the
+   * real figures, every time. Those fallbacks are also the exit+guard+middle
+   * overcount, not a relay count. Now reads the live elements, and falls back to
+   * a dash rather than inventing a number. */
+  var sr = document.getElementById('sR');
+  var sc = document.getElementById('rs-countries');
+  var sb = document.getElementById('sBW');
   var sh = document.getElementById('sHW');
-  var relayTarget = parseInt((sr?.textContent||'7500').replace(/[^0-9]/g,'')) || 7500;
-  var countryTarget = parseInt((sc?.textContent||'60').replace(/[^0-9]/g,'')) || 60;
+  var relayTarget = parseInt((sr?.textContent||'0').replace(/[^0-9]/g,'')) || 0;
+  var countryTarget = parseInt((sc?.textContent||'0').replace(/[^0-9]/g,'')) || 0;
   document.getElementById('ac-dim-relays').textContent = '0';
   document.getElementById('ac-dim-countries').textContent = '0';
-  document.getElementById('ac-dim-bw').textContent = sb ? sb.textContent : '78 GB/s';
-  document.getElementById('ac-dim-hw').textContent = sh ? sh.textContent : '1,000+';
+  document.getElementById('ac-dim-bw').textContent = sb ? sb.textContent : '—';
+  document.getElementById('ac-dim-hw').textContent = sh ? sh.textContent : '—';
 
   // Sound removed — Apple HIG requires user consent for audio.
   // The visual animation stands on its own without sound.
