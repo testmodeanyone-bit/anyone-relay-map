@@ -6172,6 +6172,40 @@ var worker_source_default = {
           } catch (_) {
           }
         }
+        /* v553: STALE-WHILE-REVALIDATE. This is the fix for a real defect, not a
+         * tuning change.
+         *
+         * v551 made this route exact by summing every hodler's stakes — ~850
+         * eth_calls, measured at 62 SECONDS on a cache miss. The v551 comment
+         * claimed it "runs only behind the cache and on the cron, never inline for
+         * a visitor". Wrong: the cache FRONTS it, but whoever arrives first after
+         * the 30-minute window expires paid the full 62s inline. The client gives
+         * up at AbortSignal.timeout(8000), so that visitor saw NOTHING — a
+         * loading placeholder and no staking figure — while triggering a
+         * computation nobody consumed. Once every 30 minutes, by construction.
+         *
+         * Now a stale-but-real value is returned immediately and the refresh runs
+         * in waitUntil, after the response. The next visitor gets the fresh
+         * number. Same shape v530 already uses for /api/hw-relays; this route had
+         * the stale-on-ERROR half but not the stale-on-SLOW half. */
+        ctx.waitUntil((async () => {
+          try {
+            const bg = await fetchTotalStakedExact(env);
+            if (bg && bg.ok && bg.totalStaked > 0 && env.FP_INDEX) {
+              await env.FP_INDEX.put("total_staked_v2", JSON.stringify({
+                totalStaked: bg.totalStaked,
+                formatted: bg.totalStaked.toLocaleString() + " $ANYONE",
+                apy: ANYONE_APY,
+                apySource: "manual",
+                apyAsOf: ANYONE_APY_AS_OF,
+                source: "ethereum:stakes",
+                hodlers: bg.hodlers,
+                ts: Date.now()
+              }), { expirationTtl: KV_TTL_SECS });
+            }
+          } catch (_) { /* the cooldown key already guards against hammering */ }
+        })());
+        return tsStale(cached);
       }
       try {
         /* v547: read the real staked total from Ethereum instead of the AO
