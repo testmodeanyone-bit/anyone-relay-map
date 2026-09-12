@@ -25819,7 +25819,34 @@ function i18nApply(){
     }
   }
 
-  function walk(root){
+  /* v559: walk() used to do two very different jobs in one pass, and the second
+   * is the reason the root list below exists.
+   *
+   *   EXACT pass  — rewrites elements carrying data-i18n / -title / -aria /
+   *                 -placeholder. Touches only what someone deliberately marked,
+   *                 so it cannot affect anything else. Safe anywhere.
+   *
+   *   FUZZY pass  — a TreeWalker over EVERY text node, rewriting any whose
+   *                 trimmed content exactly equals a known UI string in ANY of
+   *                 the 15 languages. Untargeted by design: it is how "🟠 EXIT"
+   *                 in the legend translates without annotation.
+   *
+   * Fusing them meant the fuzzy pass's containment requirement dictated the
+   * exact pass's reach — so a new panel stayed English until someone remembered
+   * to add it to the root list, with no error when they forgot. That is the bug
+   * reported against the map-mode panel (v558).
+   *
+   * Split, each gets the scope it actually needs:
+   *   i18nExact  runs over the whole document — a new panel with data-i18n
+   *              translates by default, nothing to remember.
+   *   i18nFuzzy  stays restricted to the named UI roots, because run document-wide
+   *              it would rewrite chat messages, relay nicknames, ISP names and
+   *              .anyone domains that happen to equal a UI word. Chat is
+   *              user-controlled, so that is reachable, not hypothetical.
+   *
+   * walk() is kept as the pair applied together, so existing call sites are
+   * unchanged. */
+  function i18nExact(root){
     if(!root) return;
     root.querySelectorAll('[data-i18n]').forEach(el => {
       if(t[el.dataset.i18n]) el.textContent = t[el.dataset.i18n];
@@ -25833,6 +25860,11 @@ function i18nApply(){
     root.querySelectorAll('[data-i18n-placeholder]').forEach(el => {
       const v = t[el.dataset.i18nPlaceholder]; if(v) el.setAttribute('placeholder', v);
     });
+  }
+
+  function walk(root){
+    if(!root) return;
+    i18nExact(root);
     const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, null, false);
     const replacements = [];
     while(walker.nextNode()){
@@ -25859,6 +25891,12 @@ function i18nApply(){
     }
     replacements.forEach(([node, text]) => node.textContent = text);
   }
+
+  /* v559: exact pass over the whole document first — this is what makes a newly
+   * added panel translate without being registered anywhere. The walk() calls
+   * below then apply the fuzzy pass to the UI roots only; their exact pass is
+   * redundant now but harmless (idempotent — same key, same value). */
+  i18nExact(document.body);
 
   walk(document.getElementById('sidebar'));
   walk(document.getElementById('hdr'));
