@@ -73,6 +73,37 @@ if (!fs.existsSync(syntaxGate)) {
   }
 }
 
+/* ---- DEAD-ID GATE ---------------------------------------------------------
+ * Block the build on any getElementById() pointing at an id that does not exist.
+ *
+ * `if (!el) return;` is a good defensive guard and a terrible diagnostic: it
+ * treats "renamed" exactly like "nothing to do", so a feature dies silently at
+ * the moment of a rename. Three real cases, all invisible to every other check:
+ * updateExploreCard showed hardcoded "7,500+ relays / 61 countries" instead of
+ * live values for months; the tappable ticker never attached a handler; the
+ * AnyClip dimension animation counted up to fabricated fallbacks.
+ *
+ * Skipped by --no-lint, unlike the syntax gate: unlike a parse failure, a dead id
+ * is a correctness problem rather than a "this file cannot run" problem, so an
+ * emergency deploy may reasonably want past it. */
+if (!noLint) {
+  const deadIds = path.join(__dirname, 'check-dead-ids.js');
+  const allowFile = path.join(__dirname, 'dead-ids.allow');
+  if (fs.existsSync(deadIds)) {
+    try {
+      const args = [deadIds];
+      if (fs.existsSync(allowFile)) args.push('--allow-file', allowFile);
+      args.push(indexPath);
+      execFileSync(process.execPath, args, { stdio: 'inherit' });
+    } catch (_) {
+      console.error('\x1b[31mFATAL: dead-id gate failed — build aborted, no artifact written.\x1b[0m');
+      console.error('A getElementById in ' + indexPath + ' always returns null. Fix the id,');
+      console.error('delete the dead code, or add the id to dead-ids.allow with a reason.');
+      process.exit(7);
+    }
+  }
+}
+
 let shell = fs.readFileSync(shellPath, 'utf8');
 const kv = fs.readFileSync(kvPath, 'utf8');
 const index = fs.readFileSync(indexPath, 'utf8');
