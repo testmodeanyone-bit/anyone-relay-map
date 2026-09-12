@@ -1034,7 +1034,10 @@ if(_origToggleSignals){
 setTimeout(sigInjectLegend, 3000);
 // ═══ TAPPABLE BOTTOM TICKER ═══
 function tickerMakeClickable(){
-  var ticker = document.getElementById('bottom-ticker');
+  /* v556: was 'bottom-ticker'; the element's id is 'ticker'. The guard
+   `if(!ticker) return;` turned that into a silent no-op, so the tappable
+   ticker never attached its click handler. */
+  var ticker = document.getElementById('ticker') || document.getElementById('bottom-ticker');
   if(!ticker) return;
   // Delegate clicks on ticker items
   if(ticker._clickAttached) return;
@@ -1094,7 +1097,10 @@ function tickerZoomTo(zone, country){
 
 // Wrap ticker items with data attributes when they're generated
 function tickerEnhanceItems(){
-  var ticker = document.getElementById('bottom-ticker');
+  /* v556: was 'bottom-ticker'; the element's id is 'ticker'. The guard
+   `if(!ticker) return;` turned that into a silent no-op, so the tappable
+   ticker never attached its click handler. */
+  var ticker = document.getElementById('ticker') || document.getElementById('bottom-ticker');
   if(!ticker) return;
   // Find spans that contain relay info but aren't wrapped
   var spans = ticker.querySelectorAll('span:not(.ticker-item)');
@@ -9461,7 +9467,9 @@ function drawOceanLabels(){
 
     // --- Alerts badge sync ---
     function syncAlertBadge() {
-      var badge = document.getElementById('hdr-alert-count');
+      /* v556: was 'hdr-alert-count'; the element's id is 'alert-badge'. Same silent
+         no-op — the unread count never synced. */
+      var badge = document.getElementById('alert-badge') || document.getElementById('hdr-alert-count');
       if (!badge) return;
       var unread = document.querySelectorAll('.alert-item.unread').length;
       badge.textContent = unread > 0 ? unread : '';
