@@ -5788,6 +5788,51 @@ var WALLET_WARM_CURSOR_KEY = "wallet_ips_warm_cursor";
 var WALLET_WARM_SLICE = 40;   // wallets per tick
 var WALLET_WARM_CONC = 3;     // matches ENRICH_CONC — the measured sustainable rate
 
+/* v554: warm the staking total on the cron.
+ *
+ * v553 made the route stale-while-revalidate, so a visitor never waits on the
+ * ~850 eth_calls — except in one case: a genuine COLD START with no cached value
+ * at all, where there is nothing stale to serve and the request blocks for ~62s.
+ * The client aborts at 8s, so that visitor still sees no figure.
+ *
+ * That window is small (it follows a KV purge or TTL lapse, not the normal
+ * 30-minute expiry) but it is the last path where the number can vanish for a
+ * real user. Warming here closes it: the cron refreshes the key before anyone
+ * asks, so a cached value always exists to serve.
+ *
+ * Skips when the existing copy is still fresh — the point is to remove the cold
+ * start, not to run 850 calls every tick. */
+async function warmTotalStaked(env) {
+  if (!env.FP_INDEX) return;
+  const FRESH_MS = 25 * 60 * 1e3;   /* slightly under the route's 30min window,
+                                       so the cron refreshes it just before the
+                                       route would consider it stale */
+  try {
+    const c = await env.FP_INDEX.get("total_staked_v2", { type: "json" });
+    if (c && c.totalStaked > 0 && (Date.now() - (c.ts || 0)) < FRESH_MS) {
+      console.log("[warm-staked] still fresh, skipping");
+      return;
+    }
+  } catch (_) { /* treat an unreadable cache as needing a warm */ }
+
+  const r = await fetchTotalStakedExact(env);
+  if (!r || !r.ok || !(r.totalStaked > 0)) {
+    console.warn("[warm-staked] skipped:", (r && r.reason) || "no result");
+    return;
+  }
+  await env.FP_INDEX.put("total_staked_v2", JSON.stringify({
+    totalStaked: r.totalStaked,
+    formatted: r.totalStaked.toLocaleString() + " $ANYONE",
+    apy: ANYONE_APY,
+    apySource: "manual",
+    apyAsOf: ANYONE_APY_AS_OF,
+    source: "ethereum:stakes",
+    hodlers: r.hodlers,
+    ts: Date.now()
+  }), { expirationTtl: KV_TTL_SECS });
+  console.log(`[warm-staked] refreshed: ${r.totalStaked.toLocaleString()} across ${r.hodlers} hodlers`);
+}
+
 async function warmWalletIpsCache(env) {
   if (!env.FP_INDEX) return;
   /* The wallet list comes from the same place buildAndStoreIndex gets it, so the
@@ -12156,6 +12201,9 @@ Issued: ${(/* @__PURE__ */ new Date()).toISOString()}
     /* v543: warm a slice of wallet-ips per tick so the next fp-index build reads
      * from KV instead of the flaky upstream. See warmWalletIpsCache. */
     ctx.waitUntil(warmWalletIpsCache(env).then(() => recordCronOutcome(env, "walletwarm", true)).catch(e => { console.warn("[cron] wallet-ips warm failed:", e.message); return recordCronOutcome(env, "walletwarm", false, e.message); }));
+    /* v554: keep total_staked_v2 populated so /api/total-staked never has to
+     * compute inline for a visitor. See warmTotalStaked. */
+    ctx.waitUntil(warmTotalStaked(env).then(() => recordCronOutcome(env, "stakedwarm", true)).catch(e => { console.warn("[cron] staked warm failed:", e.message); return recordCronOutcome(env, "stakedwarm", false, e.message); }));
     /* v57 FIX: warm fp-index on the cron. Previously NOTHING warmed fp-index —
      * it was (re)built only by organic cache-MISS traffic, and combined with the
      * old 1h TTL a transient upstream slowdown evicted the only copy and blanked
