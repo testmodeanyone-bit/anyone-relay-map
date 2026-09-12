@@ -32177,16 +32177,27 @@ if(AC.minimized)AC._minUnread=(AC._minUnread||0)+1;return _origAdd.apply(this,ar
 #aclive.kn{z-index:9500;}
 body.aclive-on #anyclip-avatar{display:none !important;}
 #aclive .acl-char{position:relative;width:84px;height:128px;pointer-events:auto;cursor:pointer;filter:drop-shadow(0 6px 10px rgba(0,0,0,.45)) drop-shadow(0 0 12px rgba(45,212,191,.35));}
-#aclive.dir-left .acl-char{transform:scaleX(-1);}
+#aclive/* v561: no flip — a floating thing has no front. It leans into its drift like
+   a cloud pushed by its own motion, easing in and out. */
+.acl-char{transition:transform .9s cubic-bezier(.4,0,.2,1);transform-origin:50% 90%;}
+.dir-left .acl-char{transform:rotate(-4deg);}
+.dir-right .acl-char{transform:rotate(4deg);}
+.dir-still .acl-char{transform:rotate(0deg);}
 #aclive .acl-char:hover{filter:drop-shadow(0 6px 10px rgba(0,0,0,.5)) drop-shadow(0 0 20px rgba(45,212,191,.7));}
 #aclive svg.acl-svg{width:100%;height:100%;overflow:visible;}
 .acl-svg .acl-body{transform-origin:50% 100%;}
 .acl-svg .acl-eye{transform-origin:center;animation:aclBlink 4.2s infinite;}
 @keyframes aclBlink{0%,93%,100%{transform:scaleY(1);}96%{transform:scaleY(.12);}}
-@keyframes aclBob{0%,100%{transform:translateY(0);}50%{transform:translateY(-3px);}}
-@keyframes aclIdle{0%,100%{transform:translateY(0);}50%{transform:translateY(-1.6px);}}
-.acl-svg:not(.walking):not(.presenting) .acl-body{animation:aclIdle 3.4s ease-in-out infinite;}
-.acl-svg.walking .acl-body{animation:aclBob .52s ease-in-out infinite;}
+@keyframes aclFloat{0%,100%{transform:translateY(0);}50%{transform:translateY(-4px);}}
+@keyframes aclShadowBreath{0%,100%{transform:scaleX(1);opacity:1;}50%{transform:scaleX(.78);opacity:.6;}}
+/* v561: one continuous float, regardless of state. The old .walking rule
+   switched to a 0.52s bob — a footstep cadence, twice per second — which is
+   what made a limbless character still read as walking. Lakitu's cloud never
+   changes its bob when it moves; it just drifts. The shadow breathes in
+   antiphase so the body looks like it is rising off the ground, not the
+   whole sprite translating. */
+.acl-svg .acl-body{animation:aclFloat 2.8s ease-in-out infinite;}
+.acl-svg .acl-shadow{transform-box:fill-box;transform-origin:center;animation:aclShadowBreath 2.8s ease-in-out infinite;}
 #aclive .acl-say{position:absolute;left:50%;bottom:118px;transform:translate(-50%,6px);max-width:230px;min-width:60px;padding:8px 12px;border-radius:12px;background:linear-gradient(165deg,rgba(6,22,32,.96),rgba(3,12,20,.94));border:1px solid rgba(45,212,191,.4);border-top:2px solid #2dd4bf;color:#dffaf5;font-family:'Rajdhani','Outfit',sans-serif;font-size:13px;font-weight:600;line-height:1.35;text-align:center;white-space:normal;box-shadow:0 10px 30px rgba(0,0,0,.5),0 0 18px -6px rgba(45,212,191,.6);opacity:0;pointer-events:none;transition:opacity .25s,transform .25s;letter-spacing:.2px;}
 #aclive .acl-say.show{opacity:1;transform:translate(-50%,0);}
 #aclive .acl-say:after{content:"";position:absolute;left:50%;bottom:-7px;transform:translateX(-50%);border:7px solid transparent;border-top-color:rgba(6,22,32,.96);border-bottom:0;}
@@ -32329,7 +32340,7 @@ body.aclive-on #anyclip-avatar{display:none !important;}
     if(x<minX) x=minX; if(x>maxX) x=maxX;
     refreshObstacle();
   }
-  function setDir(){ el.classList.toggle('dir-left', dir<0); }
+  function setDir(){ /* v561: lean is now driven by velocity in frame(); the flip is gone. */ }
   function feetBaseline(){ var b=20; try{ b=parseFloat(getComputedStyle(el).bottom)||20; }catch(_){} return b + 6; }
   function refreshObstacle(){
     var o = document.getElementById('relay-legend');
@@ -32347,18 +32358,79 @@ body.aclive-on #anyclip-avatar{display:none !important;}
     return full;                                    // standing on top
   }
   function apply(){
-    var lift = (walking && !presenting) ? liftAt(x+42) : 0;
+    /* v561: liftAt() stepped the character over the relay legend as if it were an
+     * obstacle on the ground. A floating character has no ground, so it hovers at
+     * one height — the legend is simply below it. */
+    var lift = 0;
     el.style.transform = 'translateX(' + Math.round(x) + 'px) translateY(' + (-Math.round(lift)) + 'px)';
     var climbing = lift > 4;
     if(svg) svg.classList.toggle('climbing', climbing);
     el.classList.toggle('climbing', climbing);
   }
+  /* v561: DRIFT, not patrol. Lakitu's cloud is the reference:
+   *   - velocity is never constant. It eases up from rest, cruises, eases down
+   *     to a pause, then drifts the other way. The old loop did
+   *     `x += dir*speed*dt` — a fixed 40px/s — which reads as marching even
+   *     with nothing to march on.
+   *   - it never bounces off an edge. Approaching a bound it slows, hangs for a
+   *     beat, then leaves. The old loop clamped and flipped `dir` in one frame.
+   *   - it leans into its motion. `vx` drives a `dir-left / dir-right /
+   *     dir-still` class so the CSS lean follows the actual velocity, not a
+   *     boolean.
+   *
+   * Implemented as a damped chase toward a target: `vx` accelerates toward the
+   * target, is capped, and decays to zero as it arrives. On arrival it idles for
+   * a random 1.5-4s, then picks a new target. Nothing here is a footstep. */
+  var vx = 0, tx = x, holdUntil = 0;
+  var MAX_V = 18, ACCEL = 30, ARRIVE = 10;
+  /* Short hops, not crossings. A target is 90-260px from where it is now, in a
+   * random direction, so a typical move lasts a few seconds and ends in a pause.
+   * Crossing the whole width at a steady speed — which the first cut did — is
+   * just a slower patrol. Lakitu hovers near where he is and nudges around. */
+  var arrived = false;
+  function pickTarget(){
+    var hop = 90 + Math.random() * 170;
+    var side = Math.random() < 0.5 ? -1 : 1;
+    if (x + side*hop < minX || x + side*hop > maxX) side = -side;
+    tx = Math.max(minX, Math.min(maxX, x + side * hop));
+    arrived = false;
+  }
+  /* Called whenever drift resumes after something else moved the character
+   * (keynote tweens x directly). Without this, tx still points at the target
+   * from before the interruption and the character lurches toward it. Resetting
+   * makes it hang where it is, then pick a fresh hop from there. */
+  function resetDrift(){ vx = 0; tx = x; arrived = false; }
   function frame(now){
     var dt = Math.min(.05, (now-last)/1000); last = now;
     if(walking && !presenting && !reduced){
-      x += dir * speed * dt;
-      if(x >= maxX){ x = maxX; dir = -1; setDir(); }
-      else if(x <= minX){ x = minX; dir = 1; setDir(); }
+      var d = tx - x;
+      if (Math.abs(d) < ARRIVE) {
+        /* Inside the arrival zone: kill velocity and ease onto the target directly.
+         * The first cut only decayed vx here, and at 18px/s that carried ~7px —
+         * past a 5px zone — so it overshot, reversed, overshot again, and never
+         * came to rest. Never resting meant never pausing, never re-targeting:
+         * a permanent oscillation. Snapping the last few px removes that. */
+        vx = 0;
+        x += d * Math.min(1, 6 * dt);
+        /* The pause is timed from ARRIVAL. An earlier cut set holdUntil when the
+         * hop started, so by the time a 5-14s hop landed the hold had already
+         * expired and it re-targeted on the next frame — hops with no rest in
+         * between, which is just a slower patrol. */
+        if (!arrived) { arrived = true; holdUntil = now + 1200 + Math.random() * 2800; }
+        else if (now > holdUntil) pickTarget();
+      } else {
+        /* Brake so speed is ~0 at the zone edge, not at the target: the 0.6
+         * factor keeps the approach comfortably under the sqrt(2ad) limit. */
+        var want = Math.sign(d) * Math.min(MAX_V, 0.6 * Math.sqrt(2 * ACCEL * Math.abs(d)));
+        vx += Math.max(-ACCEL*dt, Math.min(ACCEL*dt, want - vx));
+      }
+      x += vx * dt;
+      x = Math.max(minX, Math.min(maxX, x));
+      var lean = vx > 5 ? 'dir-right' : vx < -5 ? 'dir-left' : 'dir-still';
+      if (el.dataset.lean !== lean) {
+        el.classList.remove('dir-left','dir-right','dir-still');
+        el.classList.add(lean); el.dataset.lean = lean;
+      }
       apply();
     }
     raf = requestAnimationFrame(frame);
@@ -32409,7 +32481,7 @@ body.aclive-on #anyclip-avatar{display:none !important;}
     svg.classList.remove('presenting');
     cleanup();
     presenting = false;
-    if(shouldShow()){ walking = !reduced; svg.classList.toggle('walking', !reduced); }
+    if(shouldShow()){ walking = !reduced; svg.classList.toggle('walking', !reduced); resetDrift(); }
   }
   function cleanup(){
     if(stage) stage.classList.remove('on');
@@ -32422,7 +32494,7 @@ body.aclive-on #anyclip-avatar{display:none !important;}
     kToken++;
     cleanup();
     presenting = false;
-    if(shouldShow()){ walking = !reduced; if(svg) svg.classList.toggle('walking', !reduced); }
+    if(shouldShow()){ walking = !reduced; if(svg) svg.classList.toggle('walking', !reduced); resetDrift(); }
     if(sayEl) sayEl.classList.remove('show');
   }
   function shouldShow(){
@@ -32438,7 +32510,7 @@ body.aclive-on #anyclip-avatar{display:none !important;}
     el.classList.toggle('hidden', !show);
     document.body.classList.toggle('aclive-on', show);
     if(!show){ walking = false; if(presenting) endKeynote(); }
-    else if(!presenting){ walking = !reduced; if(svg) svg.classList.toggle('walking', !reduced); }
+    else if(!presenting){ walking = !reduced; if(svg) svg.classList.toggle('walking', !reduced); resetDrift(); }
   }
   if(document.readyState === 'loading') document.addEventListener('DOMContentLoaded', ready);
   else ready();
