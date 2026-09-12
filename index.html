@@ -206,7 +206,7 @@ var _obSteps = [
     pos: { top: 120, left: 220 },
     arrow: 'arrow-left',
     title: 'Read the network at a glance',
-    desc: 'Glowing dots are relay zones — 7,500+ nodes routing traffic right now. Tap any zone to inspect it.',
+    desc: 'Glowing dots are relay zones — thousands of nodes routing traffic right now. Tap any zone to inspect it.',
   },
   {
     target: function(){ return document.getElementById('btn-health'); },
@@ -860,9 +860,34 @@ function switchToOperatorMode(){
 
 /* v518: removed dead wrappers switchToExploreMode() and toggleAppMode() — defined but never called (no JS refs, no DOM/onclick refs, not in worker files). The live app-mode feature uses applyAppMode() directly; switchToOperatorMode() (powers the "Enter Operator Mode" button) is kept. */
 
+/* v555 BUGFIX: this function read three element ids that DO NOT EXIST.
+ *
+ *   stats-relays, stats-countries, stats-bw   -> no such elements
+ *   the sidebar actually uses sR, rs-countries, sBW
+ *
+ * getElementById returned null for all three, the `if(relayEl && ...)` guards
+ * treated that as "nothing to update", and the card kept its hardcoded
+ * placeholders forever: "7,500+ relays", "61 countries", "75 GB/s". Live values
+ * today are 5,134 / 59 / 63.8 GB/s, so the first screen a new visitor sees —
+ * especially on mobile, where this card is prominent — has been wrong by 46% on
+ * the headline figure.
+ *
+ * It also means the "7,500+" everyone has been quoting from this card was never
+ * a measurement. It is exit + guard + middle summed, and those overlap: a relay
+ * flagged both Exit and Guard counts twice. 5,135 is the unique relay count.
+ *
+ * Fixed by reading the ids that exist, with the old names kept as fallbacks so a
+ * future rename in either direction degrades rather than silently freezes. */
 function updateExploreCard(){
-  // Pull live stats from sidebar into explore card
-  var relayEl = document.getElementById('stats-relays');
+  var pick = function(){
+    for (var i = 0; i < arguments.length; i++){
+      var el = document.getElementById(arguments[i]);
+      if (el) return el;
+    }
+    return null;
+  };
+  // Relay count
+  var relayEl = pick('sR', 'stats-relays');
   var exRelay = document.getElementById('ex-relay-count');
   if(relayEl && exRelay && relayEl.textContent.trim() !== '—'){
     exRelay.textContent = relayEl.textContent.trim();
@@ -875,13 +900,13 @@ function updateExploreCard(){
     if(grade && grade !== '—') exHealth.textContent = grade;
   }
   // Bandwidth
-  var bwEl = document.getElementById('stats-bw');
+  var bwEl = pick('sBW', 'stats-bw');
   var exBw = document.getElementById('ex-bw');
   if(bwEl && exBw && bwEl.textContent.trim() !== '—'){
     exBw.textContent = bwEl.textContent.trim();
   }
   // Countries
-  var countryEl = document.getElementById('stats-countries');
+  var countryEl = pick('rs-countries', 'stats-countries');
   var exCountries = document.getElementById('ex-countries');
   if(countryEl && exCountries && countryEl.textContent.trim() !== '—'){
     exCountries.textContent = countryEl.textContent.trim();
@@ -1163,7 +1188,9 @@ function acApplyAriaLabels(){
   var mapSvg = document.getElementById('map');
   if(mapSvg && !mapSvg.getAttribute('aria-label')){
     mapSvg.setAttribute('role', 'img');
-    var relayCount = document.getElementById('stats-relays')?.textContent || '7,500+';
+    /* v555: same dead id as updateExploreCard. Reads sR now, and the fallback no
+     * longer quotes the 7,500+ overcount. */
+    var relayCount = (document.getElementById('sR') || document.getElementById('stats-relays'))?.textContent || 'thousands of';
     mapSvg.setAttribute('aria-label', 'World map showing ' + relayCount + ' relay nodes in the Anyone Protocol network');
   }
 
@@ -1202,7 +1229,7 @@ function acApplyAriaLabels(){
   }
 
   // ── Live Regions for dynamic content ──
-  var liveTargets = ['stats-relays', 'stats-bw', 'sb-health', 'sig-counts'];
+  var liveTargets = ['sR', 'sBW', 'sb-health', 'sig-counts'];   /* v555: dead ids replaced */
   liveTargets.forEach(function(id){
     var el = document.getElementById(id);
     if(el && !el.getAttribute('aria-live')){
@@ -22164,7 +22191,7 @@ function toggleFeedback(){
   btn.classList.toggle('active', FB.open);
   if(FB.open){
     const cnt = document.getElementById('fb-relay-count');
-    if(cnt) cnt.textContent = (allRelays?.length || '7,000+').toLocaleString();
+    if(cnt) cnt.textContent = (allRelays?.length || '—').toLocaleString();
     fbShowForm();
   }
   repositionFeedbackPanel();
@@ -22547,9 +22574,9 @@ function _msSync(){
 }
 // Daylight-variant welcome copy. Restored to night copy whenever theme flips back.
 var _OB_NIGHT_TITLE = 'An incentivized onion router. <em class="p3-emphasis">Live.</em>';
-var _OB_NIGHT_SUB   = '7,000+ active relays worldwide. One privacy network you can watch live.';
+var _OB_NIGHT_SUB   = 'Thousands of active relays worldwide. One privacy network you can watch live.';
 var _OB_DAY_TITLE   = 'Daylight <em class="p3-emphasis">Atlas</em>';
-var _OB_DAY_SUB     = 'Built for analysts and daytime operators — high-contrast view of the same 7,000+ relay network. Same data, brighter lens.';
+var _OB_DAY_SUB     = 'Built for analysts and daytime operators — high-contrast view of the same relay network. Same data, brighter lens.';
 function _applyObCopyForTheme(){
   var t = document.getElementById('ob-title');
   var s = document.getElementById('ob-sub');
@@ -29898,7 +29925,7 @@ body.light #geo-info-side-panel .hw-tip-section {
      a:"Click ☀ MODE in the top bar to switch between dark and light mode. Dark mode makes the glowing relay nodes really pop!"},
     {k:['how many','total','count','number','stat'],
      a:(()=>{
-       const r  = document.getElementById("sR")?.textContent||"7,000+";
+       const r  = document.getElementById("sR")?.textContent||"—";
        const z  = document.getElementById("sZ")?.textContent||"468";
        const ex = document.getElementById("sX")?.textContent||"?";
        const gd = document.getElementById("sG")?.textContent||"?";
@@ -30378,7 +30405,7 @@ body.light #geo-info-side-panel .hw-tip-section {
     <button id="ob-close" onclick="dismissOnboarding()">✕</button>
     <div id="ob-logo">ANYONE PROTOCOL</div>
     <div id="ob-title">An incentivized onion router. <em class="p3-emphasis">Live.</em></div>
-    <div id="ob-sub">7,000+ active relays worldwide. One privacy network you can watch live.</div>
+    <div id="ob-sub">Thousands of active relays worldwide. One privacy network you can watch live.</div>
     <div id="ob-grid">
       <div class="ob-item">
         <div class="ob-icon">🧭</div>
@@ -30419,7 +30446,7 @@ body.light #geo-info-side-panel .hw-tip-section {
         <div class="ob-icon">🔍</div>
         <div>
           <div class="ob-item-title">Relay Browser</div>
-          <div class="ob-item-desc">Search and filter all 7,000+ relays by country, ISP, bandwidth, uptime, and relay type.</div>
+          <div class="ob-item-desc">Search and filter every relay by country, ISP, bandwidth, uptime, and relay type.</div>
         </div>
       </div>
     </div>
@@ -31069,12 +31096,12 @@ body.light #geo-info-side-panel .hw-tip-section {
   </div>
 </div>
 <div id="explore-card">
-  <div class="ex-count" id="ex-relay-count">7,500+</div>
+  <div class="ex-count" id="ex-relay-count">—</div>
   <div class="ex-subtitle">relays protecting privacy worldwide</div>
   <div class="ex-stats">
-    <div class="ex-stat"><div class="ex-stat-val" id="ex-health">A</div><div class="ex-stat-label">Health</div></div>
-    <div class="ex-stat"><div class="ex-stat-val" id="ex-countries">61</div><div class="ex-stat-label">Countries</div></div>
-    <div class="ex-stat"><div class="ex-stat-val" id="ex-bw">75 GB/s</div><div class="ex-stat-label">Bandwidth</div></div>
+    <div class="ex-stat"><div class="ex-stat-val" id="ex-health">—</div><div class="ex-stat-label">Health</div></div>
+    <div class="ex-stat"><div class="ex-stat-val" id="ex-countries">—</div><div class="ex-stat-label">Countries</div></div>
+    <div class="ex-stat"><div class="ex-stat-val" id="ex-bw">—</div><div class="ex-stat-label">Bandwidth</div></div>
   </div>
   <button class="ex-cta" onclick="switchToOperatorMode()">Enter Operator Mode</button>
   <div class="ex-hint">Tap any zone on the map to explore</div>
@@ -32181,7 +32208,7 @@ body.aclive-on #anyclip-avatar{display:none !important;}
   var el, charEl, svg, sayEl, stage, deviceWrap, titleEl, reduced=false;
   var x=240, dir=1, speed=40, walking=false, presenting=false, raf=0, last=0;
   var minX=230, maxX=900, kToken=0, sayTimer=0, obst=null;
-  var QUIPS = ["Exploring the network…","Tap me for a keynote 🎤","Privacy looks good on you.","7,000+ relays and counting.","Stay anonymous out there. ✦"];
+  var QUIPS = ["Exploring the network…","Tap me for a keynote 🎤","Privacy looks good on you.","Relays in 59 countries and counting.","Stay anonymous out there. ✦"];
   var LINES = [
     "Privacy shouldn't be hard.",
     "So we put the whole network… in your hands.",
