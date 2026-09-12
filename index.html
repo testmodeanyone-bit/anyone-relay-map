@@ -32172,8 +32172,6 @@ if(AC.minimized)AC._minUnread=(AC._minUnread||0)+1;return _origAdd.apply(this,ar
 #aclive{position:fixed;left:0;bottom:20px;z-index:470;width:84px;height:128px;pointer-events:none;will-change:transform;}
 #aclive .acl-shadow{position:absolute;left:50%;bottom:4px;width:52px;height:11px;transform:translateX(-50%);border-radius:50%;background:radial-gradient(ellipse at center,rgba(0,0,0,.5),rgba(0,0,0,0) 72%);pointer-events:none;z-index:-1;transition:opacity .25s,transform .25s;}
 #aclive.climbing .acl-shadow{opacity:.35;transform:translateX(-50%) scale(.78);}
-.acl-svg.climbing .arm-l{animation:none !important;transform:rotate(-46deg);}
-.acl-svg.climbing .arm-r{animation:none !important;transform:rotate(46deg);}
 .acl-svg.climbing .acl-body{animation:none !important;transform:translateY(-1px) rotate(-3deg);}
 #aclive.hidden{display:none;}
 #aclive.kn{z-index:9500;}
@@ -32182,29 +32180,13 @@ body.aclive-on #anyclip-avatar{display:none !important;}
 #aclive.dir-left .acl-char{transform:scaleX(-1);}
 #aclive .acl-char:hover{filter:drop-shadow(0 6px 10px rgba(0,0,0,.5)) drop-shadow(0 0 20px rgba(45,212,191,.7));}
 #aclive svg.acl-svg{width:100%;height:100%;overflow:visible;}
-.acl-svg .acl-body,.acl-svg .arm-l,.acl-svg .arm-r,.acl-svg .leg-l,.acl-svg .leg-r,.acl-svg .acl-eye{transform-box:fill-box;}
 .acl-svg .acl-body{transform-origin:50% 100%;}
-.acl-svg .arm-l,.acl-svg .arm-r{transform-origin:50% 8%;}
-.acl-svg .leg-l,.acl-svg .leg-r{transform-origin:50% 6%;}
 .acl-svg .acl-eye{transform-origin:center;animation:aclBlink 4.2s infinite;}
 @keyframes aclBlink{0%,93%,100%{transform:scaleY(1);}96%{transform:scaleY(.12);}}
-@keyframes aclLegA{0%,100%{transform:rotate(17deg);}50%{transform:rotate(-17deg);}}
-@keyframes aclLegB{0%,100%{transform:rotate(-17deg);}50%{transform:rotate(17deg);}}
-@keyframes aclArmA{0%,100%{transform:rotate(-20deg);}50%{transform:rotate(20deg);}}
-@keyframes aclArmB{0%,100%{transform:rotate(20deg);}50%{transform:rotate(-20deg);}}
 @keyframes aclBob{0%,100%{transform:translateY(0);}50%{transform:translateY(-3px);}}
 @keyframes aclIdle{0%,100%{transform:translateY(0);}50%{transform:translateY(-1.6px);}}
 .acl-svg:not(.walking):not(.presenting) .acl-body{animation:aclIdle 3.4s ease-in-out infinite;}
-.acl-svg.walking .leg-l{animation:aclLegA .52s ease-in-out infinite;}
-.acl-svg.walking .leg-r{animation:aclLegB .52s ease-in-out infinite;}
-.acl-svg.walking .arm-l{animation:aclArmA .52s ease-in-out infinite;}
-.acl-svg.walking .arm-r{animation:aclArmB .52s ease-in-out infinite;}
 .acl-svg.walking .acl-body{animation:aclBob .52s ease-in-out infinite;}
-@keyframes aclWave{0%{transform:rotate(0);}20%{transform:rotate(-120deg);}30%{transform:rotate(-92deg);}40%{transform:rotate(-120deg);}50%{transform:rotate(-92deg);}60%{transform:rotate(-120deg);}100%{transform:rotate(0);}}
-.acl-svg.waving .arm-r{animation:aclWave 1.7s ease-in-out;}
-.acl-svg.presenting .arm-r{animation:none;transform:rotate(-128deg);transition:transform .45s cubic-bezier(.2,.8,.2,1);}
-.acl-svg.presenting .arm-l{animation:none;transform:rotate(10deg);}
-.acl-svg.presenting .leg-l,.acl-svg.presenting .leg-r{animation:none;transform:rotate(0);}
 #aclive .acl-say{position:absolute;left:50%;bottom:118px;transform:translate(-50%,6px);max-width:230px;min-width:60px;padding:8px 12px;border-radius:12px;background:linear-gradient(165deg,rgba(6,22,32,.96),rgba(3,12,20,.94));border:1px solid rgba(45,212,191,.4);border-top:2px solid #2dd4bf;color:#dffaf5;font-family:'Rajdhani','Outfit',sans-serif;font-size:13px;font-weight:600;line-height:1.35;text-align:center;white-space:normal;box-shadow:0 10px 30px rgba(0,0,0,.5),0 0 18px -6px rgba(45,212,191,.6);opacity:0;pointer-events:none;transition:opacity .25s,transform .25s;letter-spacing:.2px;}
 #aclive .acl-say.show{opacity:1;transform:translate(-50%,0);}
 #aclive .acl-say:after{content:"";position:absolute;left:50%;bottom:-7px;transform:translateX(-50%);border:7px solid transparent;border-top-color:rgba(6,22,32,.96);border-bottom:0;}
@@ -32237,7 +32219,7 @@ body.aclive-on #anyclip-avatar{display:none !important;}
 .acl-spark{transform-box:fill-box;transform-origin:center;animation:aclSpark 1.8s ease-in-out infinite;}
 @keyframes aclSpark{0%,100%{opacity:.3;transform:scale(.8) rotate(0);}50%{opacity:1;transform:scale(1.15) rotate(20deg);}}
 @media (max-width:819px){#aclive{display:none !important;}}
-@media (prefers-reduced-motion: reduce){.acl-svg.walking .leg-l,.acl-svg.walking .leg-r,.acl-svg.walking .arm-l,.acl-svg.walking .arm-r,.acl-svg.walking .acl-body{animation:none;}}
+@media (prefers-reduced-motion: reduce){}
 </style>
 
 <div id="aclive" class="hidden" aria-hidden="true">
@@ -32246,14 +32228,14 @@ body.aclive-on #anyclip-avatar{display:none !important;}
   <div class="acl-char" id="acl-char" title="Tap me for a keynote 🎤" role="button" aria-label="AnyClip — tap for a hardware keynote">
     <div class="acl-hintring"></div>
     <div class="acl-chat" id="acl-chat" title="Chat with AnyClip">💬</div>
-    <svg class="acl-svg" viewBox="-6 -10 92 138" xmlns="http://www.w3.org/2000/svg">
+    <svg class="acl-svg" viewBox="-6 -10 92 122" xmlns="http://www.w3.org/2000/svg">
       <defs>
         <radialGradient id="aclBg2" cx="50%" cy="38%" r="62%"><stop offset="0%" stop-color="#0a3a4a"/><stop offset="100%" stop-color="#020e1a"/></radialGradient>
         <linearGradient id="aclLimb" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#1b5a59"/><stop offset="100%" stop-color="#0c3030"/></linearGradient>
         <filter id="aclGlow2"><feGaussianBlur stdDeviation="1.6" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
       </defs>
-      <g class="leg-l"><rect x="29" y="86" width="8" height="32" rx="4" fill="url(#aclLimb)" stroke="#2dd4bf" stroke-width="1.2"/><ellipse cx="33" cy="119" rx="7" ry="3.4" fill="#0c3030" stroke="#2dd4bf" stroke-width="1"/></g>
-      <g class="leg-r"><rect x="43" y="86" width="8" height="32" rx="4" fill="url(#aclLimb)" stroke="#2dd4bf" stroke-width="1.2"/><ellipse cx="47" cy="119" rx="7" ry="3.4" fill="#0c3030" stroke="#2dd4bf" stroke-width="1"/></g>
+      <ellipse class="acl-shadow" cx="40" cy="104" rx="22" ry="3.5" fill="#2dd4bf" opacity="0.14"/>
+      <ellipse class="acl-shadow" cx="40" cy="104" rx="12" ry="2" fill="#2dd4bf" opacity="0.22"/>
       <g class="acl-body">
         <polygon points="40,6 70,24 70,62 40,80 10,62 10,24" fill="url(#aclBg2)" stroke="#2dd4bf" stroke-width="2.6"/>
         <polygon points="40,15 62,28 62,58 40,71 18,58 18,28" fill="none" stroke="rgba(0,245,255,.2)" stroke-width="1"/>
@@ -32268,8 +32250,6 @@ body.aclive-on #anyclip-avatar{display:none !important;}
         <path d="M31 54 Q40 62 49 54" fill="none" stroke="#2dd4bf" stroke-width="2.4" stroke-linecap="round"/>
         <circle cx="40" cy="50" r="1.6" fill="#2dd4bf" opacity=".55"/>
       </g>
-      <g class="arm-l"><rect x="6" y="42" width="7" height="28" rx="3.5" fill="url(#aclLimb)" stroke="#2dd4bf" stroke-width="1.1"/><circle cx="9.5" cy="71" r="4" fill="#1b5a59" stroke="#2dd4bf" stroke-width="1"/></g>
-      <g class="arm-r"><rect x="67" y="42" width="7" height="28" rx="3.5" fill="url(#aclLimb)" stroke="#2dd4bf" stroke-width="1.1"/><circle cx="70.5" cy="71" r="4" fill="#1b5a59" stroke="#2dd4bf" stroke-width="1"/></g>
     </svg>
   </div>
 </div>
