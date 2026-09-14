@@ -3238,6 +3238,140 @@ var TOPIC_UNSTAKED = "0xd8654fcc8cf5b36d30b3f5e4688fc78118e6d68de60b9994e0990226
 var ANYONE_APY = 15.1;
 var ANYONE_APY_AS_OF = "2026-09-11";
 
+
+/* v575: /api/exit-relays computed out-of-band.
+ *
+ * The route paginated the ENTIRE wallet lookup on every request — all pages, in
+ * batches of 20, inline, before responding. With ~570 wallets that is dozens of
+ * upstream fetches per hit, measured at 20-60s. The SPA's bandwidth figure sat at
+ * "—" for the first minute of every load, the Relay Browser's BW sort sorted
+ * nothing, and per-relay bandwidth was empty. Cache-Control: max-age=120 only
+ * helped a browser that had already paid once.
+ *
+ * Same shape as /api/total-staked (v553): the last result is served instantly
+ * and the refresh runs in waitUntil. The compute is unchanged — every line of
+ * the old route body is here — only its output destination moved. */
+async function computeExitRelays(env, ctx) {
+        let collectWallets = function(wallets) {
+          for (const w of wallets || []) {
+            const consensus = w.in_consensus_ips || 0;
+            if (w.wallet && consensus > 0) walletAddrs.push(w.wallet);
+          }
+        };
+        const r0 = await fetch(`${WALLET_LOOKUP}&page=1`);
+        /* v575: this was `return cors(..., 502)` when the code lived in the route.
+         * As a compute function it must THROW — returning a Response here would be
+         * cached and stringified as the payload. The route catches and 502s. */
+        if (!r0.ok) throw new Error("wallet lookup upstream " + r0.status);
+        const d0 = await r0.json();
+        const pages = d0.pages || 1;
+        const walletAddrs = [];
+        collectWallets(d0.wallets);
+        for (let p = 2; p <= pages; p += 20) {
+          const batch = Array.from({ length: Math.min(20, pages - p + 1) }, (_, i) => p + i);
+          await Promise.all(batch.map(
+            (pg) => fetch(`${WALLET_LOOKUP}&page=${pg}`).then((r) => r.json()).then((d) => collectWallets(d.wallets)).catch(() => {
+            })
+          ));
+        }
+        let exitCount = null, guardCount = null, middleCount = null;
+        let countSource = "fp-index";
+        if (env.FP_INDEX) {
+          try {
+            const cached = await env.FP_INDEX.get(KV_KEY, { type: "json" });
+            if (cached && typeof cached.exits === "number") {
+              exitCount = cached.exits;
+              guardCount = cached.guards;
+              /* v47 FIX: prefer cached.middles directly. The old arithmetic
+               * `total - exits - guards` was correct in v45/v46 only because
+               * exits and guards never overlapped (a separate bug — Exit+Guard
+               * relays were silently dropped from `guards`). v47 fixes that
+               * classification, so exits and guards now overlap and the
+               * subtraction would under-count. cached.middles is the right
+               * source of truth; the arithmetic is a legacy-cache fallback only. */
+              if (typeof cached.middles === "number") {
+                middleCount = cached.middles;
+              } else if (typeof cached.total === "number") {
+                middleCount = Math.max(0, cached.total - cached.exits - cached.guards);
+              }
+              const age = Date.now() - (cached.builtAt || 0);
+              if (age > STALE_MS) ctx.waitUntil(buildAndStoreIndex(env).catch(() => {
+              }));
+            } else {
+              ctx.waitUntil(buildAndStoreIndex(env).catch(() => {
+              }));
+            }
+          } catch (_) {
+          }
+        }
+        if (exitCount === null || middleCount === null) {
+          let sumIps = function(wallets) {
+            for (const w of wallets || []) {
+              const exit = w.exit_ips || 0;
+              const guard = w.flag_counts?.Guard || 0;
+              const consensus = w.in_consensus_ips || 0;
+              totalExit += exit;
+              totalGuard += guard;
+              totalMiddle += Math.max(0, consensus - exit - Math.max(0, guard - exit));
+            }
+          };
+          let totalExit = 0, totalGuard = 0, totalMiddle = 0;
+          sumIps(d0.wallets);
+          for (let p = 2; p <= pages; p += 20) {
+            const batch = Array.from({ length: Math.min(20, pages - p + 1) }, (_, i) => p + i);
+            await Promise.all(batch.map(
+              (pg) => fetch(`${WALLET_LOOKUP}&page=${pg}`).then((r) => r.json()).then((d) => sumIps(d.wallets)).catch(() => {
+              })
+            ));
+          }
+          if (exitCount === null) exitCount = totalExit;
+          if (guardCount === null) guardCount = totalGuard;
+          if (middleCount === null) middleCount = totalMiddle;
+          countSource = "ip-sum-fallback";
+        }
+        const _bwMibs = d0.totals?.total_bw_mibs_total || 0;
+        const _walletsTotal = d0.totals?.wallets_total;
+        /* v57 (M2): single-author exit-relays:latest.
+         *
+         * Previously this handler built its own THIN 7-field exit-relays:latest
+         * payload (cachedAt, exit_relays, guard_relays, middle_relays, bw_gbps,
+         * wallets, source) and wrote it directly to SNAPSHOT_KV — competing with
+         * storeSnapshot's FULL 13-field write (which also carries total_relays,
+         * hardware_relays, zones, countries, isps, fp_built_at). The KV value's
+         * schema therefore depended on which endpoint wrote last: a /api/exit-relays
+         * hit left a thin row, so the consumer (/bitcoin) read `undefined` for the
+         * six missing fields until the next storeSnapshot (cron or /api/growth) ran.
+         *
+         * Fix: delegate to storeSnapshot — the SINGLE author of exit-relays:latest.
+         * One schema, drift gone at the root. This also inherits the v56 (M1)
+         * change-detection (skip the write when content is unchanged) for free.
+         *
+         * Conservative by design: if the fp-index cache is cold, storeSnapshot
+         * skips the write rather than emitting a partial payload; the 7-day TTL on
+         * the last good row keeps the consumer fed in the meantime. The original
+         * v52 motivation (keep KV populated even on the ip-sum-fallback path) is
+         * preserved because storeSnapshot publishes on both its cached and freshly
+         * built paths (v51). */
+        if (ctx && typeof ctx.waitUntil === "function") {
+          ctx.waitUntil(storeSnapshot(env).catch((err) => {
+            console.error("[exit-relays] storeSnapshot publish error:", err && err.message);
+          }));
+        }
+        return {
+          exit_relays: exitCount,
+          guard_relays: guardCount,
+          middle_relays: middleCount,
+          total_bw_mibs: _bwMibs,
+          wallets: _walletsTotal,
+          wallet_list: walletAddrs,
+          count_source: countSource,
+          ts: Date.now()
+        };
+}
+
+var EXIT_RELAYS_KEY = "exit_relays_resp_v1";
+var EXIT_RELAYS_FRESH_MS = 5 * 60 * 1e3;
+
 var STAKES_CONC = 12;
 
 async function fetchTotalStakedExact(env) {
@@ -5802,6 +5936,21 @@ var WALLET_WARM_CONC = 3;     // matches ENRICH_CONC — the measured sustainabl
  *
  * Skips when the existing copy is still fresh — the point is to remove the cold
  * start, not to run 850 calls every tick. */
+/* v575: keep exit_relays_resp_v1 populated so /api/exit-relays never computes
+ * inline for a visitor. Mirrors warmTotalStaked. Refreshes just before the
+ * route's 5-minute freshness window would lapse. */
+async function warmExitRelays(env, ctx) {
+  if (!env.FP_INDEX) return;
+  try {
+    const c = await env.FP_INDEX.get(EXIT_RELAYS_KEY, { type: "json" });
+    if (c && c.ts && (Date.now() - c.ts) < EXIT_RELAYS_FRESH_MS - 60 * 1e3) { console.log("[warm-exit-relays] still fresh, skipping"); return; }
+  } catch (_) {}
+  const fresh = await computeExitRelays(env, ctx);
+  if (!fresh) { console.warn("[warm-exit-relays] compute returned nothing"); return; }
+  await env.FP_INDEX.put(EXIT_RELAYS_KEY, JSON.stringify(fresh), { expirationTtl: 7 * 86400 });
+  console.log(`[warm-exit-relays] refreshed: ${fresh.exit_relays} exit / ${fresh.guard_relays} guard / ${fresh.middle_relays} middle, ${fresh.wallet_list?.length || 0} wallets`);
+}
+
 async function warmTotalStaked(env) {
   if (!env.FP_INDEX) return;
   const FRESH_MS = 25 * 60 * 1e3;   /* slightly under the route's 30min window,
@@ -6783,119 +6932,30 @@ var worker_source_default = {
     }
 
     if (url.pathname === "/api/exit-relays" && request.method === "GET") {
+      /* v575: stale-while-revalidate. See computeExitRelays. */
+      let cached = null;
+      if (env.FP_INDEX) { try { cached = await env.FP_INDEX.get(EXIT_RELAYS_KEY, { type: "json" }); } catch (_) {} }
+      const respond = (payload, cacheState, ageMs) => new Response(JSON.stringify(payload), {
+        headers: jsonHeaders({ "Cache-Control": "max-age=120", "X-Cache": cacheState, "X-Age": String(Math.round((ageMs || 0) / 1000)), "X-Count-Source": payload.count_source || "" })
+      });
+      const refresh = () => ctx.waitUntil((async () => {
+        try {
+          const fresh = await computeExitRelays(env, ctx);
+          if (fresh && env.FP_INDEX) await env.FP_INDEX.put(EXIT_RELAYS_KEY, JSON.stringify(fresh), { expirationTtl: 7 * 86400 });
+        } catch (e) { console.warn("[exit-relays] background refresh failed:", e && e.message); }
+      })());
+      if (cached && cached.ts) {
+        const age = Date.now() - cached.ts;
+        if (age < EXIT_RELAYS_FRESH_MS) return respond(cached, "HIT", age);
+        refresh();
+        return respond(cached, "STALE", age);
+      }
+      /* Cold start: nothing cached. Compute inline this once; it is also what
+       * the cron warmer prevents in normal operation. */
       try {
-        let collectWallets = function(wallets) {
-          for (const w of wallets || []) {
-            const consensus = w.in_consensus_ips || 0;
-            if (w.wallet && consensus > 0) walletAddrs.push(w.wallet);
-          }
-        };
-        const r0 = await fetch(`${WALLET_LOOKUP}&page=1`);
-        if (!r0.ok) return cors(JSON.stringify({ error: "upstream error" }), 502);
-        const d0 = await r0.json();
-        const pages = d0.pages || 1;
-        const walletAddrs = [];
-        collectWallets(d0.wallets);
-        for (let p = 2; p <= pages; p += 20) {
-          const batch = Array.from({ length: Math.min(20, pages - p + 1) }, (_, i) => p + i);
-          await Promise.all(batch.map(
-            (pg) => fetch(`${WALLET_LOOKUP}&page=${pg}`).then((r) => r.json()).then((d) => collectWallets(d.wallets)).catch(() => {
-            })
-          ));
-        }
-        let exitCount = null, guardCount = null, middleCount = null;
-        let countSource = "fp-index";
-        if (env.FP_INDEX) {
-          try {
-            const cached = await env.FP_INDEX.get(KV_KEY, { type: "json" });
-            if (cached && typeof cached.exits === "number") {
-              exitCount = cached.exits;
-              guardCount = cached.guards;
-              /* v47 FIX: prefer cached.middles directly. The old arithmetic
-               * `total - exits - guards` was correct in v45/v46 only because
-               * exits and guards never overlapped (a separate bug — Exit+Guard
-               * relays were silently dropped from `guards`). v47 fixes that
-               * classification, so exits and guards now overlap and the
-               * subtraction would under-count. cached.middles is the right
-               * source of truth; the arithmetic is a legacy-cache fallback only. */
-              if (typeof cached.middles === "number") {
-                middleCount = cached.middles;
-              } else if (typeof cached.total === "number") {
-                middleCount = Math.max(0, cached.total - cached.exits - cached.guards);
-              }
-              const age = Date.now() - (cached.builtAt || 0);
-              if (age > STALE_MS) ctx.waitUntil(buildAndStoreIndex(env).catch(() => {
-              }));
-            } else {
-              ctx.waitUntil(buildAndStoreIndex(env).catch(() => {
-              }));
-            }
-          } catch (_) {
-          }
-        }
-        if (exitCount === null || middleCount === null) {
-          let sumIps = function(wallets) {
-            for (const w of wallets || []) {
-              const exit = w.exit_ips || 0;
-              const guard = w.flag_counts?.Guard || 0;
-              const consensus = w.in_consensus_ips || 0;
-              totalExit += exit;
-              totalGuard += guard;
-              totalMiddle += Math.max(0, consensus - exit - Math.max(0, guard - exit));
-            }
-          };
-          let totalExit = 0, totalGuard = 0, totalMiddle = 0;
-          sumIps(d0.wallets);
-          for (let p = 2; p <= pages; p += 20) {
-            const batch = Array.from({ length: Math.min(20, pages - p + 1) }, (_, i) => p + i);
-            await Promise.all(batch.map(
-              (pg) => fetch(`${WALLET_LOOKUP}&page=${pg}`).then((r) => r.json()).then((d) => sumIps(d.wallets)).catch(() => {
-              })
-            ));
-          }
-          if (exitCount === null) exitCount = totalExit;
-          if (guardCount === null) guardCount = totalGuard;
-          if (middleCount === null) middleCount = totalMiddle;
-          countSource = "ip-sum-fallback";
-        }
-        const _bwMibs = d0.totals?.total_bw_mibs_total || 0;
-        const _walletsTotal = d0.totals?.wallets_total;
-        /* v57 (M2): single-author exit-relays:latest.
-         *
-         * Previously this handler built its own THIN 7-field exit-relays:latest
-         * payload (cachedAt, exit_relays, guard_relays, middle_relays, bw_gbps,
-         * wallets, source) and wrote it directly to SNAPSHOT_KV — competing with
-         * storeSnapshot's FULL 13-field write (which also carries total_relays,
-         * hardware_relays, zones, countries, isps, fp_built_at). The KV value's
-         * schema therefore depended on which endpoint wrote last: a /api/exit-relays
-         * hit left a thin row, so the consumer (/bitcoin) read `undefined` for the
-         * six missing fields until the next storeSnapshot (cron or /api/growth) ran.
-         *
-         * Fix: delegate to storeSnapshot — the SINGLE author of exit-relays:latest.
-         * One schema, drift gone at the root. This also inherits the v56 (M1)
-         * change-detection (skip the write when content is unchanged) for free.
-         *
-         * Conservative by design: if the fp-index cache is cold, storeSnapshot
-         * skips the write rather than emitting a partial payload; the 7-day TTL on
-         * the last good row keeps the consumer fed in the meantime. The original
-         * v52 motivation (keep KV populated even on the ip-sum-fallback path) is
-         * preserved because storeSnapshot publishes on both its cached and freshly
-         * built paths (v51). */
-        if (ctx && typeof ctx.waitUntil === "function") {
-          ctx.waitUntil(storeSnapshot(env).catch((err) => {
-            console.error("[exit-relays] storeSnapshot publish error:", err && err.message);
-          }));
-        }
-        return new Response(JSON.stringify({
-          exit_relays: exitCount,
-          guard_relays: guardCount,
-          middle_relays: middleCount,
-          total_bw_mibs: _bwMibs,
-          wallets: _walletsTotal,
-          wallet_list: walletAddrs,
-          count_source: countSource
-          // diagnostic: which path produced the counts
-        }), { headers: jsonHeaders({ "Cache-Control": "max-age=120", "X-Count-Source": countSource }) });
+        const fresh = await computeExitRelays(env, ctx);
+        if (env.FP_INDEX) ctx.waitUntil(env.FP_INDEX.put(EXIT_RELAYS_KEY, JSON.stringify(fresh), { expirationTtl: 7 * 86400 }).catch(() => {}));
+        return respond(fresh, "MISS", 0);
       } catch (err) {
         return cors(JSON.stringify({ error: "Upstream error" }), 502);
       }
@@ -12204,6 +12264,8 @@ Issued: ${(/* @__PURE__ */ new Date()).toISOString()}
     /* v554: keep total_staked_v2 populated so /api/total-staked never has to
      * compute inline for a visitor. See warmTotalStaked. */
     ctx.waitUntil(warmTotalStaked(env).then(() => recordCronOutcome(env, "stakedwarm", true)).catch(e => { console.warn("[cron] staked warm failed:", e.message); return recordCronOutcome(env, "stakedwarm", false, e.message); }));
+    /* v575: keep /api/exit-relays served from cache. See warmExitRelays. */
+    ctx.waitUntil(warmExitRelays(env, ctx).then(() => recordCronOutcome(env, "exitwarm", true)).catch(e => { console.warn("[cron] exit-relays warm failed:", e.message); return recordCronOutcome(env, "exitwarm", false, e.message); }));
     /* v57 FIX: warm fp-index on the cron. Previously NOTHING warmed fp-index —
      * it was (re)built only by organic cache-MISS traffic, and combined with the
      * old 1h TTL a transient upstream slowdown evicted the only copy and blanked
