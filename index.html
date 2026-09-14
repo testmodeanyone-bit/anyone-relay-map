@@ -32236,7 +32236,12 @@ body.aclive-on #anyclip-avatar{display:none !important;}
    whole sprite translating. */
 .acl-svg .acl-body{animation:aclFloat 2.8s ease-in-out infinite;}
 .acl-svg .acl-shadow{transform-box:fill-box;transform-origin:center;animation:aclShadowBreath 2.8s ease-in-out infinite;}
-#aclive .acl-say{position:absolute;left:50%;bottom:118px;transform:translate(-50%,6px);max-width:230px;min-width:60px;padding:8px 12px;border-radius:12px;background:linear-gradient(165deg,rgba(6,22,32,.96),rgba(3,12,20,.94));border:1px solid rgba(45,212,191,.4);border-top:2px solid #2dd4bf;color:#dffaf5;font-family:'Rajdhani','Outfit',sans-serif;font-size:13px;font-weight:600;line-height:1.35;text-align:center;white-space:normal;box-shadow:0 10px 30px rgba(0,0,0,.5),0 0 18px -6px rgba(45,212,191,.6);opacity:0;pointer-events:none;transition:opacity .25s,transform .25s;letter-spacing:.2px;}
+#aclive /* v567: width:max-content. The bubble is position:absolute inside #aclive,
+   which is ~84px wide. Without an explicit width an absolute box shrink-wraps to
+   its CONTAINING BLOCK, so max-width:230px never applied — every quip was capped
+   at 84px and 'Relays in 59 countries and counting.' wrapped into six lines.
+   max-content sizes to the text, then max-width caps it. */
+.acl-say{position:absolute;left:50%;bottom:118px;transform:translate(-50%,6px);width:max-content;max-width:230px;min-width:60px;padding:8px 12px;border-radius:12px;background:linear-gradient(165deg,rgba(6,22,32,.96),rgba(3,12,20,.94));border:1px solid rgba(45,212,191,.4);border-top:2px solid #2dd4bf;color:#dffaf5;font-family:'Rajdhani','Outfit',sans-serif;font-size:13px;font-weight:600;line-height:1.35;text-align:center;white-space:normal;box-shadow:0 10px 30px rgba(0,0,0,.5),0 0 18px -6px rgba(45,212,191,.6);opacity:0;pointer-events:none;transition:opacity .25s,transform .25s;letter-spacing:.2px;}
 #aclive .acl-say.show{opacity:1;transform:translate(-50%,0);}
 #aclive .acl-say:after{content:"";position:absolute;left:50%;bottom:-7px;transform:translateX(-50%);border:7px solid transparent;border-top-color:rgba(6,22,32,.96);border-bottom:0;}
 /* speech bubble is a sibling of the character (not inside the scaleX-flipped
