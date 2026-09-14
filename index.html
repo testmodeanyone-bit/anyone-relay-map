@@ -3038,6 +3038,14 @@ body.light .lr{color:#e0f4ff;}
   opacity:0.85;}
 .zb{width:30px;height:30px;background:var(--panel);border:1px solid var(--border);border-radius:5px;
   color:var(--cyan);font-size:17px;display:flex;align-items:center;justify-content:center;cursor:pointer;user-select:none;}
+/* v571: 44px touch targets on phones. .zb is 30x30 for desktop mouse use; on a
+   phone that is under the 44px minimum and the +/- were easy to miss. Only the
+   touch-primary case is enlarged, so desktop keeps its compact controls. */
+@media (max-width:600px), (pointer:coarse){
+  .zb{ width:44px; height:44px; font-size:22px; }
+  #zoom-level{ width:44px; height:26px; font-size:9px; }
+}
+
 .zb:hover{background:rgba(0,245,255,.1);}
 
 #tip{
