@@ -25259,6 +25259,7 @@ function _scoreGeo(allRelays, total){
   const countries = cEntries.length;
   const score = Math.min(20, Math.round((countries/60)*12 + Math.max(0,(1-top1C/0.35))*4 + Math.max(0,(1-top3C/0.60))*4));
   return { score, max:20, iconKey:'geo', label:_i18t('geographicSpread','Geographic Spread'), icon:'🌍',
+    _top1:top1C, _top1Name:cEntries[0][0], _top3:top3C,   /* v576: for the next-step line */
     detail:`${countries} ${_i18t('countries','countries').toLowerCase()} · top: ${_aoEscHtml(cEntries[0][0])} ${(top1C*100).toFixed(0)}%`,
     sub:`${_i18t('top3','Top 3')} ${_i18t('countries','countries').toLowerCase()} ${_i18t('hold','hold')} ${(top3C*100).toFixed(0)}% ${_i18t('ofAllRelays','of all relays')}`,
     color: score>=16?'#2dd4bf':score>=11?'#f59e0b':'#ef4444',
@@ -25279,6 +25280,7 @@ function _scoreIsp(allRelays, total){
   const isps = iEntries.length;
   const score = Math.min(20, Math.round(Math.min(isps/300,1)*8 + Math.max(0,(1-top1I/0.40))*8 + Math.max(0,(1-top3I/0.55))*4));
   return { score, max:20, iconKey:'isp', label:_i18t('ispDiversity','ISP Diversity'), icon:'🏢',
+    _top1:top1I, _top1Name:iEntries[0][0], _top3:top3I, _n:isps,   /* v576: for the next-step line */
     detail:`${isps} ISPs · top: ${_aoEscHtml(iEntries[0][0].slice(0,20))} ${(top1I*100).toFixed(0)}%`,
     sub:`${_i18t('top3','Top 3')} ISPs ${_i18t('hold','hold')} ${(top3I*100).toFixed(0)}% ${_i18t('ofAllRelays','of all relays')}`,
     color: score>=16?'#2dd4bf':score>=11?'#f59e0b':'#ef4444',
@@ -25376,6 +25378,65 @@ function computeHealthScore(){
 
   return { total: total_score, scores, grade, gradeColor, gradeLabel, risks,
            summary: `${total.toLocaleString()} ${_i18t('relays','relays').toLowerCase()} · ${geo._countries} ${_i18t('countries','countries').toLowerCase()} · ${isp._isps} ISPs · ${(bw._totalBW/1024).toFixed(0)} GB/s` };
+}
+
+/* v576: WHAT WOULD GET THIS TO THE NEXT GRADE.
+ *
+ * The panel shows six subscores but not what to do about them. The scoring is
+ * deterministic, so it can be inverted: for each lever, how far would the
+ * underlying share have to move to close the gap to the next threshold?
+ *
+ * Only the two concentration levers are inverted — geo top-country share and
+ * ISP top-provider share — because they are the ones an operator can act on
+ * (put the next relay somewhere else). Exit ratio, bandwidth, uptime and size
+ * are outcomes, not choices. If neither lever alone closes the gap, the line
+ * names the bigger one and says so.
+ *
+ * Measured 2026-09-14: score 82 (A). ISP diversity 9/20 with the top provider
+ * at ~35%; the 8-point top1 term is worth one point per 5pp, and at 35% it
+ * contributes 1. Closing the 6-point gap to A+ on that lever alone means the
+ * top provider falling to 5% — which is the honest answer, and why the line
+ * reports the required share rather than calling it easy. (An earlier
+ * estimate of "~20%" was wrong; the inversion above is what corrected it.) */
+function _healthNextStep(h){
+  if(!h || !h.scores) return '';
+  const t = h.total;
+  const thresholds = [[88,'A+'],[78,'A'],[68,'B+'],[55,'B'],[40,'C']];
+  const next = thresholds.filter(([v])=>v>t).pop();
+  if(!next) return _i18t('nsTopGrade','This is the top grade.');
+  const [target, label] = next;
+  const gap = target - t;
+
+  const levers = [];
+  const isp = h.scores.isp, geo = h.scores.geo;
+  /* ISP: top1 term = max(0, 1 - top1/0.40) * 8. Solve for the top1 that adds `gap`. */
+  if(isp && typeof isp._top1 === 'number' && isp.score < isp.max){
+    const cur = Math.max(0, 1 - isp._top1/0.40) * 8;
+    const need = cur + gap;
+    if(need <= 8){
+      const share = 0.40 * (1 - need/8);
+      levers.push({ pts: isp.max - isp.score, who: isp._top1Name, from: isp._top1, to: share, kind:'isp' });
+    } else levers.push({ pts: isp.max - isp.score, who: isp._top1Name, from: isp._top1, to: null, kind:'isp' });
+  }
+  /* Geo: top1 term = max(0, 1 - top1/0.35) * 4. */
+  if(geo && typeof geo._top1 === 'number' && geo.score < geo.max){
+    const cur = Math.max(0, 1 - geo._top1/0.35) * 4;
+    const need = cur + gap;
+    if(need <= 4){
+      const share = 0.35 * (1 - need/4);
+      levers.push({ pts: geo.max - geo.score, who: geo._top1Name, from: geo._top1, to: share, kind:'geo' });
+    } else levers.push({ pts: geo.max - geo.score, who: geo._top1Name, from: geo._top1, to: null, kind:'geo' });
+  }
+  if(!levers.length) return '';
+  levers.sort((a,b)=>b.pts-a.pts);
+  const L = levers[0];
+  const pct = v => (v*100).toFixed(0) + '%';
+  const name = _aoEscHtml(String(L.who).slice(0,24));
+  const what = L.kind==='isp' ? _i18t('nsProvider','provider') : _i18t('nsCountry','country');
+  if(L.to !== null){
+    return `${_i18t('nsGapTo','To reach')} <b>${label}</b> (+${gap}): ${_i18t('nsBiggestLever','biggest lever is')} ${L.kind==='isp'?_i18t('ispDiversity','ISP Diversity'):_i18t('geographicSpread','Geographic Spread')} — ${_i18t('nsOne','one')} ${what}, <b>${name}</b>, ${_i18t('nsRuns','runs')} ${pct(L.from)}. ${_i18t('nsBelow','Below')} <b>${pct(L.to)}</b> ${_i18t('nsAlone','this alone would do it')}.`;
+  }
+  return `${_i18t('nsGapTo','To reach')} <b>${label}</b> (+${gap}): ${_i18t('nsBiggestLever','biggest lever is')} ${L.kind==='isp'?_i18t('ispDiversity','ISP Diversity'):_i18t('geographicSpread','Geographic Spread')} — ${_i18t('nsOne','one')} ${what}, <b>${name}</b>, ${_i18t('nsRuns','runs')} ${pct(L.from)}. ${_i18t('nsNotAlone','That lever alone cannot close the gap; it needs to move with others')}.`;
 }
 
 function openHealthPanel(){
@@ -25481,6 +25542,10 @@ function renderHealthPanel(){
 
   document.getElementById('health-label').textContent = h.gradeLabel;
   document.getElementById('health-summary').textContent = h.summary;
+  /* v576: the actionable line. innerHTML is safe here — every dynamic piece is
+   * either a number, an _i18t string, or passed through _aoEscHtml. */
+  const nsEl = document.getElementById('health-nextstep');
+  if(nsEl){ const ns = _healthNextStep(h); nsEl.innerHTML = ns; nsEl.style.display = ns ? '' : 'none'; }
 
   const breakdown = document.getElementById('health-breakdown');
   const uh = window._uptimeHistory || {};
@@ -30530,6 +30595,7 @@ body.light #geo-info-side-panel .hw-tip-section {
       <div id="health-grade" style="font-family:var(--ac-font,Outfit,system-ui);font-size:26px;font-weight:900;letter-spacing:1px;line-height:1;margin-bottom:6px;">—</div>
       <div id="health-label" style="font-size:11px;font-weight:700;margin-bottom:4px;color:#e8f6f8;">Calculating…</div>
       <div id="health-summary" style="font-size:9px;color:#b8dde4;line-height:1.6;"></div>
+      <div id="health-nextstep" style="font-size:9px;color:#fbbf24;line-height:1.5;margin-top:6px;padding-top:6px;border-top:1px solid rgba(251,191,36,.18);"></div>
     </div>
   </div>
 
