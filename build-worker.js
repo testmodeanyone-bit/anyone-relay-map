@@ -129,7 +129,53 @@ if (!noLint) {
 
 let shell = fs.readFileSync(shellPath, 'utf8');
 const kv = fs.readFileSync(kvPath, 'utf8');
-const index = fs.readFileSync(indexPath, 'utf8');
+let index = fs.readFileSync(indexPath, 'utf8');
+
+/* ---- MINIFY (comments only) ----------------------------------------------
+ * The SPA ships 267KB of comments — 14% of the file, 30% of the Brotli payload
+ * (measured: 434KB -> 302KB on the wire). They are valuable in the repo and
+ * useless in the browser.
+ *
+ * Deliberately conservative: strip HTML/CSS/JS comments, nothing else. No JS
+ * compression, no mangling, no whitespace collapse — every one of those can
+ * change behaviour and none is needed for the win. A regex strip was rejected
+ * because a `/*` inside a string or a `//` in a URL would break code; this
+ * uses a real parser.
+ *
+ * Runs AFTER the four gates (which check the source, where the comments live
+ * and where line numbers mean something) and BEFORE embedding. The syntax
+ * gate is then re-run on the minified output, because the minifier is the one
+ * new step that could produce something that does not parse.
+ *
+ * Skip with --no-minify (e.g. to bisect a bug against readable source). */
+const noMinify = process.argv.includes('--no-minify');
+async function minifyIndex(html) {
+  if (noMinify) { console.log('minify: skipped (--no-minify)'); return html; }
+  let minify;
+  try { ({ minify } = await import('html-minifier-terser')); }
+  catch (_) { console.warn('\x1b[33mminify: html-minifier-terser not installed — shipping unminified. npm install html-minifier-terser\x1b[0m'); return html; }
+  const out = await minify(html, {
+    removeComments: true,
+    collapseWhitespace: false,
+    minifyJS: { compress: false, mangle: false, format: { comments: false } },
+    minifyCSS: { level: { 1: { specialComments: 0 } } },
+  });
+  const tmp = path.join(require('os').tmpdir(), 'anyonemap-index.min.html');
+  fs.writeFileSync(tmp, out);
+  const syntaxGate = path.join(__dirname, 'check-scripts.mjs');
+  if (fs.existsSync(syntaxGate)) {
+    try { execFileSync(process.execPath, [syntaxGate, tmp], { stdio: 'inherit' }); }
+    catch (_) {
+      console.error('\x1b[31mFATAL: minified SPA does not parse — build aborted. Re-run with --no-minify to ship the readable source.\x1b[0m');
+      process.exit(9);
+    }
+  }
+  console.log(`minify: ${html.length.toLocaleString()} -> ${out.length.toLocaleString()} chars (-${(100 * (1 - out.length / html.length)).toFixed(0)}%)`);
+  return out;
+}
+
+(async () => {
+index = await minifyIndex(index);
 
 // 1) HTML: replace the quoted token with a properly-escaped JS string literal.
 const HTML_TOKEN = '"__INDEX_HTML_PLACEHOLDER__"';
@@ -157,3 +203,4 @@ if (/__(INDEX_HTML|KV_SCHEMA)_PLACEHOLDER__/.test(shell)) {
 
 fs.writeFileSync(outPath, shell);
 console.error('built ' + outPath + ' (' + shell.length + ' bytes)');
+})();
