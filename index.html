@@ -16382,9 +16382,7 @@ function acGetDMPrivacy(){
   return localStorage.getItem(AC_DM_PRIVACY_KEY) || 'lounge'; // 'lounge' | 'anyone' | 'nobody'
 }
 
-function acSetDMPrivacy(level){
-  localStorage.setItem(AC_DM_PRIVACY_KEY, level);
-}
+  /* v572: acSetDMPrivacy() removed — defined, never called, and its UI never existed. */
 
 function acCanDM(fromNick){
   const privacy = acGetDMPrivacy();
@@ -18850,26 +18848,7 @@ const AC_STICKERS = [
   { id:'welcome', name:'Welcome Friend', url:'https://i.ibb.co/FkC81vf9/welcome-friend-jukebox-bg-removed.png' },
 ];
 
-function acToggleStickerPicker(){
-  let picker = document.querySelector('.ac-sticker-picker');
-  if(picker){ picker.classList.toggle('open'); return; }
-  const toolbar = document.getElementById('anychat-input-wrap');
-  if(!toolbar) return;
-  picker = document.createElement('div');
-  picker.className = 'ac-sticker-picker open';
-  picker.innerHTML = /* xss-ok: AC_STICKERS is a hardcoded constant array */ `<div class="ac-sticker-header">Anyone Protocol Stickers</div><div class="ac-sticker-grid">${
-    AC_STICKERS.map(s => `<button type="button" class="ac-sticker-item" onclick="acSendSticker('${s.id}')" title="${s.name}"><img src="${s.url}" alt="${s.name}" loading="lazy"/></button>`).join('')
-  }</div>`;
-  toolbar.appendChild(picker);
-  setTimeout(()=>{
-    document.addEventListener('click', function close(e){
-      if(!picker.contains(e.target) && !e.target.classList.contains('ac-sticker-btn')){
-        picker.classList.remove('open');
-        document.removeEventListener('click', close);
-      }
-    });
-  }, 50);
-}
+  /* v572: acToggleStickerPicker() removed — defined, never called, and its UI never existed. */
 
 function acSendSticker(stickerId){
   /* v290: Stickers blocked for OP tier */
@@ -19115,6 +19094,7 @@ function acShowWelcome(){
      * users about commands that do nothing. Dropped from the hint until they
      * are wired. */
     ['/8ball', 'Magic 8-ball'],
+    ['/predict', 'Call where a metric goes'],
     ['/help', 'All commands'],
   ];
   const cmdHTML = cmds.map(([cmd,desc]) =>
@@ -19699,10 +19679,7 @@ function acUploadDoc(){
 
 
 var _acGifTimer = null;
-function acOpenGifPicker(){
-  acToggleEmojiPicker();
-  setTimeout(acSwitchToGifTab, 50);
-}
+  /* v572: acOpenGifPicker() removed — defined, never called, and its UI never existed. */
 function acCloseGifPicker(e){
   var picker = document.getElementById('ac-gif-picker');
   if(picker && e && picker.contains(e.target)) return;
@@ -20950,6 +20927,7 @@ function handleGameCommand(text, user){
       '🌍  /country — Guess relay locations\n\n' +
       '✊  /rps [choice] — Rock paper scissors\n\n' +
       '🎱  /8ball [question] — Magic 8-Ball\n\n' +
+      '📈  /predict [metric] [up|down|flat] [5m|15m|30m|1h] — Call where a metric goes\n\n' +
       '🪙  /flip — Coin flip\n\n' +
       '🔍  /guess — Fingerprint country\n\n' +
       '🚫  /blocked — List blocked & muted operators\n\n' +
@@ -21029,6 +21007,21 @@ function handleGameCommand(text, user){
   if(cmd.startsWith('/8ball')){
     const question = cmd.replace('/8ball','').trim();
     play8Ball(question, nick);
+    return true;
+  }
+
+  /* v572: /predict wired. The handler existed, complete, with no dispatch
+   * branch — users were told about it in the welcome hint and typing it did
+   * nothing. It is self-contained: a prediction resolves locally against the
+   * live metric getter after the timeframe and awards rep on a correct call.
+   *
+   * /duel was NOT wired and its code is deleted instead: its challenge went
+   * out over AC.ws, which is only ever null (no WebSocket exists — chat moved
+   * to long-poll + Ably), and acAcceptDuel never existed. A challenge printed
+   * locally and could never be received or accepted. Wiring it would advertise
+   * a feature that cannot complete. */
+  if(cmd.startsWith('/predict')){
+    acHandlePredictCommand(cmd.replace('/predict','').trim());
     return true;
   }
 
@@ -21276,79 +21269,28 @@ function play8Ball(question, nick){
 
 
 var DUEL_TOPICS = [
-  { id:'relay_count', label:'Total Relays', unit:'relays', icon:'🏗', getter: function(){ return parseInt(document.querySelector('#stats-relays')?.textContent?.replace(/,/g,'')) || 7500; } },
-  { id:'bandwidth', label:'Network Bandwidth', unit:'GB/s', icon:'📡', getter: function(){ var el = document.querySelector('#stats-bw'); return parseFloat(el?.textContent) || 75; } },
-  { id:'health', label:'Health Score', unit:'/100', icon:'💊', getter: function(){ return parseInt(document.querySelector('#health-score')?.textContent) || 75; } },
-  { id:'hw_relays', label:'Hardware Relays', unit:'relays', icon:'🔧', getter: function(){ return parseInt(document.querySelector('#stats-hw')?.textContent?.replace(/,/g,'')) || 1069; } },
-  { id:'countries', label:'Countries', unit:'countries', icon:'🌍', getter: function(){ return parseInt(document.querySelector('#stats-countries')?.textContent) || 61; } }
+  /* v572: every getter read a dead id — #stats-relays / #stats-bw / #stats-hw /
+   * #stats-countries / #health-score, none of which exist (the sidebar uses
+   * sR / sBW / sHW / rs-countries / btn-health-score; see v555). Each fell
+   * through to its hardcoded fallback, so every prediction resolved FLAT and
+   * every user was told they were wrong. check-dead-ids missed these because
+   * they are querySelector('#id') literals, not getElementById — the gate is
+   * extended in the same commit. Fallbacks are now 0, which a resolver reads
+   * as "no data", rather than a stale number that looks real. */
+  { id:'relay_count', label:'Total Relays',      unit:'relays',    icon:'🏗', getter: function(){ return parseInt((document.getElementById('sR')?.textContent||'').replace(/,/g,'')) || 0; } },
+  { id:'bandwidth',   label:'Network Bandwidth', unit:'GB/s',      icon:'📡', getter: function(){ return parseFloat(document.getElementById('sBW')?.textContent) || 0; } },
+  { id:'health',      label:'Health Score',      unit:'/100',      icon:'💊', getter: function(){ return parseInt(document.getElementById('btn-health-score')?.textContent) || 0; } },
+  { id:'hw_relays',   label:'Hardware Relays',   unit:'relays',    icon:'🔧', getter: function(){ return parseInt((document.getElementById('sHW')?.textContent||'').replace(/,/g,'')) || 0; } },
+  { id:'countries',   label:'Countries',         unit:'countries', icon:'🌍', getter: function(){ return parseInt((document.getElementById('rs-countries')?.textContent||'').replace(/,/g,'')) || 0; } }
 ];
 
-function acStartDuel(challengerNick, topic){
-  if(!_acUser) return;
-  var t = DUEL_TOPICS.find(function(d){ return d.id === topic; });
-  if(!t) t = DUEL_TOPICS[Math.floor(Math.random() * DUEL_TOPICS.length)];
-  var currentVal = t.getter();
-  var duel = {
-    id: 'duel_' + Date.now(),
-    topic: t,
-    challenger: _acUser.nick,
-    opponent: challengerNick || null,
-    startValue: currentVal,
-    startTime: Date.now(),
-    duration: 300000, // 5 minutes
-    challengerBet: null, // 'up' or 'down'
-    opponentBet: null,
-    resolved: false
-  };
-  GAME_STATE.duels.push(duel);
-  return duel;
-}
+/* v572: acStartDuel() removed with the duel feature — see note at the /predict dispatch branch. */
 
-function acDuelBet(duelId, nick, direction){
-  var duel = GAME_STATE.duels.find(function(d){ return d.id === duelId; });
-  if(!duel || duel.resolved) return;
-  if(nick === duel.challenger) duel.challengerBet = direction;
-  else { duel.opponent = nick; duel.opponentBet = direction; }
-  if(duel.challengerBet && duel.opponentBet){
-    acAddSystemMessage(duel.topic.icon + ' DUEL ON! ' + duel.challenger + ' (' + duel.challengerBet.toUpperCase() + ') vs ' + duel.opponent + ' (' + duel.opponentBet.toUpperCase() + ') — ' + duel.topic.label + ' in 5 min');
-    setTimeout(function(){ acResolveDuel(duelId); }, duel.duration);
-  }
-}
+/* v572: acDuelBet() removed with the duel feature — see note at the /predict dispatch branch. */
 
-function acResolveDuel(duelId){
-  var duel = GAME_STATE.duels.find(function(d){ return d.id === duelId; });
-  if(!duel || duel.resolved) return;
-  duel.resolved = true;
-  var endValue = duel.topic.getter();
-  var diff = endValue - duel.startValue;
-  var direction = diff > 0 ? 'up' : diff < 0 ? 'down' : 'flat';
-  var challengerWon = duel.challengerBet === direction || (direction === 'flat');
-  var opponentWon = duel.opponentBet === direction || (direction === 'flat');
-  var winner = null;
-  if(challengerWon && !opponentWon) winner = duel.challenger;
-  else if(opponentWon && !challengerWon) winner = duel.opponent;
-  var emoji = winner ? '🏆' : '🤝';
-  var msg = emoji + ' DUEL RESULT: ' + duel.topic.label + ' went ' + direction.toUpperCase() + ' (' + duel.startValue + ' → ' + endValue + ')';
-  if(winner) msg += ' — ' + winner + ' WINS!';
-  else msg += ' — TIE!';
-  acAddSystemMessage(msg);
-  if(winner && typeof acRepAward === 'function') acRepAward(winner, 5, 'duel_win');
-}
+/* v572: acResolveDuel() removed with the duel feature — see note at the /predict dispatch branch. */
 
-function acHandleDuelCommand(args){
-  if(!_acUser) return;
-  var parts = args.trim().split(' ');
-  var opponent = parts[0]?.replace('@','');
-  var topic = parts[1] || DUEL_TOPICS[Math.floor(Math.random() * DUEL_TOPICS.length)].id;
-  var t = DUEL_TOPICS.find(function(d){ return d.id === topic; });
-  if(!t) t = DUEL_TOPICS[0];
-  var duel = acStartDuel(opponent, t.id);
-  duel.challengerBet = 'up'; // challenger defaults to UP
-  acAddSystemMessage(t.icon + ' ' + _acUser.nick + ' challenged ' + (opponent || 'anyone') + ' to a DUEL! Topic: ' + t.label + ' — Will it go UP or DOWN in 5 min? Type /accept up or /accept down');
-  if(AC.ws && AC.ws.readyState === WebSocket.OPEN){
-    AC.ws.send(JSON.stringify({ type:'duel_challenge', duel: { id:duel.id, challenger:_acUser.nick, topic:t.id, label:t.label, startValue:duel.startValue } }));
-  }
-}
+/* v572: acHandleDuelCommand() removed with the duel feature — see note at the /predict dispatch branch. */
 
 
 function acMakePrediction(metric, direction, timeframe){
@@ -21356,6 +21298,7 @@ function acMakePrediction(metric, direction, timeframe){
   var t = DUEL_TOPICS.find(function(d){ return d.id === metric; });
   if(!t) return;
   var currentVal = t.getter();
+  if(!currentVal){ acAddSystemMessage('📈 ' + t.label + ' has no live value yet — try again in a moment.'); return; }
   var tf = timeframe || 300000; // default 5min
   var pred = {
     id: 'pred_' + Date.now(),
@@ -21368,6 +21311,11 @@ function acMakePrediction(metric, direction, timeframe){
     resolved: false,
     correct: null
   };
+  /* v572: GAME_STATE is declared as { trivia, country, rps, ... } with no
+   * `predictions` slot, so this line threw on the very first call. The feature
+   * had never executed successfully; it was only ever reachable via a dispatch
+   * branch that did not exist. Found by running it, not by reading it. */
+  if(!GAME_STATE.predictions) GAME_STATE.predictions = [];
   GAME_STATE.predictions.push(pred);
   var tfLabel = tf >= 3600000 ? Math.floor(tf/3600000) + 'h' : Math.floor(tf/60000) + 'min';
   acAddMessage(_acUser.nick, _acUser.tier, '🔮 PREDICTION: ' + t.label + ' will go ' + direction.toUpperCase() + ' in ' + tfLabel + ' (currently ' + currentVal + t.unit + ')', Date.now());
@@ -21532,9 +21480,7 @@ function acShowVerifyCard(){
   document.body.appendChild(overlay);
 }
 
-function opToggleStatusMenu(){
-  document.getElementById('op-status-menu')?.classList.toggle('open');
-}
+  /* v572: opToggleStatusMenu() removed — defined, never called, and its UI never existed. */
 
 function opSetStatus(status){
   OP.status = status;
@@ -22155,12 +22101,7 @@ function acSetPrivatePin(peerWallet, pin){
   localStorage.setItem('ac_private_pins', JSON.stringify(_acPrivatePins));
   return true;
 }
-function acCheckPrivatePin(peerWallet){
-  var stored = _acPrivatePins[peerWallet];
-  if(!stored) return true; /* no pin set — allow */
-  var entered = prompt('This is a private chat. Enter PIN to unlock:');
-  return entered === stored;
-}
+  /* v572: acCheckPrivatePin() removed — defined, never called, and its UI never existed. */
 function acTogglePrivateChat(peerWallet){
   if(_acPrivatePins[peerWallet]){
     delete _acPrivatePins[peerWallet];
@@ -22230,15 +22171,7 @@ function opNudgePeer(){
   if(hist){ hist.appendChild(opBubbleEl(msg)); hist.scrollTop = hist.scrollHeight; }
 }
 
-function opInsertEmote(emote){
-  const input = document.getElementById('anychat-input');
-  if(!input) return;
-  const pos = input.selectionStart || input.value.length;
-  input.value = input.value.slice(0,pos) + emote + input.value.slice(pos);
-  input.selectionStart = input.selectionEnd = pos + emote.length;
-  input.focus();
-  acUpdateChar();
-}
+  /* v572: opInsertEmote() removed — defined, never called, and its UI never existed. */
 async function opInsertEmotePrivate(emote){
   const input = document.getElementById('op-chat-input');
   if(!input) return;
