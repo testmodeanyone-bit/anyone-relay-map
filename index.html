@@ -11732,7 +11732,14 @@ function initMapLibre(zones){
         const zGeo = z => [z.geo[1], z.geo[0]]; // [lng,lat]
         const lerpAlong = (coords, t) => {
           // t in 0..1 along a polyline (equal-segment approximation — fine for 24-seg arcs)
-          const n = coords.length - 1; const f = t * n; const i = Math.min(n-1, Math.floor(f)); const r = f - i;
+          /* v574: clamp BOTH ends. p.start is performance.now() at creation and the
+           * rAF `now` on the first tick can predate it by a fraction of a ms, so t
+           * came in slightly negative, Math.floor gave -1, coords[-1] was undefined
+           * and .[0] threw — inside Array.map, taking the whole packet frame with
+           * it. Also guard a degenerate polyline. */
+          if (!coords || coords.length < 2) return coords && coords[0] ? coords[0] : [0, 0];
+          const tt = t < 0 ? 0 : t > 1 ? 1 : t;
+          const n = coords.length - 1; const f = tt * n; const i = Math.max(0, Math.min(n-1, Math.floor(f))); const r = f - i;
           const a = coords[i], b = coords[i+1];
           return [a[0]+(b[0]-a[0])*r, a[1]+(b[1]-a[1])*r];
         };
@@ -22723,6 +22730,13 @@ let outCount = 0, inCount = 0;
 
 /* ── helpers ── */
 function getArcPath(a, b){
+  /* v574: gpath is a D3 geoPath created in setupMap(), the LEGACY map. MapLibre
+   * is the default (v392) and the D3 canvas may not have initialised when
+   * Signals is toggled, so gpath was intermittently undefined and this threw
+   * "gpath is not a function" — synchronously, out of toggleSignals, which then
+   * skipped runSignalLoop(): arcs appeared, the live-circuit counter never
+   * started. Timing-dependent, so it passed one test run and failed the next. */
+  if (typeof gpath !== 'function') return '';
   return gpath({
     type:'Feature',
     geometry:{ type:'LineString',
@@ -22741,6 +22755,11 @@ function geoDist(a, b){
 
 /* ── BUILD PERSISTENT CONNECTION WEB ── */
 function buildConnectionWeb(){
+  /* v574: this draws the D3 connection web on the hidden legacy canvas. If the
+   * D3 projection has not been built there is nothing to draw on — return
+   * rather than throw and abort the rest of toggleSignals. The MapLibre arcs
+   * (_mlSignals) are unaffected; they do not use gpath. */
+  if (typeof gpath !== 'function') return;
   const layer = d3.select('#conns');
   layer.selectAll('*').remove();
   if(ranked.length < 4) return;
@@ -24370,13 +24389,23 @@ function renderRelayList(list){
       : bwMB >= 0.1 ? bwMB.toFixed(1) + ' MB/s'
       : '';
     const inCompare = _compareList.some(c => c.fp === r.fp);
-    return `<button type="button" class="rl-item ${tierClass}" onclick="selectRelay('${r.fp}',${r.lat},${r.lon})">
+    /* v573: the row was a <button> containing two more <button>s (share, compare).
+     * HTML forbids a button inside a button, and the innerHTML parser enforces it
+     * by CLOSING the outer button at the first inner one. Every row rendered as an
+     * empty 44px button followed by five sibling elements — the share/compare
+     * buttons, location, ISP and badges — none of them inside the clickable row.
+     * 80 rows became 480 list children. Clicking a relay's name, ISP or badges did
+     * nothing; only the empty button responded. Search and sort were fine; the
+     * text just was not where the row was.
+     * A div with role=button, tabindex and Enter/Space handling keeps the
+     * semantics and lets real buttons live inside it. */
+    return `<div role="button" tabindex="0" class="rl-item ${tierClass}" onclick="selectRelay('${r.fp}',${r.lat},${r.lon})" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();selectRelay('${r.fp}',${r.lat},${r.lon});}">
       <button class="rl-share" title="Copy shareable link" data-i18n-title="rbCopyShareLink" onclick="event.stopPropagation();copyRelayLink('${r.fp}',this)">⬡ ${_i18t('rdShare','SHARE')}</button>
       <button class="rl-compare-btn ${inCompare?'added':''}" title="${inCompare?_i18t('rbRemoveCompare','Remove from compare'):_i18t('rbAddCompare','Add to compare')}" onclick="event.stopPropagation();toggleCompare('${r.fp}')">${inCompare?'✓':'⬡+'}</button>
       <div class="rl-loc">${flag} ${loc}</div>
       <div class="rl-isp">${nick ? `<span style="color:rgba(0,245,255,.7);margin-right:4px;">${acSanitize(nick)}</span>` : ""}${isp}</div>
       <div class="rl-badges">${badges}<span style="font-size:8px;color:rgba(138,188,196,.55);margin-left:3px;font-family:'Share Tech Mono',monospace">${r.fp.slice(0,8)}&hellip;</span>${bwStr ? `<span style="font-size:8px;font-weight:700;color:var(--an-teal,#2dd4bf);margin-left:auto;font-family:var(--ac-font,Outfit,system-ui);letter-spacing:.5px;">${bwStr}</span>` : ''}</div>
-    </button>`;
+    </div>`;
   }).join('');
 }
 
