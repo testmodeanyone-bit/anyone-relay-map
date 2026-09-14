@@ -24391,7 +24391,13 @@ function renderRelayList(list){
     // Suppress city when upstream has set it to the country code itself
     // (e.g. cityName='SM' for a San Marino relay → avoid 'SM, SM').
     const city    = (_raw && _raw.toUpperCase() === _cc) ? '' : _raw;
-    const loc     = [city, r.countryCode].filter(Boolean).join(', ') || r.countryName || '—';
+    /* v578: with no city, show the country NAME rather than the code. The flag
+     * precedes loc, and on Windows Chrome has no flag-emoji glyphs — isoToFlag('SM')
+     * renders as the letters "SM" — so "flag + code" read as "SM SM" for every
+     * relay without a city. "SM San Marino" / "🇸🇲 San Marino" reads correctly on
+     * both. With a city the code stays: "Milan, IT". */
+    const loc     = city ? [city, r.countryCode].filter(Boolean).join(', ')
+                         : (r.countryName || r.countryCode || '—');
     const isp     = r.asName || '—';
     const nick    = r.nickname || '';
     const fp_u    = r.fp.toUpperCase();
