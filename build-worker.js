@@ -104,6 +104,29 @@ if (!noLint) {
   }
 }
 
+/* ---- DEAD-FUNCTION GATE ---------------------------------------------------
+ * The mirror of the dead-id gate: a function whose last caller was removed.
+ * First run found the ground-contact ramp (liftAt / refreshObstacle /
+ * feetBaseline) three versions after the character stopped touching the
+ * ground, and three chat commands advertised to users with no dispatch branch.
+ * Skipped by --no-lint, same reasoning as the dead-id gate. */
+if (!noLint) {
+  const deadFns = path.join(__dirname, 'check-dead-fns.js');
+  const allowFile = path.join(__dirname, 'dead-fns.allow');
+  if (fs.existsSync(deadFns)) {
+    try {
+      const args = [deadFns, indexPath];
+      if (fs.existsSync(allowFile)) args.push('--allow-file', allowFile);
+      execFileSync(process.execPath, args, { stdio: 'inherit' });
+    } catch (_) {
+      console.error('\x1b[31mFATAL: dead-function gate failed — build aborted, no artifact written.\x1b[0m');
+      console.error('A function in ' + indexPath + ' is defined but never referenced. Delete it,');
+      console.error('wire it up, or add it to dead-fns.allow with a reason.');
+      process.exit(8);
+    }
+  }
+}
+
 let shell = fs.readFileSync(shellPath, 'utf8');
 const kv = fs.readFileSync(kvPath, 'utf8');
 const index = fs.readFileSync(indexPath, 'utf8');

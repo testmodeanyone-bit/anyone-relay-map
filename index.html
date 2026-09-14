@@ -19068,7 +19068,13 @@ function acShowWelcome(){
     ['/country', 'Guess the relay country'],
     ['/rps', 'Rock paper scissors'],
     ['@anyclip', 'Ask the AI assistant'],
-    ['/8ball', '/duel', '/predict', '/accept', 'Magic 8-ball'],
+    /* v568: was ['/8ball','/duel','/predict','/accept','Magic 8-ball'] — five
+     * entries in a [cmd, desc] pair, so it rendered as "/8ball — /duel" and the
+     * real description never showed. /duel, /predict and /accept have handlers
+     * but NO dispatch branch (see check-dead-fns), so advertising them told
+     * users about commands that do nothing. Dropped from the hint until they
+     * are wired. */
+    ['/8ball', 'Magic 8-ball'],
     ['/help', 'All commands'],
   ];
   const cmdHTML = cmds.map(([cmd,desc]) =>
