@@ -2568,6 +2568,30 @@ html,body{width:100%;height:100%;background:var(--bg);font-family:'Rajdhani',san
 body.light .logo-sub{color:#7ecfdf;}
 /* Header right — clock + buttons */
 .hdr-right{display:flex;align-items:center;gap:8px;}
+/* v569: MOBILE HEADER. There was no mobile rule at all. .hdr-right is a 717px
+   cluster — a 213px decorative router clock plus six buttons — on a 390px
+   screen where the logo already takes ~200px. Result: the clock sliced
+   mid-digit ("15:45:4"), and Signals / Night / Day / Health / Domains 584px
+   past the right edge with no horizontal scroll to reach them.
+   The bottom nav already carries Relays / Signals / Health / Mode / Ask AI, so
+   below 600px the header keeps only Refresh (icon-only) and drops the router
+   chassis and the three duplicated buttons. Nothing that was reachable becomes
+   unreachable; three things stop being reachable twice. */
+@media (max-width:600px){
+  #hdr .hdr-right{ gap:6px; margin-left:auto; flex-shrink:0; }
+  #hdr .hdr-clock, #hdr .rtr-clock{ display:none !important; }
+  #hdr #btn-signal, #hdr #btn-health, #hdr #mode-segmented, #hdr #btn-theme{ display:none !important; }
+  /* Refresh becomes icon-only. Its base rule pins width:113px !important, so
+     this needs !important too — a plain override loses to it. */
+  #hdr #btn-refresh{ width:44px !important; min-width:44px !important; min-height:44px; padding:0 !important; justify-content:center; }
+  #hdr #btn-refresh #refresh-age{ display:none; }
+  /* Domains: an existing @media(max-width:768px) rule already hides it. That
+     predates this change and is left as-is — but note it means .anyone domains
+     has NO entry point on phones. Product decision, flagged not reversed. */
+  #hdr .logo-sub{ display:none; }                            /* "GLOBAL RELAY NETWORK V1.3" */
+  #hdr .logo-name{ font-size:15px; letter-spacing:1px; }
+}
+
 
 /* Live relay counter */
 #live-counter{
