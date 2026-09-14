@@ -202,7 +202,12 @@ var _rbCheckInterval = setInterval(function(){
 // ═══ PROGRESSIVE ONBOARDING — 3-Step Tour ═══
 var _obSteps = [
   {
-    target: function(){ return document.querySelector('#nodes') || document.querySelector('.leaflet-overlay-pane'); },
+    /* v570: #nodes is a zero-size D3 group (spotlight needs width > 0) and
+     * .leaflet-overlay-pane is Leaflet — the map is MapLibre. This step had no
+     * spotlight. #map-wrap is the map container; NOT #map-canvas, which is a
+     * 300x150 legacy D3 canvas at its default unstyled size — a first cut
+     * targeted that and spotlit a postage stamp in the corner. */
+    target: function(){ return document.getElementById('map-wrap'); },
     pos: { top: 120, left: 220 },
     arrow: 'arrow-left',
     title: 'Read the network at a glance',
@@ -216,11 +221,14 @@ var _obSteps = [
     desc: 'A 0–100 score across geography, ISPs, bandwidth, and uptime. Tap <strong>HEALTH</strong> for the full breakdown.',
   },
   {
-    target: function(){ return document.getElementById('foundation-beacon-g') || document.querySelector('.fb-hex-outer'); },
-    pos: 'right-of-target',  // Bug #54 (v161): was hardcoded {top:320,left:400} â didn't follow the foundation hex
+    /* v570: the foundation beacon (#foundation-beacon-g / .fb-hex-outer) was
+     * replaced by the floating AnyClip character. Both old selectors are null —
+     * this step spotlit nothing and its tip fell back to a default position. */
+    target: function(){ return document.getElementById('aclive'); },
+    pos: 'right-of-target',
     arrow: 'arrow-left',
-    title: 'Find your fellow operators',
-    desc: 'The breathing hexagon opens AnyChat — a live lounge for relay operators. Messages stored on IPFS.',
+    title: 'Meet AnyClip',
+    desc: 'The floating hexagon is AnyClip. Tap it for a keynote, or the chat bubble to join AnyChat — a live lounge for relay operators.',
   }
 ];
 var _obCurrentStep = 0;
