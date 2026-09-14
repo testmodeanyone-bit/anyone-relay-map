@@ -32210,8 +32210,7 @@ if(AC.minimized)AC._minUnread=(AC._minUnread||0)+1;return _origAdd.apply(this,ar
 <style id="aclive-style">
 #aclive{position:fixed;left:0;bottom:20px;z-index:470;width:84px;height:128px;pointer-events:none;will-change:transform;}
 #aclive .acl-shadow{position:absolute;left:50%;bottom:4px;width:52px;height:11px;transform:translateX(-50%);border-radius:50%;background:radial-gradient(ellipse at center,rgba(0,0,0,.5),rgba(0,0,0,0) 72%);pointer-events:none;z-index:-1;transition:opacity .25s,transform .25s;}
-#aclive.climbing .acl-shadow{opacity:.35;transform:translateX(-50%) scale(.78);}
-.acl-svg.climbing .acl-body{animation:none !important;transform:translateY(-1px) rotate(-3deg);}
+
 #aclive.hidden{display:none;}
 #aclive.kn{z-index:9500;}
 body.aclive-on #anyclip-avatar{display:none !important;}
@@ -32340,7 +32339,7 @@ body.aclive-on #anyclip-avatar{display:none !important;}
   if(window.__acliveInit) return; window.__acliveInit = true;
   var el, charEl, svg, sayEl, stage, deviceWrap, titleEl, reduced=false;
   var x=240, dir=1, speed=40, walking=false, presenting=false, raf=0, last=0;
-  var minX=230, maxX=900, kToken=0, sayTimer=0, obst=null;
+  var minX=230, maxX=900, kToken=0, sayTimer=0;
   var QUIPS = ["Exploring the network…","Tap me for a keynote 🎤","Privacy looks good on you.","Relays in 59 countries and counting.","Stay anonymous out there. ✦"];
   var LINES = [
     "Privacy shouldn't be hard.",
@@ -32380,44 +32379,28 @@ body.aclive-on #anyclip-avatar{display:none !important;}
     /* v563: vertical roam range. From the resting baseline up to just under the
      * header, minus the character's own height. Panels are handled by freeAt(),
      * not by shrinking this. */
-    var hdrH = 52; try { var hh = document.getElementById('hdr'); if (hh) hdrH = hh.getBoundingClientRect().bottom; } catch(_){}
-    var selfH = 150; try { var rr = el.getBoundingClientRect(); if (rr.height) selfH = rr.height; } catch(_){}
     /* v565: bottom band only, left to right — the 2D roam from v563 is out.
      * maxLift stays 0 so the sampling and the escape search collapse to a
      * horizontal line; the obstacle test still applies along it. */
     minLift = 0;
     maxLift = 0;
     if(ly<minLift) ly=minLift; if(ly>maxLift) ly=maxLift;
-    refreshObstacle();
   }
   function setDir(){ /* v561: lean is now driven by velocity in frame(); the flip is gone. */ }
-  function feetBaseline(){ var b=20; try{ b=parseFloat(getComputedStyle(el).bottom)||20; }catch(_){} return b + 6; }
-  function refreshObstacle(){
-    var o = document.getElementById('relay-legend');
-    if(!o){ obst=null; return; }
-    var r = o.getBoundingClientRect();
-    if(!r.width || !r.height){ obst=null; return; }
-    obst = { l:r.left, r:r.right, lift: Math.max(0, (window.innerHeight - r.top) - feetBaseline() + 3) };
-  }
-  function liftAt(cx){
-    if(!obst) return 0;
-    var ramp=22, L=obst.l, R=obst.r, full=obst.lift;
-    if(cx < L-ramp || cx > R+ramp) return 0;
-    if(cx < L) return full * (cx-(L-ramp))/ramp;   // climbing up
-    if(cx > R) return full * (1-(cx-R)/ramp);       // stepping down
-    return full;                                    // standing on top
-  }
+  
+  /* v566: refreshObstacle() and `obst` removed with liftAt(). The relay legend is
+   * just one of the rects roamObstacles() already checks. */
+  /* v566: liftAt() removed. It computed a ground-contact ramp so the character
+   * 'climbed' over the relay legend as an obstacle. There is no ground now — the
+   * character floats — and v561 had already forced its output to 0. */
   function apply(){
     /* v561: liftAt() stepped the character over the relay legend as if it were an
      * obstacle on the ground. A floating character has no ground, so it hovers at
      * one height — the legend is simply below it. */
     /* v563: `ly` is the drift's vertical position — the character roams the map,
      * not just a band along the bottom. */
-    var lift = ly;
-    el.style.transform = 'translateX(' + Math.round(x) + 'px) translateY(' + (-Math.round(lift)) + 'px)';
-    var climbing = lift > 4;
-    if(svg) svg.classList.toggle('climbing', climbing);
-    el.classList.toggle('climbing', climbing);
+    el.style.transform = 'translateX(' + Math.round(x) + 'px) translateY(' + (-Math.round(ly)) + 'px)';
+
   }
   /* v561: DRIFT, not patrol. Lakitu's cloud is the reference:
    *   - velocity is never constant. It eases up from rest, cruises, eases down
@@ -32628,7 +32611,6 @@ body.aclive-on #anyclip-avatar{display:none !important;}
     return true;
   }
   function visibility(){
-    refreshObstacle();
     var show = shouldShow();
     el.classList.toggle('hidden', !show);
     document.body.classList.toggle('aclive-on', show);
