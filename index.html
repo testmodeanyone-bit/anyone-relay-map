@@ -32359,6 +32359,14 @@ body.aclive-on #anyclip-avatar{display:none !important;}
     try{ var sb = document.querySelector('#sidebar, .sidebar, #left-rail, #side-panel'); if(sb){ var r=sb.getBoundingClientRect(); if(r.width>40 && r.left<60) left = r.right + 14; } }catch(_){}
     minX = left; maxX = Math.max(left+140, window.innerWidth - 104);
     if(x<minX) x=minX; if(x>maxX) x=maxX;
+    /* v563: vertical roam range. From the resting baseline up to just under the
+     * header, minus the character's own height. Panels are handled by freeAt(),
+     * not by shrinking this. */
+    var hdrH = 52; try { var hh = document.getElementById('hdr'); if (hh) hdrH = hh.getBoundingClientRect().bottom; } catch(_){}
+    var selfH = 150; try { var rr = el.getBoundingClientRect(); if (rr.height) selfH = rr.height; } catch(_){}
+    minLift = 0;
+    maxLift = Math.max(0, window.innerHeight - hdrH - selfH - feetBaseline() - 24);
+    if(ly<minLift) ly=minLift; if(ly>maxLift) ly=maxLift;
     refreshObstacle();
   }
   function setDir(){ /* v561: lean is now driven by velocity in frame(); the flip is gone. */ }
@@ -32382,7 +32390,9 @@ body.aclive-on #anyclip-avatar{display:none !important;}
     /* v561: liftAt() stepped the character over the relay legend as if it were an
      * obstacle on the ground. A floating character has no ground, so it hovers at
      * one height — the legend is simply below it. */
-    var lift = 0;
+    /* v563: `ly` is the drift's vertical position — the character roams the map,
+     * not just a band along the bottom. */
+    var lift = ly;
     el.style.transform = 'translateX(' + Math.round(x) + 'px) translateY(' + (-Math.round(lift)) + 'px)';
     var climbing = lift > 4;
     if(svg) svg.classList.toggle('climbing', climbing);
@@ -32403,36 +32413,101 @@ body.aclive-on #anyclip-avatar{display:none !important;}
    * target, is capped, and decays to zero as it arrives. On arrival it idles for
    * a random 1.5-4s, then picks a new target. Nothing here is a footstep. */
   var vx = 0, tx = x, holdUntil = 0;
+  /* v563: second axis. `ly` is the current lift above the resting baseline
+   * (translateY(-ly)), `ty` its target. Same damped chase as x. */
+  var ly = 0, vy = 0, ty = 0, minLift = 0, maxLift = 0;
   var MAX_V = 18, ACCEL = 30, ARRIVE = 10;
   /* Short hops, not crossings. A target is 90-260px from where it is now, in a
    * random direction, so a typical move lasts a few seconds and ends in a pause.
    * Crossing the whole width at a steady speed — which the first cut did — is
    * just a slower patrol. Lakitu hovers near where he is and nudges around. */
-  var arrived = false;
+  var arrived = false, lastEvictCheck = 0;
+  /* v563: things the character must not float over. Not a fixed list of panel
+   * ids — that is the same trap as the i18n root list, where a panel added later
+   * is simply unknown. Instead: every fixed/absolute element that is visible,
+   * sizeable, and not the character itself. A new panel is avoided by default. */
+  function roamObstacles(){
+    var out = [];
+    var hdr = document.getElementById('hdr'); if (hdr) out.push(hdr.getBoundingClientRect());
+    document.querySelectorAll('#sidebar,#relay-panel,#health-panel,#domain-panel,#alert-panel,#anychat-panel,#ovc-cluster,#mobile-nav,#bottom-sheet,#ticker,#explore-card,#ob-tour-overlay .ob-tooltip').forEach(function(n){
+      var cs = getComputedStyle(n);
+      if (cs.display === 'none' || cs.visibility === 'hidden' || cs.opacity === '0') return;
+      var r = n.getBoundingClientRect();
+      if (r.width < 40 || r.height < 40) return;
+      out.push(r);
+    });
+    return out;
+  }
+  /* Would the character's box at (px, plift) overlap any obstacle or leave the
+   * viewport? Uses the element's real rect, shifted by the hypothetical move, so
+   * the size is always correct without being hardcoded. */
+  function freeAt(px, plift){
+    var r = el.getBoundingClientRect();
+    if (!r.width) return true;
+    var dx = px - x, dy = -(plift - ly);
+    var L = r.left + dx, R = r.right + dx, T = r.top + dy, B = r.bottom + dy;
+    var pad = 10;
+    if (L < pad || R > innerWidth - pad || T < pad || B > innerHeight - pad) return false;
+    var obs = roamObstacles();
+    for (var i = 0; i < obs.length; i++){
+      var o = obs[i];
+      if (L < o.right + pad && R > o.left - pad && T < o.bottom + pad && B > o.top - pad) return false;
+    }
+    return true;
+  }
   function pickTarget(){
-    var hop = 90 + Math.random() * 170;
-    var side = Math.random() < 0.5 ? -1 : 1;
-    if (x + side*hop < minX || x + side*hop > maxX) side = -side;
-    tx = Math.max(minX, Math.min(maxX, x + side * hop));
-    arrived = false;
+    /* Rejection-sample a free spot within a hop's reach. Up to 24 tries, then
+     * stay put — a crowded screen is not a reason to fly into a panel. */
+    /* Box sampling, not polar. A polar hop against a wall (e.g. the sidebar edge
+     * at minX) clamps half its angles onto the wall and the character lingers
+     * there — measured 120s hugging x 224-373 of a 224-1336 range. A uniform box
+     * around the current spot has no angular bias and spreads properly. */
+    for (var i = 0; i < 24; i++){
+      var nx = Math.max(minX, Math.min(maxX, x + (Math.random() * 2 - 1) * 260));
+      var ny = Math.max(minLift, Math.min(maxLift, ly + (Math.random() * 2 - 1) * 160));
+      if (Math.abs(nx - x) + Math.abs(ny - ly) < 60) continue;
+      if (freeAt(nx, ny)) { tx = nx; ty = ny; arrived = false; return; }
+    }
+    /* No free hop nearby. That happens when a panel opens ON TOP of the
+     * character: a 300px panel cannot be cleared by a 90-260px hop in a random
+     * direction. Search the whole roam area instead and go there — a long move,
+     * but only when trapped, and nearest-first so it takes the shortest exit. */
+    var best = null, bestD = Infinity;
+    for (var j = 0; j < 60; j++){
+      var gx = minX + Math.random() * (maxX - minX);
+      var gy = minLift + Math.random() * (maxLift - minLift);
+      if (!freeAt(gx, gy)) continue;
+      var dd = (gx - x) * (gx - x) + (gy - ly) * (gy - ly);
+      if (dd < bestD) { bestD = dd; best = [gx, gy]; }
+    }
+    if (best) { tx = best[0]; ty = best[1]; arrived = false; return; }
+    tx = x; ty = ly; arrived = false;
   }
   /* Called whenever drift resumes after something else moved the character
    * (keynote tweens x directly). Without this, tx still points at the target
    * from before the interruption and the character lurches toward it. Resetting
    * makes it hang where it is, then pick a fresh hop from there. */
-  function resetDrift(){ vx = 0; tx = x; arrived = false; }
+  function resetDrift(){ vx = 0; vy = 0; tx = x; ty = ly; arrived = false; }
   function frame(now){
     var dt = Math.min(.05, (now-last)/1000); last = now;
     if(walking && !presenting && !reduced){
-      var d = tx - x;
-      if (Math.abs(d) < ARRIVE) {
+      /* v563: if something opened on top of the character since the last frame,
+       * leave now rather than at the next scheduled hop. Cheap — one rect test. */
+      if (now - lastEvictCheck > 400) {
+        lastEvictCheck = now;
+        if (!freeAt(x, ly)) { arrived = false; pickTarget(); }
+      }
+      var d = tx - x, dyv = ty - ly;
+      var dist = Math.sqrt(d*d + dyv*dyv);
+      if (dist < ARRIVE) {
         /* Inside the arrival zone: kill velocity and ease onto the target directly.
          * The first cut only decayed vx here, and at 18px/s that carried ~7px —
          * past a 5px zone — so it overshot, reversed, overshot again, and never
          * came to rest. Never resting meant never pausing, never re-targeting:
          * a permanent oscillation. Snapping the last few px removes that. */
-        vx = 0;
-        x += d * Math.min(1, 6 * dt);
+        vx = 0; vy = 0;
+        x  += d   * Math.min(1, 6 * dt);
+        ly += dyv * Math.min(1, 6 * dt);
         /* The pause is timed from ARRIVAL. An earlier cut set holdUntil when the
          * hop started, so by the time a 5-14s hop landed the hold had already
          * expired and it re-targeted on the next frame — hops with no rest in
@@ -32442,11 +32517,14 @@ body.aclive-on #anyclip-avatar{display:none !important;}
       } else {
         /* Brake so speed is ~0 at the zone edge, not at the target: the 0.6
          * factor keeps the approach comfortably under the sqrt(2ad) limit. */
-        var want = Math.sign(d) * Math.min(MAX_V, 0.6 * Math.sqrt(2 * ACCEL * Math.abs(d)));
-        vx += Math.max(-ACCEL*dt, Math.min(ACCEL*dt, want - vx));
+        /* Brake on the 2D distance so diagonal moves ease the same as straight ones. */
+        var spd = Math.min(MAX_V, 0.6 * Math.sqrt(2 * ACCEL * dist));
+        var wantX = d / dist * spd, wantY = dyv / dist * spd;
+        vx += Math.max(-ACCEL*dt, Math.min(ACCEL*dt, wantX - vx));
+        vy += Math.max(-ACCEL*dt, Math.min(ACCEL*dt, wantY - vy));
       }
-      x += vx * dt;
-      x = Math.max(minX, Math.min(maxX, x));
+      x  += vx * dt;  x  = Math.max(minX, Math.min(maxX, x));
+      ly += vy * dt;  ly = Math.max(minLift, Math.min(maxLift, ly));
       var lean = vx > 5 ? 'dir-right' : vx < -5 ? 'dir-left' : 'dir-still';
       if (el.dataset.lean !== lean) {
         el.classList.remove('dir-left','dir-right','dir-still');
@@ -32531,7 +32609,18 @@ body.aclive-on #anyclip-avatar{display:none !important;}
     el.classList.toggle('hidden', !show);
     document.body.classList.toggle('aclive-on', show);
     if(!show){ walking = false; if(presenting) endKeynote(); }
-    else if(!presenting){ walking = !reduced; if(svg) svg.classList.toggle('walking', !reduced); resetDrift(); }
+    else if(!presenting){
+      /* v563 BUGFIX: this runs on an 800ms interval. v561 put resetDrift() here
+       * unconditionally, so every 800ms the drift target was snapped back to the
+       * current position — the character could never travel more than a few px
+       * before being told it had already arrived. Since v561 it has been sitting
+       * frozen at its resting spot, which is why it was found parked on top of
+       * the Relay Browser: it never moved, and the panel opened onto it.
+       * Reset only on the false->true transition. */
+      var wasWalking = walking;
+      walking = !reduced; if(svg) svg.classList.toggle('walking', !reduced);
+      if (walking && !wasWalking) resetDrift();
+    }
   }
   if(document.readyState === 'loading') document.addEventListener('DOMContentLoaded', ready);
   else ready();
