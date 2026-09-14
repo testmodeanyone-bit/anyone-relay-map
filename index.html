@@ -9183,6 +9183,16 @@ function applyStats(data, isLive=true){
    TICKER
 ══════════════════════════════════════════ */
 function buildTicker(data){
+  /* v577: the ticker was built from FALLBACK — the stale 221-zone embedded
+   * snapshot — and labelled LIVE, scrolling "652 RELAYS @51.13°, 9.39°" with raw
+   * coordinates because nothing had enriched them. Same class v564 fixed for the
+   * sidebar. On fallback data, say so instead. */
+  if (data === FALLBACK){
+    const inner = document.getElementById('tktext'); if(!inner) return;
+    inner.innerHTML = '<span style="color:#fbbf24;font-weight:700;letter-spacing:1px">' + _i18t('liveDataUnavailable','Live data unavailable').toUpperCase() + '</span>';
+    const badge = document.querySelector('#ticker .tk-badge span'); if(badge) badge.textContent = _i18t('offline','OFFLINE');
+    return;
+  }
   const top=[...data].sort((a,b)=>b.relayCount-a.relayCount).slice(0,25);
   const sep='<span style="margin:0 22px;color:#0d3040">◆</span>';
   const items=top.map(d=>{
@@ -22445,6 +22455,32 @@ function animateCounter(target){
 function setStatus(msg){
   document.getElementById('status').textContent=msg;
 }
+/* v577: VISIBLE failure state. #status is display:none in the markup, so every
+ * message written to it — including "Map load failed" — has been invisible.
+ * When the proxy is down a user saw a silent empty map: dashes in the sidebar,
+ * no explanation, and a ticker scrolling the stale FALLBACK snapshot under a
+ * LIVE badge. This shows a banner with the reason and a retry, and is called
+ * from every path that gives up: init()'s catch, the FALLBACK branch, the map
+ * loader's 30s safety, and growth's failure. Idempotent. */
+function showUnavailable(reason){
+  let b = document.getElementById('data-unavailable');
+  if(!b){
+    b = document.createElement('div');
+    b.id = 'data-unavailable';
+    b.setAttribute('role','status');
+    b.style.cssText = 'position:fixed;left:50%;top:64px;transform:translateX(-50%);z-index:8000;'
+      + 'background:rgba(8,12,22,.96);border:1px solid rgba(251,191,36,.5);border-radius:10px;'
+      + 'padding:10px 14px;font-family:Rajdhani,sans-serif;font-size:13px;color:#fde68a;'
+      + 'display:flex;gap:12px;align-items:center;box-shadow:0 12px 40px rgba(0,0,0,.5);max-width:calc(100vw - 32px)';
+    b.innerHTML = '<span id="data-unavailable-msg"></span>'
+      + '<button onclick="location.reload()" style="background:rgba(251,191,36,.15);border:1px solid rgba(251,191,36,.5);color:#fde68a;border-radius:6px;padding:4px 10px;font-size:12px;cursor:pointer;min-height:32px">'
+      + _i18t('retry','Retry') + '</button>';
+    document.body.appendChild(b);
+  }
+  document.getElementById('data-unavailable-msg').textContent = reason || _i18t('liveDataUnavailable','Live data unavailable');
+  b.style.display = 'flex';
+}
+function hideUnavailable(){ const b=document.getElementById('data-unavailable'); if(b) b.style.display='none'; }
 
 let lastRefreshTs = Date.now();
 
@@ -22491,6 +22527,7 @@ async function refresh(){
       relayData=data;
       applyStats(data);
       buildTicker(data);
+      hideUnavailable();   /* v577: live data landed — clear any earlier failure banner */
       if(exitFps.size > 0 || stableFps.size > 0){
         tagZones(data);
       }
@@ -25724,7 +25761,7 @@ async function init(){
      * with none of the provisional styling. The refresh path (v?) already checks
      * `data === FALLBACK`; init did not. */
     applyStats(data, data !== FALLBACK);
-    if (data === FALLBACK) setStatus('Live data unavailable — showing map only');
+    if (data === FALLBACK){ setStatus('Live data unavailable — showing map only'); showUnavailable(_i18t('liveDataUnavailableMap','Live data unavailable — showing cached map only')); }
     buildTicker(data);
     buildCountryCache();
     /* v392: MapLibre is the default. Previously D3 was fully built then hidden once
@@ -25781,6 +25818,7 @@ async function init(){
     setInterval(fetchFlagIndex, 5 * 60 * 1000);
   }catch(e){
     setStatus('Map load failed: '+e.message);
+    showUnavailable(_i18t('mapLoadFailed','The map could not load'));   /* v577: was silent */
   }
 }
 
@@ -33001,7 +33039,15 @@ body.aclive-on #anyclip-avatar{display:none !important;}
       } catch(_){ return false; }
     }
     var poll = setInterval(function(){ if (ready()){ clearInterval(poll); hide(); } }, 250);
-    setTimeout(function(){ clearInterval(poll); hide(); }, 30000); /* safety: never stick */
+    setTimeout(function(){
+      clearInterval(poll);
+      /* v577: if we are hiding because nothing ever arrived — not because it
+       * painted — say so, instead of leaving an empty map with no explanation. */
+      if (!ready() && typeof showUnavailable === 'function' && !(window.allRelays && window.allRelays.length)) {
+        showUnavailable(_i18t('liveDataUnavailable','Live data unavailable'));
+      }
+      hide();
+    }, 30000); /* safety: never stick */
     return true;
   }
   if (!init()){
