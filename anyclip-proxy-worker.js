@@ -3258,7 +3258,7 @@ async function computeExitRelays(env, ctx) {
             if (w.wallet && consensus > 0) walletAddrs.push(w.wallet);
           }
         };
-        const r0 = await fetch(`${WALLET_LOOKUP}&page=1`);
+        const r0 = await fetchT(`${WALLET_LOOKUP}&page=1`);
         /* v575: this was `return cors(..., 502)` when the code lived in the route.
          * As a compute function it must THROW — returning a Response here would be
          * cached and stringified as the payload. The route catches and 502s. */
@@ -3270,7 +3270,7 @@ async function computeExitRelays(env, ctx) {
         for (let p = 2; p <= pages; p += 20) {
           const batch = Array.from({ length: Math.min(20, pages - p + 1) }, (_, i) => p + i);
           await Promise.all(batch.map(
-            (pg) => fetch(`${WALLET_LOOKUP}&page=${pg}`).then((r) => r.json()).then((d) => collectWallets(d.wallets)).catch(() => {
+            (pg) => fetchT(`${WALLET_LOOKUP}&page=${pg}`).then((r) => r.json()).then((d) => collectWallets(d.wallets)).catch(() => {
             })
           ));
         }
@@ -3320,7 +3320,7 @@ async function computeExitRelays(env, ctx) {
           for (let p = 2; p <= pages; p += 20) {
             const batch = Array.from({ length: Math.min(20, pages - p + 1) }, (_, i) => p + i);
             await Promise.all(batch.map(
-              (pg) => fetch(`${WALLET_LOOKUP}&page=${pg}`).then((r) => r.json()).then((d) => sumIps(d.wallets)).catch(() => {
+              (pg) => fetchT(`${WALLET_LOOKUP}&page=${pg}`).then((r) => r.json()).then((d) => sumIps(d.wallets)).catch(() => {
               })
             ));
           }
@@ -3371,6 +3371,34 @@ async function computeExitRelays(env, ctx) {
 
 var EXIT_RELAYS_KEY = "exit_relays_resp_v1";
 var EXIT_RELAYS_FRESH_MS = 5 * 60 * 1e3;
+
+/* v585: every upstream fetch gets a timeout. 44 of 73 fetch() calls had none —
+ * the wallet-lookup pagination, all 16 Pinata calls, the Anthropic calls. One
+ * hung socket pinned the isolate until Cloudflare killed it, and inside a
+ * background refresh that meant the KV key aged out to a hard cold start.
+ * fetchT() adds AbortSignal.timeout(ms) and combines it with any signal the
+ * caller already passed. Default 8s; callers that need longer say so. */
+function fetchT(input, init, ms) {
+  init = init || {}; ms = ms || 8000;
+  const t = AbortSignal.timeout(ms);
+  const signal = init.signal ? AbortSignal.any([init.signal, t]) : t;
+  return fetch(input, { ...init, signal });
+}
+
+/* v585: SINGLE-FLIGHT for cold-start computes. When a stale-while-revalidate
+ * key is missing (first deploy, KV eviction, TTL lapse), every concurrent
+ * request ran the full compute inline — 33-90s and ~500 subrequests EACH. N
+ * concurrent cold hits = N parallel computes. A KV lock lets exactly one run;
+ * the others get a 503 with Retry-After and the SPA's existing dash/retry
+ * handling. A Durable Object is the fully correct primitive; this is 95% of
+ * it with no new binding. */
+async function withSingleFlight(env, key, ttlSec, fn) {
+  const lockKey = key + ":lock";
+  try { if (await env.FP_INDEX.get(lockKey)) return null; } catch (_) {}
+  try { await env.FP_INDEX.put(lockKey, String(Date.now()), { expirationTtl: ttlSec }); } catch (_) {}
+  try { return await fn(); }
+  finally { try { await env.FP_INDEX.delete(lockKey); } catch (_) {} }
+}
 
 var STAKES_CONC = 12;
 
@@ -5682,7 +5710,7 @@ async function getGrowthHistory(env, days = GROWTH_DAYS) {
 }
 async function backfillHistory(env, days = 30) {
   if (!env.FP_INDEX) return { error: "no KV binding" };
-  const r0 = await fetch(`${WALLET_LOOKUP}&page=1`);
+  const r0 = await fetchT(`${WALLET_LOOKUP}&page=1`);
   if (!r0.ok) throw new Error("upstream error: " + r0.status);
   const d0 = await r0.json();
   const totalPages = d0.pages || 1;
@@ -5691,7 +5719,7 @@ async function backfillHistory(env, days = 30) {
   for (let p = 2; p <= totalPages; p += 20) {
     const batch = Array.from({ length: Math.min(20, totalPages - p + 1) }, (_, i) => p + i);
     const results = await Promise.all(
-      batch.map((pg) => fetch(`${WALLET_LOOKUP}&page=${pg}`).then((r) => r.json()).then((d) => d.wallets || []).catch(() => []))
+      batch.map((pg) => fetchT(`${WALLET_LOOKUP}&page=${pg}`).then((r) => r.json()).then((d) => d.wallets || []).catch(() => []))
     );
     for (const rows of results) allWallets.push(...rows);
   }
@@ -6119,7 +6147,19 @@ async function recordCronOutcome(env, task, ok, errMsg) {
 }
 
 var worker_source_default = {
+  /* v585: handler-level catch. There was none, so any uncaught throw in any
+   * route surfaced as Cloudflare's HTML error page — no CORS header, so the
+   * SPA saw a network error instead of a JSON error it could show. Wrapping
+   * the original handler rather than its body keeps the edit mechanical and
+   * brace-safe. */
   async fetch(request, env, ctx) {
+    try { return await this._fetchInner(request, env, ctx); }
+    catch (e) {
+      console.error("[proxy] unhandled:", e && e.stack || e);
+      return cors(JSON.stringify({ error: "internal", message: String(e && e.message || e).slice(0, 200) }), 500);
+    }
+  },
+  async _fetchInner(request, env, ctx) {
     if (request.method === "OPTIONS") return corsHeaders();
     const url = new URL(request.url);
     /* v39 (audit fix #15): bound POST body size BEFORE body is buffered. Pre-v39,
@@ -6415,7 +6455,12 @@ var worker_source_default = {
         /* v548: exact figure first (Staked-Unstaked events, needs ETH_RPC_URL);
          * fall back to balanceOf, which measures a DIFFERENT thing and says so in
          * `source` so the discrepancy is visible rather than silent. */
-        const ev = await fetchTotalStakedExact(env);
+        /* v585: the true cold path — nothing cached at all. Single-flight so N
+         * concurrent first visitors do not each start an 850-call chain walk,
+         * and a per-IP limit on top. Late arrivals get a 503 with Retry-After. */
+        if (await _rlExceeded(env, "staked-cold:" + (request.headers.get("CF-Connecting-IP") || "unknown"), 3, 60)) return cors(JSON.stringify({ error: "rate limited" }), 429, { "Retry-After": "30" });
+        const ev = await withSingleFlight(env, "total_staked_v2", 120, () => fetchTotalStakedExact(env));
+        if (ev === null) return cors(JSON.stringify({ error: "warming", retryAfter: 30 }), 503, { "Retry-After": "30" });
         let measured = ev && ev.ok ? ev : null;
         let source = "ethereum:stakes";
         let fallbackReason = null;
@@ -6931,6 +6976,70 @@ var worker_source_default = {
       }
     }
 
+    /* v584: IMAGE + LINK-PREVIEW PROXY — closes an IP-leak in the Operators Lounge.
+     *
+     * Two client paths made EVERY viewer's browser request a host chosen by
+     * ANOTHER participant: `[gif:URL]` rendered <img src="<user URL>"> with the
+     * CSP at img-src https: (any origin), and link previews fetched
+     * api.allorigins.win/raw?url=… from the client — a third party that then
+     * saw every viewer's IP and every URL shared in the lounge. On a privacy
+     * network's operator chat, that is a deanonymisation primitive available
+     * to any participant. Both now go through this worker: the upstream sees
+     * Cloudflare's IP, the viewer sees only this origin. Cached at the edge so
+     * one popular GIF is one upstream fetch, not one per viewer. */
+    if (url.pathname === "/api/img" && request.method === "GET") {
+      const target = url.searchParams.get("u") || "";
+      let t; try { t = new URL(target); } catch (_) { return cors(JSON.stringify({ error: "bad url" }), 400); }
+      if (t.protocol !== "https:") return cors(JSON.stringify({ error: "https only" }), 400);
+      if (/^(localhost|127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|169\.254\.|\[?::1)/.test(t.hostname)) return cors(JSON.stringify({ error: "blocked host" }), 400);
+      if (await _rlExceeded(env, "img:" + (request.headers.get("CF-Connecting-IP") || "unknown"), 120, 60)) return cors(JSON.stringify({ error: "rate limited" }), 429);
+      const cache = caches.default;
+      const cacheKey = new Request("https://img-cache.anyonemap.internal/" + encodeURIComponent(target));
+      let res = await cache.match(cacheKey);
+      if (res) return res;
+      let up;
+      try { up = await fetch(t.toString(), { signal: AbortSignal.timeout(6000), redirect: "follow", headers: { "User-Agent": "AnyoneMap-ImageProxy/1.0", "Accept": "image/*" } }); }
+      catch (_) { return cors(JSON.stringify({ error: "upstream" }), 502); }
+      const ct = (up.headers.get("content-type") || "").toLowerCase();
+      if (!up.ok || !ct.startsWith("image/") || ct.includes("svg")) return cors(JSON.stringify({ error: "not an image" }), 415);
+      const len = Number(up.headers.get("content-length") || 0);
+      if (len > 8 * 1024 * 1024) return cors(JSON.stringify({ error: "too large" }), 413);
+      const buf = await up.arrayBuffer();
+      if (buf.byteLength > 8 * 1024 * 1024) return cors(JSON.stringify({ error: "too large" }), 413);
+      res = new Response(buf, { headers: {
+        "Content-Type": ct, "Cache-Control": "public, max-age=86400", "X-Content-Type-Options": "nosniff",
+        "Access-Control-Allow-Origin": ALLOWED_ORIGIN, "Cross-Origin-Resource-Policy": "cross-origin"
+      } });
+      ctx.waitUntil(cache.put(cacheKey, res.clone()));
+      return res;
+    }
+    if (url.pathname === "/api/link-meta" && request.method === "GET") {
+      const target = url.searchParams.get("u") || "";
+      let t; try { t = new URL(target); } catch (_) { return cors(JSON.stringify({ error: "bad url" }), 400); }
+      if (t.protocol !== "https:" && t.protocol !== "http:") return cors(JSON.stringify({ error: "http(s) only" }), 400);
+      if (/^(localhost|127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|169\.254\.|\[?::1)/.test(t.hostname)) return cors(JSON.stringify({ error: "blocked host" }), 400);
+      if (await _rlExceeded(env, "lm:" + (request.headers.get("CF-Connecting-IP") || "unknown"), 60, 60)) return cors(JSON.stringify({ error: "rate limited" }), 429);
+      const cache = caches.default;
+      const cacheKey = new Request("https://linkmeta-cache.anyonemap.internal/" + encodeURIComponent(target));
+      const hit = await cache.match(cacheKey);
+      if (hit) return hit;
+      let meta = { url: target, title: "", description: "", image: "" };
+      try {
+        const up = await fetch(t.toString(), { signal: AbortSignal.timeout(6000), redirect: "follow", headers: { "User-Agent": "AnyoneMap-LinkPreview/1.0", "Accept": "text/html" } });
+        const ct = (up.headers.get("content-type") || "").toLowerCase();
+        if (up.ok && ct.includes("text/html")) {
+          const html = (await up.text()).slice(0, 200 * 1024);
+          const pick = (re) => { const m = html.match(re); return m ? m[1].replace(/\s+/g, " ").trim().slice(0, 200) : ""; };
+          meta.title = pick(/<meta[^>]+property=["']og:title["'][^>]+content=["']([^"']+)/i) || pick(/<title[^>]*>([^<]{1,200})/i);
+          meta.description = pick(/<meta[^>]+(?:property=["']og:description["']|name=["']description["'])[^>]+content=["']([^"']+)/i);
+          meta.image = pick(/<meta[^>]+property=["']og:image["'][^>]+content=["']([^"']+)/i);
+          if (meta.image && !/^https:\/\//i.test(meta.image)) meta.image = "";
+        }
+      } catch (_) {}
+      const res = cors(JSON.stringify(meta), 200, { "Cache-Control": "public, max-age=86400" });
+      ctx.waitUntil(cache.put(cacheKey, res.clone()));
+      return res;
+    }
     if (url.pathname === "/api/exit-relays" && request.method === "GET") {
       /* v575: stale-while-revalidate. See computeExitRelays. */
       let cached = null;
@@ -6952,8 +7061,10 @@ var worker_source_default = {
       }
       /* Cold start: nothing cached. Compute inline this once; it is also what
        * the cron warmer prevents in normal operation. */
+      if (await _rlExceeded(env, "exit-cold:" + (request.headers.get("CF-Connecting-IP") || "unknown"), 3, 60)) return cors(JSON.stringify({ error: "rate limited" }), 429, { "Retry-After": "30" });
       try {
-        const fresh = await computeExitRelays(env, ctx);
+        const fresh = await withSingleFlight(env, EXIT_RELAYS_KEY, 120, () => computeExitRelays(env, ctx));
+        if (!fresh) return cors(JSON.stringify({ error: "warming", retryAfter: 30 }), 503, { "Retry-After": "30" });
         if (env.FP_INDEX) ctx.waitUntil(env.FP_INDEX.put(EXIT_RELAYS_KEY, JSON.stringify(fresh), { expirationTtl: 7 * 86400 }).catch(() => {}));
         return respond(fresh, "MISS", 0);
       } catch (err) {
@@ -7114,7 +7225,7 @@ var worker_source_default = {
         }
         let anyoneData = null;
         try {
-          const anyoneRes = await fetch(`https://api.ec.anyone.tech/relays/${fp}`);
+          const anyoneRes = await fetchT(`https://api.ec.anyone.tech/relays/${fp}`);
           if (anyoneRes.ok) {
             const d = await anyoneRes.json();
             if (d && d.fingerprint) {
@@ -7128,12 +7239,12 @@ var worker_source_default = {
          * each = 250 outbound fetches per request. Now: same iteration logic but the
          * per-IP rate limit above prevents abuse. */
         for (let page = 1; page <= 5 && !found; page++) {
-          const netRes = await fetch(`${WALLET_LOOKUP}&page=${page}`);
+          const netRes = await fetchT(`${WALLET_LOOKUP}&page=${page}`);
           if (!netRes.ok) break;
           const netData = await netRes.json();
           const wallets = (netData.wallets || []).filter((w) => w.in_consensus_ips > 0).map((w) => w.wallet);
           const results = await Promise.all(wallets.map(
-            (wallet) => fetch(`${IPS_BASE}${encodeURIComponent(wallet)}`).then((r) => r.json()).then((data) => {
+            (wallet) => fetchT(`${IPS_BASE}${encodeURIComponent(wallet)}`).then((r) => r.json()).then((data) => {
               const match = (data.ips || []).find((r) => (r.fingerprint || "").toUpperCase() === fp);
               return match ? { wallet, relay: match } : null;
             }).catch(() => null)
@@ -7555,7 +7666,7 @@ var worker_source_default = {
         if (_aiInputChars > 24000) {
           return cors(JSON.stringify({ error: { message: "Request too large" } }), 400);
         }
-        const anthropicRes = await fetch("https://api.anthropic.com/v1/messages", {
+        const anthropicRes = await fetchT("https://api.anthropic.com/v1/messages", {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
@@ -7572,6 +7683,7 @@ var worker_source_default = {
             messages: body.messages
           })
         });
+        if (!anthropicRes.ok) throw new Error("anthropic " + anthropicRes.status);   /* v585: was parsed unguarded — a 5xx HTML body threw an unhandled rejection */
         const _aiJson = await anthropicRes.json();
         /* v538: moderation tasks return a PARSED VERDICT, not the raw Anthropic
          * envelope.
@@ -7626,7 +7738,7 @@ var worker_source_default = {
         }
         if (history.length < 3) {
           try {
-            const trResp = await fetch("https://api.ec.anyone.tech/total-relays");
+            const trResp = await fetchT("https://api.ec.anyone.tech/total-relays");
             if (trResp.ok) {
               const trData = await trResp.json();
               const source = trData.online || trData.all || [];
@@ -7748,7 +7860,7 @@ var worker_source_default = {
             `*Time:* ${escapeTgMd(received)}`
           ].join("\n");
           try {
-            const tgRes = await fetch(`https://api.telegram.org/bot${TG_TOKEN}/sendMessage`, {
+            const tgRes = await fetchT(`https://api.telegram.org/bot${TG_TOKEN}/sendMessage`, {
               method: "POST",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({ chat_id: TG_CHAT, text, parse_mode: "MarkdownV2" })
@@ -7895,7 +8007,7 @@ var worker_source_default = {
           isOperator = _opCached.isOperator;
         } else {
           try {
-            const r0 = await fetch(`${WALLET_LOOKUP}&page=1`);
+            const r0 = await fetchT(`${WALLET_LOOKUP}&page=1`);
             if (!r0.ok) throw new Error("upstream " + r0.status);
             const d0 = await r0.json();
             const totalPages = d0.pages || 1;
@@ -7904,7 +8016,7 @@ var worker_source_default = {
             if (!isOperator && totalPages > 1) {
               for (let p = 2; p <= totalPages && !isOperator; p += 20) {
                 const batch = Array.from({ length: Math.min(20, totalPages - p + 1) }, (_, i) => p + i);
-                const results = await Promise.all(batch.map((pg) => fetch(`${WALLET_LOOKUP}&page=${pg}`).then((r) => r.json()).catch(() => ({}))));
+                const results = await Promise.all(batch.map((pg) => fetchT(`${WALLET_LOOKUP}&page=${pg}`).then((r) => r.json()).catch(() => ({}))));
                 if (results.some(pageHas)) {
                   isOperator = true;
                   break;
@@ -8001,7 +8113,7 @@ var worker_source_default = {
                   }
                   if (!_hwSet) {
                     try {
-                      const hwRes = await fetch(`${url.origin}/api/hw-relays`);
+                      const hwRes = await fetchT(`${url.origin}/api/hw-relays`);
                       const hwData = await hwRes.json();
                       _hwSet = new Set((hwData.hw_fingerprints || hwData.fingerprints || []).map((fp) => fp.toUpperCase()));
                     } catch (_) {
@@ -8030,11 +8142,11 @@ var worker_source_default = {
              * runs) or cache empty. Same code as before; this path is the only
              * one that still leaks the wallet to upstream URL logs, but it now
              * fires only on cache miss instead of every login. */
-            const ipsRes = await fetch(`${IPS_BASE}${cleanedWallet}`);
+            const ipsRes = await fetchT(`${IPS_BASE}${cleanedWallet}`);
             const ipsData = await ipsRes.json();
             const relays = ipsData.relays || ipsData.ips || [];
             relayCount = relays.length;
-            const hwRes = await fetch(`${url.origin}/api/hw-relays`);
+            const hwRes = await fetchT(`${url.origin}/api/hw-relays`);
             const hwData = await hwRes.json();
             const hwSet = new Set((hwData.hw_fingerprints || hwData.fingerprints || []).map((fp) => fp.toUpperCase()));
             isHW = relays.some((r) => hwSet.has((r.fingerprint || r.fp || "").toUpperCase()));
@@ -8458,7 +8570,7 @@ I confirm I control this wallet.`;
           try {
             const pubMsg = { type: msg.type, nick: msg.nick, tier: msg.tier, text: msg.text, time: msg.time };
             const _rand = Array.from(crypto.getRandomValues(new Uint8Array(4))).map((b) => b.toString(16).padStart(2, "0")).join("");
-            ctx.waitUntil(fetch("https://api.pinata.cloud/pinning/pinJSONToIPFS", {
+            ctx.waitUntil(fetchT("https://api.pinata.cloud/pinning/pinJSONToIPFS", {
               method: "POST",
               headers: { "Content-Type": "application/json", "Authorization": "Bearer " + env.PINATA_JWT },
               body: JSON.stringify({
@@ -8553,7 +8665,7 @@ I confirm I control this wallet.`;
         let moderationDecision = "reject";
         let moderationReason = "Moderation unavailable";
         try {
-          const modRes = await fetch("https://api.anthropic.com/v1/messages", {
+          const modRes = await fetchT("https://api.anthropic.com/v1/messages", {
             method: "POST",
             headers: {
               "Content-Type": "application/json",
@@ -8620,7 +8732,7 @@ I confirm I control this wallet.`;
         formData.append("file", blob, safeName);
         const _imgRand = Array.from(crypto.getRandomValues(new Uint8Array(4))).map((b) => b.toString(16).padStart(2, "0")).join("");
         formData.append("pinataMetadata", JSON.stringify({ name: `img:${imgTime}:${_imgRand}` }));
-        const pinRes = await fetch("https://api.pinata.cloud/pinning/pinFileToIPFS", {
+        const pinRes = await fetchT("https://api.pinata.cloud/pinning/pinFileToIPFS", {
           method: "POST",
           headers: { "Authorization": "Bearer " + env.PINATA_JWT },
           body: formData
@@ -8663,7 +8775,7 @@ I confirm I control this wallet.`;
         const chatters = /* @__PURE__ */ new Map();
         if (env.PINATA_JWT) {
           try {
-            const pinRes = await fetch("https://api.pinata.cloud/data/pinList?status=pinned&metadata[name]=chat&pageLimit=200&sortBy=date_pinned&sortOrder=DESC", {
+            const pinRes = await fetchT("https://api.pinata.cloud/data/pinList?status=pinned&metadata[name]=chat&pageLimit=200&sortBy=date_pinned&sortOrder=DESC", {
               headers: { "Authorization": "Bearer " + env.PINATA_JWT }
             });
             if (pinRes.ok) {
@@ -9083,7 +9195,7 @@ I confirm I control this wallet.`;
            * or affect the response shape. */
           ctx.waitUntil((async () => {
             try {
-              const pinRes = await fetch("https://api.pinata.cloud/pinning/pinJSONToIPFS", {
+              const pinRes = await fetchT("https://api.pinata.cloud/pinning/pinJSONToIPFS", {
                 method: "POST",
                 headers: { "Content-Type": "application/json", "Authorization": "Bearer " + env.PINATA_JWT },
                 body: JSON.stringify({
@@ -9102,7 +9214,7 @@ I confirm I control this wallet.`;
             ctx.waitUntil((async () => {
               try {
                 const _onlineRand = Array.from(crypto.getRandomValues(new Uint8Array(8))).map((b) => b.toString(16).padStart(2, "0")).join("");
-                await fetch("https://api.pinata.cloud/pinning/pinJSONToIPFS", {
+                await fetchT("https://api.pinata.cloud/pinning/pinJSONToIPFS", {
                   method: "POST",
                   headers: { "Content-Type": "application/json", "Authorization": "Bearer " + env.PINATA_JWT },
                   body: JSON.stringify({
@@ -9194,7 +9306,7 @@ I confirm I control this wallet.`;
         let messages = [];
         if (env.PINATA_JWT) {
           try {
-            const pinListRes = await fetch("https://api.pinata.cloud/data/pinList?status=pinned&metadata[name]=chat&pageLimit=50&sortBy=date_pinned&sortOrder=DESC", {
+            const pinListRes = await fetchT("https://api.pinata.cloud/data/pinList?status=pinned&metadata[name]=chat&pageLimit=50&sortBy=date_pinned&sortOrder=DESC", {
               headers: { "Authorization": "Bearer " + env.PINATA_JWT }
             });
             if (pinListRes.ok) {
@@ -9290,7 +9402,7 @@ I confirm I control this wallet.`;
         let messages = [];
         if (env.PINATA_JWT) {
           try {
-            const pinListRes = await fetch(
+            const pinListRes = await fetchT(
               `https://api.pinata.cloud/data/pinList?status=pinned&metadata[name]=room:${encodeURIComponent(room)}&pageLimit=50&sortBy=date_pinned&sortOrder=DESC`,
               { headers: { "Authorization": "Bearer " + env.PINATA_JWT } }
             );
@@ -9457,7 +9569,7 @@ I confirm I control this wallet.`;
         }
         if (typers.length === 0 && env.PINATA_JWT) {
           try {
-            const res = await fetch("https://api.pinata.cloud/data/pinList?status=pinned&metadata[name]=typing&pageLimit=10&sortBy=date_pinned&sortOrder=DESC", {
+            const res = await fetchT("https://api.pinata.cloud/data/pinList?status=pinned&metadata[name]=typing&pageLimit=10&sortBy=date_pinned&sortOrder=DESC", {
               headers: { "Authorization": "Bearer " + env.PINATA_JWT }
             });
             if (res.ok) {
@@ -9499,7 +9611,7 @@ I confirm I control this wallet.`;
         let operators = [];
         if (env.PINATA_JWT) {
           try {
-            const onlineRes = await fetch("https://api.pinata.cloud/data/pinList?status=pinned&metadata[name]=online&pageLimit=30&sortBy=date_pinned&sortOrder=DESC", {
+            const onlineRes = await fetchT("https://api.pinata.cloud/data/pinList?status=pinned&metadata[name]=online&pageLimit=30&sortBy=date_pinned&sortOrder=DESC", {
               headers: { "Authorization": "Bearer " + env.PINATA_JWT }
             });
             if (onlineRes.ok) {
@@ -9608,7 +9720,7 @@ I confirm I control this wallet.`;
         if (env.PINATA_JWT) {
           try {
             const _onlineRand = Array.from(crypto.getRandomValues(new Uint8Array(8))).map((b) => b.toString(16).padStart(2, "0")).join("");
-            const pinRes = await fetch("https://api.pinata.cloud/pinning/pinJSONToIPFS", {
+            const pinRes = await fetchT("https://api.pinata.cloud/pinning/pinJSONToIPFS", {
               method: "POST",
               headers: { "Content-Type": "application/json", "Authorization": "Bearer " + env.PINATA_JWT },
               body: JSON.stringify({
@@ -9681,7 +9793,7 @@ I confirm I control this wallet.`;
             data: JSON.stringify({ nick: cleanedNick, tier: cleanedTier, wh, avatar: cleanedAvatar })
           };
           ctx.waitUntil(
-            fetch(`https://rest.ably.io/channels/operators-lounge/presence`, {
+            fetchT(`https://rest.ably.io/channels/operators-lounge/presence`, {
               method: "POST",
               headers: {
                 "Content-Type": "application/json",
@@ -9755,7 +9867,7 @@ I confirm I control this wallet.`;
          *   - Forces JSON-only output and gives an exact template. */
         const systemPrompt = "You are AnyClip, moderator of AnyChat — an operators lounge for relay node operators. Default to ALLOW. Only block messages that clearly violate the rules.\n\nALLOWED (do NOT flag):\n- Any short message: 'hi', 'testing', 'ok', 'lol', 'gm', 'sup'\n- Casual conversation, greetings, jokes, technical questions\n- Mild profanity ('damn', 'shit', 'wtf', 'fuck' as emphasis)\n- Typos, abbreviations, slang, emoji\n- Crypto/relay/node technical jargon\n- Questions and confusion (\"what?\", \"huh?\", \"why?\")\n- Negative feedback or complaints\n\nBLOCK ONLY (allow:false, warn:true):\n- Direct threats of violence against a person\n- Slurs targeting protected groups (race, religion, sexuality, gender)\n- Sexual content or solicitation\n- Promotion of terrorism or extremist ideology\n- URLs/links to external sites\n- Posting another person's real-world identity (doxxing)\n\nWhen uncertain, ALLOW. False positives degrade the lounge worse than the rare slip-through.\n\nRespond with ONLY a single JSON object, no preface, no explanation:\n{\"allow\":true,\"warn\":false,\"ban\":false,\"permanent\":false,\"category\":\"ok\",\"reason\":\"\"}\n\nIf and only if you flag, set allow:false, warn:true, and pick category from: threat|hate|nsfw|terrorism|link|doxx. Always provide a non-empty reason.";
         const userPayload = JSON.stringify({ from: safeNick, message: safeMessage });
-        const res = await fetch("https://api.anthropic.com/v1/messages", {
+        const res = await fetchT("https://api.anthropic.com/v1/messages", {
           method: "POST",
           headers: { "Content-Type": "application/json", "x-api-key": ANTHROPIC_KEY, "anthropic-version": "2023-06-01" },
           body: JSON.stringify({
@@ -9765,6 +9877,7 @@ I confirm I control this wallet.`;
             messages: [{ role: "user", content: userPayload }]
           })
         });
+        if (!res.ok) throw new Error("anthropic " + res.status);   /* v585: was parsed unguarded — a 5xx HTML body threw an unhandled rejection */
         const data = await res.json();
         const rawText = data.content?.[0]?.text || "{}";
         /* v20.1: tolerant JSON extraction. Previously: text.replace(/```json|```/g,"").trim()
@@ -10338,7 +10451,7 @@ I confirm I control this wallet.`;
         let cid = null;
         if (env.PINATA_JWT) {
           try {
-            const pinRes = await fetch("https://api.pinata.cloud/pinning/pinJSONToIPFS", {
+            const pinRes = await fetchT("https://api.pinata.cloud/pinning/pinJSONToIPFS", {
               method: "POST",
               headers: { "Content-Type": "application/json", "Authorization": "Bearer " + env.PINATA_JWT },
               body: JSON.stringify({
@@ -10403,7 +10516,7 @@ I confirm I control this wallet.`;
             const _kvFilter = encodeURIComponent(JSON.stringify({
               dm_participants: { value: `%${_myWhPrefix}%`, op: "like" }
             }));
-            const pinRes = await fetch(
+            const pinRes = await fetchT(
               `https://api.pinata.cloud/data/pinList?status=pinned&metadata[keyvalues]=${_kvFilter}&pageLimit=50&sortBy=date_pinned&sortOrder=DESC`,
               { headers: { "Authorization": "Bearer " + env.PINATA_JWT } }
             );
@@ -10442,7 +10555,7 @@ I confirm I control this wallet.`;
            * exceeds the KV mirror's 24h TTL), this entire block can be removed. */
           if (!_dmpPinataReturned) {
             try {
-              const pinRes = await fetch(
+              const pinRes = await fetchT(
                 "https://api.pinata.cloud/data/pinList?status=pinned&metadata[name]=dm&pageLimit=50&sortBy=date_pinned&sortOrder=DESC",
                 { headers: { "Authorization": "Bearer " + env.PINATA_JWT } }
               );
@@ -10546,7 +10659,7 @@ I confirm I control this wallet.`;
         if (env.PINATA_JWT) {
           ctx.waitUntil((async () => {
             try {
-              await fetch("https://api.pinata.cloud/pinning/pinJSONToIPFS", {
+              await fetchT("https://api.pinata.cloud/pinning/pinJSONToIPFS", {
                 method: "POST",
                 headers: { "Content-Type": "application/json", "Authorization": "Bearer " + env.PINATA_JWT },
                 body: JSON.stringify({
@@ -10667,7 +10780,7 @@ I confirm I control this wallet.`;
         } catch (_) {
         }
         if (!pinData) {
-          const directResp = await fetch("https://api.pinata.cloud/pinning/pinJSONToIPFS", {
+          const directResp = await fetchT("https://api.pinata.cloud/pinning/pinJSONToIPFS", {
             method: "POST",
             headers: {
               "Content-Type": "application/json",
@@ -10680,7 +10793,7 @@ I confirm I control this wallet.`;
             routeMethod = "direct";
           } else {
             /* v40 (audit fix #16): was returning HTTP 200 with ok:false here, which
-             * caused fetch().ok-checking clients to misread upstream Pinata failures
+             * caused fetchT().ok-checking clients to misread upstream Pinata failures
              * as successful pins. 502 is the proper status for upstream-service
              * failure — body unchanged so existing clients that DO inspect the body
              * still get the same `error` field. */
@@ -10711,7 +10824,7 @@ I confirm I control this wallet.`;
          * Pinata-failure branch (~line 7464) to 502 but left this outer
          * general-exception catch at HTTP 200, which still hid all other
          * failures (KV errors, JSON parse failures, internal logic bugs)
-         * from fetch().ok-checking clients and from 4xx/5xx-based operator
+         * from fetchT().ok-checking clients and from 4xx/5xx-based operator
          * monitoring. Generic 500 fits here because we don't know which
          * subsystem failed — only that the handler threw. Body shape
          * unchanged so existing clients that parse the body still see the
@@ -10752,7 +10865,7 @@ I confirm I control this wallet.`;
     async function getUserRegistry() {
       let listData;
       try {
-        const listRes = await fetch("https://api.pinata.cloud/data/pinList?metadata[name]=anychat-users-registry&status=pinned&pageLimit=1&sortBy=date_pinned&sortOrder=DESC", {
+        const listRes = await fetchT("https://api.pinata.cloud/data/pinList?metadata[name]=anychat-users-registry&status=pinned&pageLimit=1&sortBy=date_pinned&sortOrder=DESC", {
           headers: { "Authorization": "Bearer " + env.PINATA_JWT }
         });
         if (!listRes.ok) throw new Error("pinList " + listRes.status);
@@ -10765,7 +10878,7 @@ I confirm I control this wallet.`;
       const cid = listData.rows[0].ipfs_pin_hash;
       let data;
       try {
-        const res = await fetch(`${PINATA_GW}${cid}`, { headers: { "Accept": "application/json" } });
+        const res = await fetchT(`${PINATA_GW}${cid}`, { headers: { "Accept": "application/json" } });
         if (!res.ok) throw new Error("gateway " + res.status);
         data = await res.json();
       } catch (e) {
@@ -10791,7 +10904,7 @@ I confirm I control this wallet.`;
         throw new Error("REGISTRY_KEY not configured");
       }
       const envelope = await encryptRegistry({ version: 1, updated: Date.now(), users }, env);
-      const res = await fetch("https://api.pinata.cloud/pinning/pinJSONToIPFS", {
+      const res = await fetchT("https://api.pinata.cloud/pinning/pinJSONToIPFS", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -10812,7 +10925,7 @@ I confirm I control this wallet.`;
         console.error("[registry] D1 mirror threw:", e.message);
       }));
       try {
-        const listRes = await fetch("https://api.pinata.cloud/data/pinList?metadata[name]=anychat-users-registry&status=pinned&pageLimit=10&sortBy=date_pinned&sortOrder=DESC", {
+        const listRes = await fetchT("https://api.pinata.cloud/data/pinList?metadata[name]=anychat-users-registry&status=pinned&pageLimit=10&sortBy=date_pinned&sortOrder=DESC", {
           headers: { "Authorization": "Bearer " + env.PINATA_JWT }
         });
         if (listRes.ok) {
@@ -10825,7 +10938,7 @@ I confirm I control this wallet.`;
              * already uses it a few lines above for the D1 write. Batched into a
              * single waitUntil so one slow unpin doesn't serialise the rest. */
             ctx.waitUntil(Promise.allSettled(
-              listData.rows.slice(3).map((old) => fetch(
+              listData.rows.slice(3).map((old) => fetchT(
                 "https://api.pinata.cloud/pinning/unpin/" + old.ipfs_pin_hash,
                 { method: "DELETE", headers: { "Authorization": "Bearer " + env.PINATA_JWT } }
               ))
@@ -12846,7 +12959,7 @@ async function ablyPublish(apiKey, channels, messageName, data) {
   await Promise.all(list.map(async (channel) => {
     try {
       const safeChannel = encodeURIComponent(channel);
-      const res = await fetch(`https://rest.ably.io/channels/${safeChannel}/messages`, {
+      const res = await fetchT(`https://rest.ably.io/channels/${safeChannel}/messages`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -12916,8 +13029,9 @@ function corsHeaders() {
     "Access-Control-Allow-Headers": "Content-Type, x-token, x-chat-token, x-session-seal, x-admin-token"
   } });
 }
-function cors(body, status = 200) {
-  return new Response(body, { status, headers: {
+function cors(body, status = 200, extra = {}) {   /* v584: optional extra headers */
+  return new Response(body, { status, headers: { ...extra,
+    "Strict-Transport-Security": "max-age=31536000; includeSubDomains",   /* v584 */
     "Content-Type": typeof body === "string" && body[0] === "{" ? "application/json" : "text/plain",
     "Access-Control-Allow-Origin": ALLOWED_ORIGIN,
     "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
@@ -13144,7 +13258,7 @@ var ChatRoom = class {
       try {
         const pubMsg = { type: msg.type, nick: msg.nick, tier: msg.tier, text: msg.text, time: msg.time };
         const _rand = Array.from(crypto.getRandomValues(new Uint8Array(4))).map((b) => b.toString(16).padStart(2, "0")).join("");
-        await fetch("https://api.pinata.cloud/pinning/pinJSONToIPFS", {
+        await fetchT("https://api.pinata.cloud/pinning/pinJSONToIPFS", {
           method: "POST",
           headers: { "Content-Type": "application/json", "Authorization": "Bearer " + this.env.PINATA_JWT },
           body: JSON.stringify({
