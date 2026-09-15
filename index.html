@@ -21160,6 +21160,20 @@ function endTrivia(nick){
   }
 }
 
+/* v582: one resolver for country name + flag across every lounge game.
+ * COUNTRY_DATA is a 15-entry table; the network has relays in 59 countries and
+ * the ones with the MOST relays (MK, LI, AD, LU, SM, ZA — the MAXKO zones at
+ * ~252 each) are not in it. Every game that used the table alone showed a
+ * white flag and a two-letter code for exactly the countries it asked about
+ * most. The registry already carries countryName per relay and isoToFlag()
+ * exists; the table is only consulted first because it has curated names. */
+function _countryInfo(cc){
+  const ci = COUNTRY_DATA.find(c => c.code === cc);
+  if (ci) return ci;
+  const rel = (typeof allRelays !== 'undefined' ? allRelays : (window.allRelays || [])).find(r => r && r.countryCode === cc);
+  return { code: cc, name: (rel && rel.countryName) || cc, flag: (typeof isoToFlag === 'function' && isoToFlag(cc)) || '🏳️' };
+}
+
 function startCountryQuiz(nick){
   if(!allRelays || !allRelays.length){
     acAddMessage('🎮 AnyClip', 'ai', 'Network data not loaded yet — try again in a few seconds!', Date.now());
@@ -21185,8 +21199,14 @@ function startCountryQuiz(nick){
   const bars = ['🟦','🟩','🟨','🟥'];
   let msg = `🌍 COUNTRY QUIZ\n\n❓ Which country has the MOST relays in the Anyone network?\n\n`;
   shuffledCountries.forEach(([cc, count], i) => {
-    const ci = COUNTRY_DATA.find(c => c.code === cc);
-    msg += `${bars[i]} ${nums[i]}  ${ci?.flag || '🏳️'} ${ci?.name || cc}\n\n`;
+    /* v582: COUNTRY_DATA has 15 entries; 44 of the 59 relay countries are not in
+     * it — including MK, LI, AD, LU, SM and ZA, which at ~252 relays each are the
+     * TOP of the list the quiz draws from. Most rounds offered "🏳️ AD" as an
+     * answer: a white flag and a code, for a question that asks "which country".
+     * Every relay already carries countryName, and isoToFlag() exists, so the
+     * table is only a fallback now. */
+    const ci = _countryInfo(cc);
+    msg += `${bars[i]} ${nums[i]}  ${ci.flag} ${ci.name}\n\n`;
   });
   msg += '⌨️ Type 1, 2, 3, or 4!';
 
@@ -21201,12 +21221,12 @@ function answerCountryQuiz(ans, nick){
 
   const picked = choices[idx][0];
   const isCorrect = picked === correct;
-  const correctInfo = COUNTRY_DATA.find(c => c.code === correct);
+  const correctInfo = _countryInfo(correct);   /* v582 */
 
   if(isCorrect){
     acAddMessage('🎮 AnyClip', 'ai', `✅ CORRECT! ${correctInfo?.flag || ''} ${correctInfo?.name || correct} has ${count} relays!\n⭐ +25 XP\n\nType /country for another round!`, Date.now());
   } else {
-    const pickedInfo = COUNTRY_DATA.find(c => c.code === picked);
+    const pickedInfo = _countryInfo(picked);   /* v582 */
     acAddMessage('🎮 AnyClip', 'ai', `❌ Nope! ${pickedInfo?.flag || ''} ${pickedInfo?.name || picked} has ${choices[idx][1]} relays.\n✅ The answer was ${correctInfo?.flag || ''} ${correctInfo?.name || correct} with ${count} relays!\n\nType /country to try again!`, Date.now());
   }
   GAME_STATE.country = null;
@@ -21258,10 +21278,14 @@ function startFingerprintGuess(nick){
   const fp = (relay.fp || '???').toUpperCase();
   const partial = fp.slice(0, 8) + '...' + fp.slice(-4);
   const cc = relay.countryCode || '??';
-  const info = COUNTRY_DATA.find(c => c.code === cc);
+  const info = _countryInfo(cc);
 
-  const wrongCountries = COUNTRY_DATA.filter(c => c.code !== cc).sort(() => Math.random() - 0.5).slice(0, 3);
-  const allChoices = [...wrongCountries, { code:cc, name:info?.name||cc, flag:info?.flag||'🏳️' }].sort(() => Math.random() - 0.5);
+  /* v582: distractors drawn from the countries the network actually has relays
+   * in, not the 15-entry table. Otherwise three familiar names sit beside one
+   * the table cannot name, and the odd one out gives the answer away. */
+  const _pool = [...new Set(allRelays.map(r => r && r.countryCode).filter(c => c && c !== cc && c !== '??'))];
+  const wrongCountries = _pool.sort(() => Math.random() - 0.5).slice(0, 3).map(_countryInfo);
+  const allChoices = [...wrongCountries, { code:cc, name:info.name, flag:info.flag }].sort(() => Math.random() - 0.5);
 
   GAME_STATE.country = { correct:cc, count:0, choices: allChoices.map(c => [c.code, 0]) };
 
