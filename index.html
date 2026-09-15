@@ -7716,7 +7716,7 @@ input:focus-visible, textarea:focus-visible, select:focus-visible{
 <!-- HEADER -->
 <div id="hdr" role="banner" aria-label="AnyoneMap header">
   <div class="logo">
-    <div class="logo-box"><img src="https://docs.anyone.io/~gitbook/image?url=https%3A%2F%2Fcontent.gitbook.com%2Fcontent%2FAA9P3lN6X0LnMGWCOpyt%2Fblobs%2FXbKJFAuxiSZt2cmpTj1C%2Fimage.gif&width=768&dpr=3&quality=100&sign=500ecef8&sv=2" alt="ANyone Router" class="logo-img"/></div>
+    <div class="logo-box"><img src="https://anyclip-proxy.anyonerelaysmap.workers.dev/api/img?u=https%3A%2F%2Fdocs.anyone.io%2F~gitbook%2Fimage%3Furl%3Dhttps%253A%252F%252Fcontent.gitbook.com%252Fcontent%252FAA9P3lN6X0LnMGWCOpyt%252Fblobs%252FXbKJFAuxiSZt2cmpTj1C%252Fimage.gif%26width%3D768%26dpr%3D3%26quality%3D100%26sign%3D500ecef8%26sv%3D2" alt="ANyone Router" class="logo-img"/></div>
 
     <div>
       <div class="logo-name">AN<em>Y</em>ONE <em>PROTOCOL</em></div>
@@ -8763,7 +8763,7 @@ function parseFingerprintMap(raw){
     if(!hex){
       const c = relay.coordinates;
       const hasCoords = c && c.length >= 2 && c[0] != null && c[1] != null
-        && !(c[0] === 0 && c[1] === 0) && !isNaN(c[0]) && !isNaN(c[1]);
+        && !(c[0] === 0 && c[1] === 0) && Number.isFinite(+c[0]) && Number.isFinite(+c[1]) && Math.abs(+c[0]) <= 90 && Math.abs(+c[1]) <= 180;   /* v585: was !isNaN — let Infinity and out-of-range through */
       if(hasCoords){
         hex = 'synth_' + (+c[0]).toFixed(2) + '_' + (+c[1]).toFixed(2);
       } else if(relay && relay.approxLocation && relay.countryCode && COUNTRY_CENTROIDS[relay.countryCode]){
@@ -11738,7 +11738,7 @@ function initMapLibre(zones){
          * relay count) and launch colored packets along each hop + a green return leg,
          * mirroring fireCircuit()/fireCircuitHop() from the D3 map. Also drives the
          * out/in counters the Connection Web panel shows. */
-        let packets = [], pktRaf = null, fireTimer = null, pools = null, poolAge = 0;
+        let packets = [], pktRaf = null, fireTimer = null, pools = null, poolAge = 0, _pktLastPush = 0;
         const zGeo = z => [z.geo[1], z.geo[0]]; // [lng,lat]
         const lerpAlong = (coords, t) => {
           // t in 0..1 along a polyline (equal-segment approximation — fine for 24-seg arcs)
@@ -11762,7 +11762,12 @@ function initMapLibre(zones){
           pktRaf = null; if(!started){ packets=[]; renderPackets(); return; }
           for(const p of packets){ p.t = (now - p.start) / p.dur; }
           packets = packets.filter(p => p.t < 1);
-          renderPackets();
+          /* v585: the packet loop called source.setData() on EVERY animation
+           * frame — a full FeatureCollection rebuild and re-tile up to 60x/s.
+           * Measured: roughly one >50ms long task per second with Signals on.
+           * 20Hz is indistinguishable for 6px dots and cuts the work by two
+           * thirds; rAF still schedules, it just does not push every frame. */
+          if (now - _pktLastPush >= 50) { renderPackets(); _pktLastPush = now; }
           if(packets.length) pktRaf = requestAnimationFrame(pktTick);
         };
         const ensurePktLoop = () => { if(!pktRaf && packets.length) pktRaf = requestAnimationFrame(pktTick); };
@@ -16508,14 +16513,18 @@ function acDetectAndPreviewLinks(msgDiv, text, tier){
   acFetchLinkMeta(url, card);
 }
 function acFetchLinkMeta(url, card){
-  fetch('https://api.allorigins.win/raw?url=' + encodeURIComponent(url), { signal: AbortSignal.timeout(5000) })
-    .then(function(r){ return r.text(); })
-    .then(function(html){
-      var parser = new DOMParser();
-      var doc = parser.parseFromString(html, 'text/html');
-      var ogTitle = doc.querySelector('meta[property="og:title"]')?.content || doc.querySelector('title')?.textContent || '';
-      var ogDesc = doc.querySelector('meta[property="og:description"]')?.content || doc.querySelector('meta[name="description"]')?.content || '';
-      var ogImage = doc.querySelector('meta[property="og:image"]')?.content || '';
+  /* v584: link previews were fetched from the CLIENT via api.allorigins.win —
+   * a third-party CORS proxy that then saw every viewer's IP and every URL
+   * shared in the lounge. The worker now fetches the page, extracts og:* tags,
+   * and caches the result; the viewer only ever talks to this origin. Any
+   * og:image is also routed through /api/img for the same reason. */
+  fetch(AC_PROXY + '/api/link-meta?u=' + encodeURIComponent(url), { signal: AbortSignal.timeout(6000) })
+    .then(function(r){ return r.ok ? r.json() : null; })
+    .then(function(meta){
+      if(!meta) return;
+      var ogTitle = meta.title || '';
+      var ogDesc  = meta.description || '';
+      var ogImage = meta.image ? (AC_PROXY + '/api/img?u=' + encodeURIComponent(meta.image)) : '';
       var domain = new URL(url).hostname;
       var imgHtml = ogImage ? '<img class="ac-link-preview-img" src="' + acSanitize(ogImage) + '" alt="" loading="lazy" onerror="this.remove()"/>' : '';
       card.innerHTML = imgHtml + '<div class="ac-link-preview-info"><div class="ac-link-preview-domain">' + acSanitize(domain) + '</div>' + (ogTitle ? '<div class="ac-link-preview-title">' + acSanitize(ogTitle.substring(0,80)) + '</div>' : '') + (ogDesc ? '<div class="ac-link-preview-desc">' + acSanitize(ogDesc.substring(0,120)) + '</div>' : '') + '</div>';
@@ -18192,7 +18201,7 @@ function acAddMessage(nick, tier, text, time, avatar, isHistory, opts){
     if(bubble) bubble.style.cssText = 'background:none;border:none;box-shadow:none;padding:0;';
     var gifUrl = gifMatch.textContent.match(/\[gif:(.+?)\]/);
     if(gifUrl && gifUrl[1]){
-      gifMatch.innerHTML = '<img class="ac-gif-msg" src="' + acSanitize(gifUrl[1]) + '" alt="GIF" loading="lazy" onclick="acViewImageFull(this.src)"/>';
+      gifMatch.innerHTML = '<img class="ac-gif-msg" src="' + AC_PROXY + '/api/img?u=' + encodeURIComponent(gifUrl[1]) + '" alt="GIF" loading="lazy" referrerpolicy="no-referrer" onclick="acViewImageFull(this.src)"/>';   /* v584: proxied */
     }
   }
   /* v319: render persisted reactions on first paint. opts.reactions arrives
@@ -19968,8 +19977,10 @@ function acRenderImage(text){
   if(!m) return null;
   const safe = acSafeUrl(m[1]);
   if(!safe) return null;
-  const u = acSanitize(safe);
-  return '<img class="ac-chat-img" src="' + u + '" alt="shared image" loading="lazy" onclick="acViewImageFull(this.src)" onerror="this.style.display=\'none\';this.insertAdjacentHTML(\'afterend\',\'<em style=color:var(--ac-muted);font-size:11px>Image unavailable</em>\')"/>';
+  /* v584: through the worker — see /api/img. A direct src handed every
+   * viewer's IP to whichever host another participant chose. */
+  const u = AC_PROXY + '/api/img?u=' + encodeURIComponent(safe);
+  return '<img class="ac-chat-img" referrerpolicy="no-referrer" src="' + u + '" alt="shared image" loading="lazy" onclick="acViewImageFull(this.src)" onerror="this.style.display=\'none\';this.insertAdjacentHTML(\'afterend\',\'<em style=color:var(--ac-muted);font-size:11px>Image unavailable</em>\')"/>';
 }
 
 function acViewImageFull(src){
@@ -23654,6 +23665,21 @@ async function fetchUptimeAndGeoData(){
   const newGeoBoostFps = new Set();
 
   // Returns true if the wallet returned any relays (used for retry logic).
+  /* v585: fp -> relay index, built once per enrichment pass. processWallet did
+   * `allRelays.find(r => r.fp.toUpperCase() === fp)` for EVERY relay a wallet
+   * owns — a 5,090-element scan, uppercasing each entry, repeated ~1,500 times
+   * for the largest wallet: ~7.6M comparisons in one synchronous task. Profiled
+   * at 414ms self time on the main thread during first paint. O(1) lookups
+   * make the whole pass a few ms. */
+  let _fpIndex = null, _fpIndexSize = -1;
+  function _relayByFp(fpUpper){
+    if(!_fpIndex || _fpIndexSize !== allRelays.length){
+      _fpIndex = new Map();
+      for(const r of allRelays){ if(r && r.fp) _fpIndex.set(r.fp.toUpperCase(), r); }
+      _fpIndexSize = allRelays.length;
+    }
+    return _fpIndex.get(fpUpper);
+  }
   function processWallet(d){
     const relays = d?.relays;
     if(!relays || !relays.length) return false;
@@ -23666,7 +23692,7 @@ async function fetchUptimeAndGeoData(){
       if((relay.lm || 1) < 0.95) newGeoBoostFps.add(fp);
       // Mutate matching allRelays entry with any richer fields this wallet has.
       if(relay.n || relay.bw || relay.up || relay.cw){
-        const match = allRelays.find(r => r.fp.toUpperCase() === fp);
+        const match = _relayByFp(fp);   /* v585: O(1), was O(n) */
         if(match){
           if(relay.n)  match.nickname   = relay.n;
           if(relay.bw) match.bwKBs      = relay.bw;
@@ -32492,7 +32518,7 @@ body.aclive-on #anyclip-avatar{display:none !important;}
       <!-- real Anyone logo is overlaid as <img> below (matches the map header mark) -->
       <g class="acl-spark"><path d="M170 150 l3 8 8 3 -8 3 -3 8 -3 -8 -8 -3 8 -3z" fill="#9bf6e8"/></g>
     </svg>
-    <img class="acl-dev-logoimg" src="https://docs.anyone.io/~gitbook/image?url=https%3A%2F%2Fcontent.gitbook.com%2Fcontent%2FAA9P3lN6X0LnMGWCOpyt%2Fblobs%2FXbKJFAuxiSZt2cmpTj1C%2Fimage.gif&width=768&dpr=3&quality=100&sign=500ecef8&sv=2" alt="Anyone" aria-hidden="true"/>
+    <img class="acl-dev-logoimg" src="https://anyclip-proxy.anyonerelaysmap.workers.dev/api/img?u=https%3A%2F%2Fdocs.anyone.io%2F~gitbook%2Fimage%3Furl%3Dhttps%253A%252F%252Fcontent.gitbook.com%252Fcontent%252FAA9P3lN6X0LnMGWCOpyt%252Fblobs%252FXbKJFAuxiSZt2cmpTj1C%252Fimage.gif%26width%3D768%26dpr%3D3%26quality%3D100%26sign%3D500ecef8%26sv%3D2" alt="Anyone" aria-hidden="true"/>
   </div>
   <div id="acl-title">ANYONE HARDWARE RELAY<small>PLUG IN · BECOME THE NETWORK</small></div>
   <div id="acl-skip">SKIP ▸</div>
