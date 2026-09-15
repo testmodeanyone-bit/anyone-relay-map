@@ -24505,6 +24505,25 @@ function toggleCompare(fp){
       cw: r.cw || 0, flags,
       isHW: hwFps?.has(fp_u) || false,
     });
+    /* v583: the row carries no consensus weight — the registry payload has no
+     * cw field — so the compare card showed "Weight —" for every relay while
+     * the detail panel, which fetches the official record, showed 24,000 for the
+     * same one. Fetch the same record the detail panel does and fill the card
+     * in. Fire-and-forget: the card renders immediately with what the row has,
+     * then re-renders when the numbers land. */
+    (function(entry){
+      fetch('https://api.ec.anyone.tech/relays/' + encodeURIComponent(entry.fp), { signal: AbortSignal.timeout(8000) })
+        .then(r => r.ok ? r.json() : null)
+        .then(official => {
+          if (!official) return;
+          let changed = false;
+          if (official.consensus_weight && !entry.cw)        { entry.cw = official.consensus_weight; changed = true; }
+          if (official.uptime_seconds  && !entry.uptimeSecs) { entry.uptimeSecs = official.uptime_seconds; changed = true; }
+          if (official.bandwidth       && !entry.bwKBs)      { entry.bwKBs = Math.round(official.bandwidth / 1024); changed = true; }
+          if (changed && _compareList.includes(entry) && typeof renderComparison === 'function') renderComparison();
+        })
+        .catch(() => {});
+    })(_compareList[_compareList.length - 1]);
   }
   renderComparison();
   const ltr = (filteredRelays && filteredRelays.length) ? filteredRelays : allRelays;
