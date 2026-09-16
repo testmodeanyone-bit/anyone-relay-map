@@ -6000,7 +6000,7 @@ async function warmHwRelays(env) {
     if (c && c.builtAt && (Date.now() - c.builtAt) < 6 * 3600 * 1e3 && Array.isArray(c.fingerprints) && c.fingerprints.length > 0) { console.log("[warm-hw] fresh, skipping"); return; }
   } catch (_) {}
   let hwSet;
-  try { hwSet = await fetchHardwareFPs(); }
+  try { hwSet = await fetchHardwareFPs(env); }
   catch (e) { await env.FP_INDEX.put("hw_relays_last_error", JSON.stringify({ at: Date.now(), message: "cron: " + String(e && e.message || e).slice(0, 300) }), { expirationTtl: 86400 }).catch(() => {}); throw e; }
   if (!hwSet || hwSet.size === 0) { console.warn("[warm-hw] empty set; keeping existing"); return; }
   await env.FP_INDEX.put("hw_relays_v1", JSON.stringify({ fingerprints: [...hwSet], count: hwSet.size, source: "arweave-init+messages", builtAt: Date.now() }), { expirationTtl: KV_TTL_SECS });
@@ -6852,7 +6852,7 @@ var worker_source_default = {
           ctx.waitUntil((async () => {
             try {
               await env.FP_INDEX.put("hw_relays_cooldown", "1", { expirationTtl: HW_COOLDOWN_S });
-              const hwSet = await fetchHardwareFPs();
+              const hwSet = await fetchHardwareFPs(env);
               if (hwSet.size === 0) throw new Error("empty hardware set");
               await env.FP_INDEX.put("hw_relays_v1", JSON.stringify({ fingerprints: [...hwSet], count: hwSet.size, source: "arweave-init+messages", builtAt: Date.now() }), { expirationTtl: KV_TTL_SECS });
               await env.FP_INDEX.delete("hw_relays_last_error").catch(() => {});
@@ -6868,7 +6868,7 @@ var worker_source_default = {
         }
       }
       try {
-        const hwSet = await fetchHardwareFPs();
+        const hwSet = await fetchHardwareFPs(env);
         /* Treat an empty registry response as a failure so it routes to the stale
          * fallback rather than overwriting a good snapshot with zeroes. */
         if (hwSet.size === 0) throw new Error("AO registry returned an empty hardware set");
@@ -12915,7 +12915,7 @@ async function buildAndStoreIndex(env) {
 }
 /* v593: HARDWARE SET FROM ARWEAVE — removes the manual hw_relays_v1 seed chore.
  *
- * fetchHardwareFPs() asked the AO compute unit (cu.anyone.tech), which has been
+ * fetchHardwareFPs(env) asked the AO compute unit (cu.anyone.tech), which has been
  * 404 since July. Every cron rebuild failed, fell back to whatever was in KV,
  * and the only thing in KV was a hand-seeded snapshot with a 7-day TTL — a
  * recurring deadline that has needed a manual `wrangler kv key put` twice.
@@ -12931,7 +12931,7 @@ async function buildAndStoreIndex(env) {
  * DIFFERENT map (verified but not hardware, with wallet addresses that are
  * also 40 hex chars). A naive hex scan of the body returns 1,714. Only the
  * keys of VerifiedHardwareFingerprints count. */
-async function fetchHardwareFPsFromArweave() {
+async function fetchHardwareFPsFromArweave(env) {
   const PROCESS = AO_REGISTRY_ID;
   const GQL = "https://arweave.net/graphql";
   /* v595: the data fetch was failing with 403 FROM THE WORKER ONLY. arweave.net/<id>
@@ -12949,7 +12949,31 @@ async function fetchHardwareFPsFromArweave() {
   /* /raw/<id> 404s for bundled data items (the Add/Remove messages are ANS-104
    * items inside bundles), so the plain path + redirect is the one that works
    * for every message — it just needs the User-Agent. */
-  const txt = async (id) => { const r = await fetchT("https://arweave.net/" + id, { headers: UA, redirect: "follow" }, 15000); if (!r.ok) throw new Error("arweave data " + r.status); return r.text(); };
+  /* v596: Arweave transactions are IMMUTABLE, so each message body is cached in
+   * KV permanently under its tx id. The first successful run fetches all ~76;
+   * every run after that fetches only messages it has not seen — normally zero
+   * or one. Without this, 76 sequential fetches from Cloudflare's shared egress
+   * IP got rate-limited (429) by arweave.net, which my own IP never was.
+   * On 429 the fetch backs off and retries three times before giving up, and
+   * a run that reaches a message it cannot fetch fails loudly rather than
+   * returning a partial set. */
+  const kv = env && env.FP_INDEX;
+  const txt = async (id) => {
+    if (kv) { try { const c = await kv.get("arw_msg:" + id); if (c !== null && c !== undefined) return c; } catch (_) {} }
+    let last = null;
+    for (let attempt = 0; attempt < 4; attempt++) {
+      if (attempt) await new Promise((r) => setTimeout(r, 1500 * attempt));
+      const r = await fetchT("https://arweave.net/" + id, { headers: UA, redirect: "follow" }, 15000);
+      if (r.ok) {
+        const body = await r.text();
+        if (kv) kv.put("arw_msg:" + id, body).catch(() => {});   /* no TTL: immutable */
+        return body;
+      }
+      last = r.status;
+      if (r.status !== 429 && r.status !== 503) break;
+    }
+    throw new Error("arweave data " + last);
+  };
   const msgs = []; let cursor = null;
   for (let i = 0; i < 30; i++) {
     const t = await gql(`{ transactions(recipients:["${PROCESS}"], tags:[{name:"Action", values:["Init","Add-Verified-Hardware","Remove-Verified-Hardware"]}], sort:HEIGHT_ASC, first:100${cursor ? `, after:"${cursor}"` : ""}) { pageInfo{hasNextPage} edges{ cursor node{ id tags{name value} } } } }`);
@@ -12965,14 +12989,16 @@ async function fetchHardwareFPsFromArweave() {
   for (const m of msgs) {
     if (m.action === "Init") continue;
     const fp = (await txt(m.id)).trim().toUpperCase();
+    /* pace only when the body actually came from the network — cached hits are free */
+    if (kv) { try { if ((await kv.get("arw_msg:" + m.id)) === null) await new Promise((r) => setTimeout(r, 250)); } catch (_) {} }
     if (!/^[A-F0-9]{40}$/.test(fp)) continue;
     if (m.action === "Add-Verified-Hardware") set.add(fp); else set.delete(fp);
   }
   return set;
 }
-async function fetchHardwareFPs() {
+async function fetchHardwareFPs(env) {
   let arwErr = null;
-  try { return await fetchHardwareFPsFromArweave(); }
+  try { return await fetchHardwareFPsFromArweave(env); }
   catch (e) { arwErr = e; console.warn("[hw] arweave reconstruction failed, trying AO CU:", e && e.message); }
   try { return await fetchHardwareFPsViaAoCu(); }
   catch (e) {
