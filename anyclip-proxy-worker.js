@@ -5990,6 +5990,21 @@ async function warmExitRelays(env, ctx) {
   console.log(`[warm-exit-relays] refreshed: ${fresh.exit_relays} exit / ${fresh.guard_relays} guard / ${fresh.middle_relays} middle, ${fresh.wallet_list?.length || 0} wallets`);
 }
 
+/* v593: keep hw_relays_v1 populated from Arweave on the cron, so the key never
+ * again depends on a visitor arriving or a human running `wrangler kv key put`.
+ * Refreshes when the cached copy is older than 6h; the set changes rarely. */
+async function warmHwRelays(env) {
+  if (!env.FP_INDEX) return;
+  try {
+    const c = await env.FP_INDEX.get("hw_relays_v1", { type: "json" });
+    if (c && c.builtAt && (Date.now() - c.builtAt) < 6 * 3600 * 1e3 && Array.isArray(c.fingerprints) && c.fingerprints.length > 0) { console.log("[warm-hw] fresh, skipping"); return; }
+  } catch (_) {}
+  const hwSet = await fetchHardwareFPs();
+  if (!hwSet || hwSet.size === 0) { console.warn("[warm-hw] empty set; keeping existing"); return; }
+  await env.FP_INDEX.put("hw_relays_v1", JSON.stringify({ fingerprints: [...hwSet], count: hwSet.size, source: "arweave-init+messages", builtAt: Date.now() }), { expirationTtl: KV_TTL_SECS });
+  console.log(`[warm-hw] refreshed: ${hwSet.size} hardware fingerprints`);
+}
+
 async function warmTotalStaked(env) {
   if (!env.FP_INDEX) return;
   const FRESH_MS = 25 * 60 * 1e3;   /* slightly under the route's 30min window,
@@ -6826,13 +6841,29 @@ var worker_source_default = {
           } catch (_) {
           }
         }
+        /* v593: STALE-WHILE-REVALIDATE. The Arweave rebuild takes ~30s; a visitor
+         * must never wait for it. Serve the cached copy now, rebuild in the
+         * background, and set the cooldown so concurrent polls do not each start
+         * their own 80-subrequest reconstruction. Same shape as total-staked
+         * (v553) and exit-relays (v575). */
+        if (env.FP_INDEX && ctx && typeof ctx.waitUntil === "function") {
+          ctx.waitUntil((async () => {
+            try {
+              await env.FP_INDEX.put("hw_relays_cooldown", "1", { expirationTtl: HW_COOLDOWN_S });
+              const hwSet = await fetchHardwareFPs();
+              if (hwSet.size === 0) throw new Error("empty hardware set");
+              await env.FP_INDEX.put("hw_relays_v1", JSON.stringify({ fingerprints: [...hwSet], count: hwSet.size, source: "arweave-init+messages", builtAt: Date.now() }), { expirationTtl: KV_TTL_SECS });
+            } catch (e) { console.warn("[hw] background rebuild failed:", e && e.message); }
+          })());
+          return hwStale(cached);
+        }
       }
       try {
         const hwSet = await fetchHardwareFPs();
         /* Treat an empty registry response as a failure so it routes to the stale
          * fallback rather than overwriting a good snapshot with zeroes. */
         if (hwSet.size === 0) throw new Error("AO registry returned an empty hardware set");
-        const result = { fingerprints: [...hwSet], count: hwSet.size, source: "ao-registry", builtAt: Date.now() };
+        const result = { fingerprints: [...hwSet], count: hwSet.size, source: "arweave-init+messages", builtAt: Date.now() };
         if (env.FP_INDEX) {
           ctx.waitUntil(
             env.FP_INDEX.put("hw_relays_v1", JSON.stringify(result), { expirationTtl: KV_TTL_SECS }).catch(() => {
@@ -12407,6 +12438,8 @@ Issued: ${(/* @__PURE__ */ new Date()).toISOString()}
     ctx.waitUntil(warmTotalStaked(env).then(() => recordCronOutcome(env, "stakedwarm", true)).catch(e => { console.warn("[cron] staked warm failed:", e.message); return recordCronOutcome(env, "stakedwarm", false, e.message); }));
     /* v575: keep /api/exit-relays served from cache. See warmExitRelays. */
     ctx.waitUntil(warmExitRelays(env, ctx).then(() => recordCronOutcome(env, "exitwarm", true)).catch(e => { console.warn("[cron] exit-relays warm failed:", e.message); return recordCronOutcome(env, "exitwarm", false, e.message); }));
+    /* v593: hardware set from Arweave. See warmHwRelays. */
+    ctx.waitUntil(warmHwRelays(env).then(() => recordCronOutcome(env, "hwwarm", true)).catch(e => { console.warn("[cron] hw warm failed:", e.message); return recordCronOutcome(env, "hwwarm", false, e.message); }));
     /* v57 FIX: warm fp-index on the cron. Previously NOTHING warmed fp-index —
      * it was (re)built only by organic cache-MISS traffic, and combined with the
      * old 1h TTL a transient upstream slowdown evicted the only copy and blanked
@@ -12871,7 +12904,60 @@ async function buildAndStoreIndex(env) {
   }
   return result;
 }
+/* v593: HARDWARE SET FROM ARWEAVE — removes the manual hw_relays_v1 seed chore.
+ *
+ * fetchHardwareFPs() asked the AO compute unit (cu.anyone.tech), which has been
+ * 404 since July. Every cron rebuild failed, fell back to whatever was in KV,
+ * and the only thing in KV was a hand-seeded snapshot with a 7-day TTL — a
+ * recurring deadline that has needed a manual `wrangler kv key put` twice.
+ *
+ * The registry's state is public on Arweave: one Init message whose
+ * VerifiedHardwareFingerprints map is the base set (1,006), then every
+ * Add-Verified-Hardware / Remove-Verified-Hardware message since, each with the
+ * bare fingerprint as its body. Replaying them reproduces the hand-built seed
+ * exactly: 1,081 of 1,081, verified 2026-09-16. Fetched via arweave.net
+ * GraphQL, ~30s, ~80 subrequests. The AO CU is kept as a fallback only.
+ *
+ * Note the Init body also has VerifiedFingerprintsToOperatorAddresses — a
+ * DIFFERENT map (verified but not hardware, with wallet addresses that are
+ * also 40 hex chars). A naive hex scan of the body returns 1,714. Only the
+ * keys of VerifiedHardwareFingerprints count. */
+async function fetchHardwareFPsFromArweave() {
+  const PROCESS = AO_REGISTRY_ID;
+  const GQL = "https://arweave.net/graphql";
+  const gql = async (query) => {
+    const r = await fetchT(GQL, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ query }) }, 15000);
+    if (!r.ok) throw new Error("arweave graphql " + r.status);
+    const j = await r.json(); if (!j.data) throw new Error("arweave graphql: no data");
+    return j.data.transactions;
+  };
+  const txt = async (id) => { const r = await fetchT("https://arweave.net/" + id, {}, 15000); if (!r.ok) throw new Error("arweave data " + r.status); return r.text(); };
+  const msgs = []; let cursor = null;
+  for (let i = 0; i < 30; i++) {
+    const t = await gql(`{ transactions(recipients:["${PROCESS}"], tags:[{name:"Action", values:["Init","Add-Verified-Hardware","Remove-Verified-Hardware"]}], sort:HEIGHT_ASC, first:100${cursor ? `, after:"${cursor}"` : ""}) { pageInfo{hasNextPage} edges{ cursor node{ id tags{name value} } } } }`);
+    for (const e of t.edges) msgs.push({ id: e.node.id, action: (e.node.tags.find((x) => x.name === "Action") || {}).value });
+    if (!t.pageInfo.hasNextPage) break;
+    cursor = t.edges[t.edges.length - 1].cursor;
+  }
+  const init = msgs.filter((m) => m.action === "Init");
+  if (init.length !== 1) throw new Error("expected exactly one Init message, found " + init.length);
+  const state = JSON.parse(await txt(init[0].id));
+  const set = new Set(Object.keys(state.VerifiedHardwareFingerprints || {}).map((f) => f.toUpperCase()));
+  if (set.size < 500) throw new Error("Init hardware set implausibly small: " + set.size);
+  for (const m of msgs) {
+    if (m.action === "Init") continue;
+    const fp = (await txt(m.id)).trim().toUpperCase();
+    if (!/^[A-F0-9]{40}$/.test(fp)) continue;
+    if (m.action === "Add-Verified-Hardware") set.add(fp); else set.delete(fp);
+  }
+  return set;
+}
 async function fetchHardwareFPs() {
+  try { return await fetchHardwareFPsFromArweave(); }
+  catch (e) { console.warn("[hw] arweave reconstruction failed, trying AO CU:", e && e.message); }
+  return fetchHardwareFPsViaAoCu();
+}
+async function fetchHardwareFPsViaAoCu() {
   /* v20: timeout. The AO compute-unit can hang under load — without a timeout this
    * blocks buildAndStoreIndex's outer Promise.all up to the entire scheduled-event
    * CPU budget. */
