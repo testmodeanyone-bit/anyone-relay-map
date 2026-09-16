@@ -12514,7 +12514,15 @@ async function buildRegistryFromConsensus(env, upstreamStatus) {
   if (!cons || !cons.fp_to_ip || typeof cons.fp_to_ip !== "object") return null;
   const fpToIp = cons.fp_to_ip;
   const validUntil = cons.validUntil ? Date.parse(cons.validUntil + "Z") : 0;
-  if (validUntil && Date.now() - validUntil > 6 * 3600 * 1e3) { console.warn("[registry] consensus snapshot is >6h past validUntil; refusing to derive"); return null; }
+  /* v591: was 6h. The mirror Action stalled for hours on 2026-09-16 and the
+   * 6h cutoff would have dropped the map back to a four-day-old seed at 23:00
+   * UTC. The relay set moves slowly — 98.8% overlap over four days — so a
+   * day-old consensus is far better than that seed. 36h: long enough to ride
+   * out a broken Action over a weekend, short enough that a genuinely dead
+   * mirror still degrades rather than being served as current forever. The
+   * snapshot's validUntil goes into the response so the SPA can show it. */
+  const CONSENSUS_MAX_AGE_MS = 36 * 3600 * 1e3;
+  if (validUntil && Date.now() - validUntil > CONSENSUS_MAX_AGE_MS) { console.warn("[registry] consensus snapshot is >36h past validUntil; refusing to derive"); return null; }
   let base = null;
   if (env.FP_INDEX) base = await env.FP_INDEX.get(REGISTRY_CACHE_KEY, { type: "json" }).catch(() => null);
   const baseData = (base && base.data) || {};
@@ -12553,6 +12561,7 @@ async function buildRegistryFromConsensus(env, upstreamStatus) {
       });
     } catch (_) {}
   }
+  Object.defineProperty(data, '__consensusValidUntil', { value: cons.validUntil || null, enumerable: false });
   console.log(`[registry] derived from consensus: ${Object.keys(data).length} relays (${unknown.length} new, ${Object.keys(baseData).length - Object.keys(data).length + unknown.length} dropped) — upstream was ${upstreamStatus}`);
   return data;
 }
