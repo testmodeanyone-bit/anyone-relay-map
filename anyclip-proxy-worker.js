@@ -5619,9 +5619,20 @@ async function storeSnapshot(env) {
   /* Optional: zones/countries/isps from the geo fingerprint-map.
    * Same as v45 behavior, kept intact. Non-fatal on failure. */
   try {
-    const fpR = await fetch("https://api.ec.anyone.tech/fingerprint-map", { signal: AbortSignal.timeout(8e3) });
-    if (fpR.ok) {
-      const fpData = await fpR.json();
+    /* v592: read the registry the proxy already holds (relay-registry-cache —
+     * upstream-built or consensus-derived, v589) instead of re-fetching
+     * fingerprint-map. With api.ec.anyone.tech down this block silently
+     * recorded zones/countries/isps as 0 for the day, putting a hole in the
+     * growth series. Falls back to the upstream fetch only if the cache is
+     * empty. The 62 consensus-derived new relays carry no hexId, so zones
+     * are very slightly undercounted on a derived day — better than 0. */
+    let fpData = null;
+    const cachedReg = await env.FP_INDEX.get(REGISTRY_CACHE_KEY, { type: "json" }).catch(() => null);
+    if (cachedReg && cachedReg.data && Object.keys(cachedReg.data).length > 500) fpData = cachedReg.data;
+    let fpR = null;
+    if (!fpData) fpR = await fetch("https://api.ec.anyone.tech/fingerprint-map", { signal: AbortSignal.timeout(8e3) });
+    if (fpData || (fpR && fpR.ok)) {
+      if (!fpData) fpData = await fpR.json();
       const zones = /* @__PURE__ */ new Set();
       const countries = /* @__PURE__ */ new Set();
       const isps = /* @__PURE__ */ new Set();
