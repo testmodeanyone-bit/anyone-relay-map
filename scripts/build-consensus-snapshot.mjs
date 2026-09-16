@@ -33,7 +33,8 @@
  *     "validUntil": "2026-05-22 00:00:00",   // from consensus header, if present
  *     "relayCount": 7568,
  *     "format": "full" | "microdesc",
- *     "fp_to_ip": { "AAAA...40hex": "1.2.3.4", ... }
+ *     "fp_to_ip": { "AAAA...40hex": "1.2.3.4", ... },
+ *     "relays":   { "AAAA...40hex": { "ip": "1.2.3.4", "n": "nick", "fl": ["Exit","Fast",...], "w": 24000, "v": "Anon 0.4.9.x" }, ... }
  *   }
  *
  * The worker only needs fp_to_ip; the rest is for staleness checks / debugging.
@@ -87,22 +88,40 @@ function parseConsensus(txt) {
   const validAfter = (txt.match(/^valid-after (.+)$/m) || [])[1] || null;
   const validUntil = (txt.match(/^valid-until (.+)$/m) || [])[1] || null;
 
+  /* v2 (2026-09-16): also capture, per relay, the lines that FOLLOW its `r`
+   * line — `s` (flags), `w Bandwidth=N` (consensus weight), `v` (version).
+   * During the api.ec.anyone.tech outage the proxy learned to derive a
+   * current registry from this snapshot (anyclip-proxy v589), but with only
+   * fp_to_ip it could not supply nickname, flags or weight — so the relay
+   * detail panel showed "Weight —" for every relay. All three are in the
+   * consensus; this emits them. fp_to_ip is kept exactly as before for the
+   * existing consumers. */
   const fp_to_ip = {};
-  let relayCount = 0, skipped = 0;
+  const relays = {};
+  let relayCount = 0, skipped = 0, cur = null;
   for (const line of txt.split("\n")) {
-    if (!line.startsWith("r ")) continue;
-    const f = line.split(" ");
-    let fp;
-    try { fp = decodeFp(f[2]); } catch (_) { skipped++; continue; }
-    const ip = f[ipIndex];
-    if (FP_RE.test(fp) && ip && IPV4_RE.test(ip)) {
-      fp_to_ip[fp] = ip;
-      relayCount++;
-    } else {
-      skipped++;
+    if (line.startsWith("r ")) {
+      cur = null;
+      const f = line.split(" ");
+      let fp;
+      try { fp = decodeFp(f[2]); } catch (_) { skipped++; continue; }
+      const ip = f[ipIndex];
+      if (FP_RE.test(fp) && ip && IPV4_RE.test(ip)) {
+        fp_to_ip[fp] = ip;
+        relays[fp] = { ip, n: f[1] || "", fl: [], w: 0, v: "" };
+        cur = relays[fp];
+        relayCount++;
+      } else {
+        skipped++;
+      }
+      continue;
     }
+    if (!cur) continue;
+    if (line.startsWith("s ")) { cur.fl = line.slice(2).trim().split(/\s+/).filter(Boolean); continue; }
+    if (line.startsWith("w ")) { const m = /Bandwidth=(\d+)/.exec(line); if (m) cur.w = parseInt(m[1], 10); continue; }
+    if (line.startsWith("v ")) { cur.v = line.slice(2).trim(); continue; }
   }
-  return { fp_to_ip, relayCount, skipped, isMicrodesc, validAfter, validUntil };
+  return { fp_to_ip, relays, relayCount, skipped, isMicrodesc, validAfter, validUntil };
 }
 
 function main() {
@@ -139,7 +158,9 @@ function main() {
     validUntil: parsed.validUntil,
     relayCount: parsed.relayCount,
     format: parsed.isMicrodesc ? "microdesc" : "full",
-    fp_to_ip: parsed.fp_to_ip
+    fp_to_ip: parsed.fp_to_ip,
+    /* v2: per-relay nickname / flags / consensus weight / version. */
+    relays: parsed.relays
   };
 
   writeFileSync(outPath, JSON.stringify(snapshot) + "\n");
