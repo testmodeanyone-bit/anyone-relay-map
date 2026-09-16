@@ -5999,7 +5999,9 @@ async function warmHwRelays(env) {
     const c = await env.FP_INDEX.get("hw_relays_v1", { type: "json" });
     if (c && c.builtAt && (Date.now() - c.builtAt) < 6 * 3600 * 1e3 && Array.isArray(c.fingerprints) && c.fingerprints.length > 0) { console.log("[warm-hw] fresh, skipping"); return; }
   } catch (_) {}
-  const hwSet = await fetchHardwareFPs();
+  let hwSet;
+  try { hwSet = await fetchHardwareFPs(); }
+  catch (e) { await env.FP_INDEX.put("hw_relays_last_error", JSON.stringify({ at: Date.now(), message: "cron: " + String(e && e.message || e).slice(0, 300) }), { expirationTtl: 86400 }).catch(() => {}); throw e; }
   if (!hwSet || hwSet.size === 0) { console.warn("[warm-hw] empty set; keeping existing"); return; }
   await env.FP_INDEX.put("hw_relays_v1", JSON.stringify({ fingerprints: [...hwSet], count: hwSet.size, source: "arweave-init+messages", builtAt: Date.now() }), { expirationTtl: KV_TTL_SECS });
   console.log(`[warm-hw] refreshed: ${hwSet.size} hardware fingerprints`);
@@ -6804,9 +6806,9 @@ var worker_source_default = {
        * forced rebuild should surface the real upstream error to the operator. */
       const HW_FRESH_MS = 60 * 60 * 1e3;
       const HW_COOLDOWN_S = 120;
-      const hwStale = (snap) => {
+      const hwStale = (snap, lastErr) => {
         const age = Date.now() - (snap.builtAt || 0);
-        return new Response(JSON.stringify({ ...snap, stale: true }), {
+        return new Response(JSON.stringify({ ...snap, stale: true, lastRebuildError: lastErr || null }), {
           headers: jsonHeaders({
             "X-Cache": "STALE",
             "X-Age": (age / 1e3).toFixed(0) + "s",
@@ -6853,9 +6855,16 @@ var worker_source_default = {
               const hwSet = await fetchHardwareFPs();
               if (hwSet.size === 0) throw new Error("empty hardware set");
               await env.FP_INDEX.put("hw_relays_v1", JSON.stringify({ fingerprints: [...hwSet], count: hwSet.size, source: "arweave-init+messages", builtAt: Date.now() }), { expirationTtl: KV_TTL_SECS });
-            } catch (e) { console.warn("[hw] background rebuild failed:", e && e.message); }
+              await env.FP_INDEX.delete("hw_relays_last_error").catch(() => {});
+            } catch (e) {
+              console.warn("[hw] background rebuild failed:", e && e.message);
+              /* v594: surface the failure. A silent background rebuild that never
+               * lands is indistinguishable from "not deployed" from outside. */
+              await env.FP_INDEX.put("hw_relays_last_error", JSON.stringify({ at: Date.now(), message: String(e && e.message || e).slice(0, 300) }), { expirationTtl: 86400 }).catch(() => {});
+            }
           })());
-          return hwStale(cached);
+          const lastErr = await env.FP_INDEX.get("hw_relays_last_error", { type: "json" }).catch(() => null);
+          return hwStale(cached, lastErr);
         }
       }
       try {
@@ -12925,13 +12934,22 @@ async function buildAndStoreIndex(env) {
 async function fetchHardwareFPsFromArweave() {
   const PROCESS = AO_REGISTRY_ID;
   const GQL = "https://arweave.net/graphql";
+  /* v595: the data fetch was failing with 403 FROM THE WORKER ONLY. arweave.net/<id>
+   * 302s to a sandboxed *.arweave.net subdomain, and that host refuses requests
+   * with no User-Agent — which is what Workers send by default. Node sends one,
+   * so every local test passed. Fix: an explicit User-Agent on every Arweave
+   * request. Found only because v594 surfaced the real error message. */
+  const UA = { "User-Agent": "AnyoneMap-Proxy/1.0 (+https://anyonemap.anyonerelaysmap.workers.dev)" };
   const gql = async (query) => {
-    const r = await fetchT(GQL, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ query }) }, 15000);
+    const r = await fetchT(GQL, { method: "POST", headers: { "Content-Type": "application/json", ...UA }, body: JSON.stringify({ query }) }, 15000);
     if (!r.ok) throw new Error("arweave graphql " + r.status);
     const j = await r.json(); if (!j.data) throw new Error("arweave graphql: no data");
     return j.data.transactions;
   };
-  const txt = async (id) => { const r = await fetchT("https://arweave.net/" + id, {}, 15000); if (!r.ok) throw new Error("arweave data " + r.status); return r.text(); };
+  /* /raw/<id> 404s for bundled data items (the Add/Remove messages are ANS-104
+   * items inside bundles), so the plain path + redirect is the one that works
+   * for every message — it just needs the User-Agent. */
+  const txt = async (id) => { const r = await fetchT("https://arweave.net/" + id, { headers: UA, redirect: "follow" }, 15000); if (!r.ok) throw new Error("arweave data " + r.status); return r.text(); };
   const msgs = []; let cursor = null;
   for (let i = 0; i < 30; i++) {
     const t = await gql(`{ transactions(recipients:["${PROCESS}"], tags:[{name:"Action", values:["Init","Add-Verified-Hardware","Remove-Verified-Hardware"]}], sort:HEIGHT_ASC, first:100${cursor ? `, after:"${cursor}"` : ""}) { pageInfo{hasNextPage} edges{ cursor node{ id tags{name value} } } } }`);
@@ -12953,9 +12971,15 @@ async function fetchHardwareFPsFromArweave() {
   return set;
 }
 async function fetchHardwareFPs() {
+  let arwErr = null;
   try { return await fetchHardwareFPsFromArweave(); }
-  catch (e) { console.warn("[hw] arweave reconstruction failed, trying AO CU:", e && e.message); }
-  return fetchHardwareFPsViaAoCu();
+  catch (e) { arwErr = e; console.warn("[hw] arweave reconstruction failed, trying AO CU:", e && e.message); }
+  try { return await fetchHardwareFPsViaAoCu(); }
+  catch (e) {
+    /* v594: both sources failed. Report BOTH — the AO error alone hid why the
+     * primary path broke ("AO registry error: 404" told us nothing about Arweave). */
+    throw new Error("arweave: " + String(arwErr && arwErr.message || arwErr) + " | ao-cu: " + String(e && e.message || e));
+  }
 }
 async function fetchHardwareFPsViaAoCu() {
   /* v20: timeout. The AO compute-unit can hang under load — without a timeout this
