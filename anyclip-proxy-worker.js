@@ -12520,9 +12520,23 @@ async function buildRegistryFromConsensus(env, upstreamStatus) {
   const baseData = (base && base.data) || {};
   const data = {}; const unknown = [];
   for (const fp of Object.keys(fpToIp)) {
-    if (baseData[fp]) data[fp] = baseData[fp];
+    if (baseData[fp]) data[fp] = { ...baseData[fp] };
     else unknown.push(fp);
   }
+  /* v590: the snapshot builder (v2) also emits per-relay nickname, flags and
+   * consensus weight. Attach them to every entry so the SPA's detail panel and
+   * BW/weight sorts have data without api.ec.anyone.tech. Field names match
+   * what the SPA already reads from a registry entry: n (nickname), cw, fl. */
+  const consRelays = cons.relays && typeof cons.relays === "object" ? cons.relays : null;
+  const decorate = (fp, entry) => {
+    const c = consRelays && consRelays[fp];
+    if (!c) return entry;
+    if (c.n) entry.n = c.n;
+    if (Array.isArray(c.fl) && c.fl.length) entry.fl = c.fl;
+    if (c.w > 0) entry.cw = c.w;
+    return entry;
+  };
+  for (const fp of Object.keys(data)) decorate(fp, data[fp]);
   /* geolocate the new ones. ip-api batch: up to 100 IPs per POST, 15 req/min. */
   for (let i = 0; i < unknown.length && i < 300; i += 100) {
     const chunk = unknown.slice(i, i + 100);
@@ -12534,8 +12548,8 @@ async function buildRegistryFromConsensus(env, upstreamStatus) {
         const fp = chunk[k];
         if (!row || row.status !== "success") return;
         const asm = /^(AS\d+)\s*(.*)$/.exec(row.as || "") || [];
-        data[fp] = { hexId: null, coordinates: [row.lat, row.lon], countryCode: row.countryCode || "", countryName: row.country || "",
-                     asNumber: asm[1] || "", asName: asm[2] || row.as || "", cityName: row.city || "", regionName: row.regionName || "", geoQuality: "ip-api" };
+        data[fp] = decorate(fp, { hexId: null, coordinates: [row.lat, row.lon], countryCode: row.countryCode || "", countryName: row.country || "",
+                     asNumber: asm[1] || "", asName: asm[2] || row.as || "", cityName: row.city || "", regionName: row.regionName || "", geoQuality: "ip-api" });
       });
     } catch (_) {}
   }
