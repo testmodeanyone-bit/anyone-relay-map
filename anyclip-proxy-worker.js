@@ -13039,7 +13039,7 @@ function cors(body, status = 200, extra = {}) {   /* v584: optional extra header
   } });
 }
 function jsonHeaders(extra = {}) {
-  return { "Content-Type": "application/json", "Access-Control-Allow-Origin": ALLOWED_ORIGIN, ...extra };
+  return { "Content-Type": "application/json", "Access-Control-Allow-Origin": ALLOWED_ORIGIN, "Strict-Transport-Security": "max-age=31536000; includeSubDomains", ...extra };   /* v586: HSTS was only on cors() responses */
 }
 var ChatRoom = class {
   constructor(state, env) {
