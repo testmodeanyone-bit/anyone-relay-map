@@ -12262,11 +12262,11 @@ Issued: ${(/* @__PURE__ */ new Date()).toISOString()}
         return cors(JSON.stringify({
           relays: data,
           relayCount,
-          source: "anyone-proxy",
+          source: built.derived ? "consensus-derived" : "anyone-proxy",
           fetchedAt: Date.now(),
           mac,
           integrity: mac ? "signed" : "unsigned"
-        }), 200);
+        }), 200, built.derived ? { "X-Registry-Source": "consensus-derived" } : {});
       } catch (e) {
         return cors(JSON.stringify({ error: "Internal error" }), 500);
       }
@@ -12493,11 +12493,66 @@ const REGISTRY_CACHE_TTL = 300;            // serve-fresh window (route)
  * days. On 2026-09-16 api.ec.anyone.tech began returning 404 for every
  * route; the registry was gone from KV before anyone noticed. */
 const REGISTRY_PERSIST_TTL = 7 * 24 * 60 * 60;
+/* v589: REGISTRY FROM CONSENSUS — an independent source when the API is down.
+ *
+ * 2026-09-16: api.ec.anyone.tech returned 404 for every route. The map ran on
+ * a four-day-old seed, flagged stale. But the consensus mirror (GitHub Action,
+ * every 30 min, from the `anon` package's own directory fetch) was fresh and
+ * does not touch Anyone's API. It gives fingerprint -> IP for every relay in
+ * the current consensus.
+ *
+ * Measured against the stale registry: 5,037 in consensus, 4,975 overlap
+ * (98.8%), 62 new, 160 gone. Relays do not move, so cached geo/ISP data for
+ * the overlap is still correct; the 160 that left are dropped (the stale copy
+ * was still showing them); the 62 new get geolocated by IP in ONE ip-api
+ * batch call (100 per request). The result is a CURRENT registry, not a
+ * stale one — source "consensus-derived", not flagged stale. New relays carry
+ * geoQuality "ip-api" so downstream can tell. */
+const CONSENSUS_SNAPSHOT_URL = "https://raw.githubusercontent.com/testmodeanyone-bit/anyone-relay-map/main/data/consensus-snapshot.json";
+async function buildRegistryFromConsensus(env, upstreamStatus) {
+  const cons = await fetchT(CONSENSUS_SNAPSHOT_URL, { cf: { cacheTtl: 300 } }, 10000).then(r => r.ok ? r.json() : null).catch(() => null);
+  if (!cons || !cons.fp_to_ip || typeof cons.fp_to_ip !== "object") return null;
+  const fpToIp = cons.fp_to_ip;
+  const validUntil = cons.validUntil ? Date.parse(cons.validUntil + "Z") : 0;
+  if (validUntil && Date.now() - validUntil > 6 * 3600 * 1e3) { console.warn("[registry] consensus snapshot is >6h past validUntil; refusing to derive"); return null; }
+  let base = null;
+  if (env.FP_INDEX) base = await env.FP_INDEX.get(REGISTRY_CACHE_KEY, { type: "json" }).catch(() => null);
+  const baseData = (base && base.data) || {};
+  const data = {}; const unknown = [];
+  for (const fp of Object.keys(fpToIp)) {
+    if (baseData[fp]) data[fp] = baseData[fp];
+    else unknown.push(fp);
+  }
+  /* geolocate the new ones. ip-api batch: up to 100 IPs per POST, 15 req/min. */
+  for (let i = 0; i < unknown.length && i < 300; i += 100) {
+    const chunk = unknown.slice(i, i + 100);
+    try {
+      const r = await fetchT("http://ip-api.com/batch?fields=status,country,countryCode,regionName,city,lat,lon,as,query",
+        { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(chunk.map(fp => fpToIp[fp])) }, 8000);
+      const rows = r.ok ? await r.json() : [];
+      rows.forEach((row, k) => {
+        const fp = chunk[k];
+        if (!row || row.status !== "success") return;
+        const asm = /^(AS\d+)\s*(.*)$/.exec(row.as || "") || [];
+        data[fp] = { hexId: null, coordinates: [row.lat, row.lon], countryCode: row.countryCode || "", countryName: row.country || "",
+                     asNumber: asm[1] || "", asName: asm[2] || row.as || "", cityName: row.city || "", regionName: row.regionName || "", geoQuality: "ip-api" };
+      });
+    } catch (_) {}
+  }
+  console.log(`[registry] derived from consensus: ${Object.keys(data).length} relays (${unknown.length} new, ${Object.keys(baseData).length - Object.keys(data).length + unknown.length} dropped) — upstream was ${upstreamStatus}`);
+  return data;
+}
 async function buildAndCacheRegistry(env, ctx) {
   const UPSTREAM = "https://api.ec.anyone.tech/fingerprint-map";
   const upstream = await fetch(UPSTREAM, { signal: AbortSignal.timeout(10000) });
-  if (!upstream.ok) { const e = new Error("upstream " + upstream.status); e.upstreamStatus = upstream.status; throw e; }
-  const data_raw = await upstream.json();
+  let data_raw, derived = false;
+  if (!upstream.ok) {
+    data_raw = await buildRegistryFromConsensus(env, upstream.status);
+    if (!data_raw) { const e = new Error("upstream " + upstream.status); e.upstreamStatus = upstream.status; throw e; }
+    derived = true;
+  } else {
+    data_raw = await upstream.json();
+  }
   const { filtered: data } = applyQuarantineFilter(data_raw);
   const enrichStart = Date.now();
   const enrichResult = await enrichFromCache(data, env);
@@ -12515,12 +12570,12 @@ async function buildAndCacheRegistry(env, ctx) {
   if (env.FP_INDEX) {
     const put = env.FP_INDEX.put(
       REGISTRY_CACHE_KEY,
-      JSON.stringify({ data, ts: Date.now(), mac }),
+      JSON.stringify({ data, ts: Date.now(), mac, derived }),
       { expirationTtl: REGISTRY_PERSIST_TTL }
     ).catch(() => {});
     if (ctx && typeof ctx.waitUntil === "function") ctx.waitUntil(put); else await put;
   }
-  return { data, relayCount, mac, enrichResult, enrichStart };
+  return { data, relayCount, mac, enrichResult, enrichStart, derived };
 }
 async function buildAndStoreIndex(env) {
   const t0 = Date.now();
