@@ -24300,7 +24300,11 @@ function buildRelayList(raw){
       uptimeSecs:  r.up || prev.uptimeSecs || ((window._allUptimesCache && window._allUptimesCache[fp.toUpperCase()] || {}).up) || 0,
       nickname:    r.n  || prev.nickname   || '',
       bwKBs:       prev.bwKBs     || 0,
-      cw:          prev.cw        || 0,
+      /* v590: consensus weight and flags now arrive on the registry entry when
+       * the proxy derives from the consensus snapshot (api down). Prefer the
+       * entry; wallet enrichment (prev) remains the fallback. */
+      cw:          r.cw || prev.cw        || 0,
+      flags:       Array.isArray(r.fl) ? r.fl : (prev.flags || []),
     };
   });
   window.allRelays = allRelays;  /* v247 (Bug #1): keep window mirror in sync after reassignment */
