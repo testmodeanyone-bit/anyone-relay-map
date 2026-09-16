@@ -12220,6 +12220,23 @@ Issued: ${(/* @__PURE__ */ new Date()).toISOString()}
           built = await buildAndCacheRegistry(env, ctx);
         } catch (e) {
           if (e.upstreamStatus) {
+            /* v587: STALE-WHILE-ERROR. The route only served the KV copy inside
+             * the 5-minute freshness window; past that it rebuilt, and when the
+             * upstream failed it returned 502 with a real registry still sitting
+             * in KV. hw-relays got this fallback in v530; the registry — the
+             * endpoint everything else depends on — did not. Serve the stale
+             * copy, flagged, and let the cron keep retrying upstream. */
+            if (env.FP_INDEX) {
+              const stale = await env.FP_INDEX.get(REGISTRY_CACHE_KEY, { type: "json" }).catch(() => null);
+              if (stale && stale.data && stale.ts) {
+                const ageS = Math.round((Date.now() - stale.ts) / 1000);
+                return cors(JSON.stringify({
+                  relays: stale.data, relayCount: Object.keys(stale.data).length,
+                  source: "anyone-proxy-cache", cachedAt: stale.ts, mac: stale.mac, integrity: "verified",
+                  stale: true, upstreamStatus: e.upstreamStatus
+                }), 200, { "X-Cache": "STALE", "X-Age": String(ageS), "Cache-Control": "max-age=60" });
+              }
+            }
             return cors(JSON.stringify({ error: "Upstream registry unavailable", status: e.upstreamStatus }), 502);
           }
           throw e; // non-upstream failure → outer catch returns 500
@@ -12470,7 +12487,12 @@ Issued: ${(/* @__PURE__ */ new Date()).toISOString()}
  * event log and response framing. */
 const REGISTRY_CACHE_KEY = "relay-registry-cache";
 const REGISTRY_CACHE_TTL = 300;            // serve-fresh window (route)
-const REGISTRY_PERSIST_TTL = 30 * 60;      // KV eviction lifetime (bridges 15-min cron)
+/* v587: was 30 minutes — the last-good copy was evicted half an hour after
+ * the last successful build, so any upstream outage longer than that left
+ * NOTHING to fall back on. Every other cached key on this proxy persists 7
+ * days. On 2026-09-16 api.ec.anyone.tech began returning 404 for every
+ * route; the registry was gone from KV before anyone noticed. */
+const REGISTRY_PERSIST_TTL = 7 * 24 * 60 * 60;
 async function buildAndCacheRegistry(env, ctx) {
   const UPSTREAM = "https://api.ec.anyone.tech/fingerprint-map";
   const upstream = await fetch(UPSTREAM, { signal: AbortSignal.timeout(10000) });
