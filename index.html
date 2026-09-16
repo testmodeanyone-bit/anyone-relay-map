@@ -7723,6 +7723,7 @@ input:focus-visible, textarea:focus-visible, select:focus-visible{
       <div class="logo-sub"><span data-i18n="globalRelay">Global Relay Network</span> <span style="opacity:.7;font-size:8px;margin-left:4px;">v1.3</span> <span id="i18n-btn" onclick="i18nToggle()">🌐</span><span id="i18n-row" class="i18n-row"><span class="i18n-flag" role="button" tabindex="0" data-lang="en" title="English" aria-label="English">EN</span><span class="i18n-flag" role="button" tabindex="0" data-lang="es" title="Español" aria-label="Spanish (Español)">ES</span><span class="i18n-flag" role="button" tabindex="0" data-lang="zh" title="中文" aria-label="Chinese (中文)">ZH</span><span class="i18n-flag" role="button" tabindex="0" data-lang="ja" title="日本語" aria-label="Japanese (日本語)">JA</span><span class="i18n-flag" role="button" tabindex="0" data-lang="ko" title="한국어" aria-label="Korean (한국어)">KO</span><span class="i18n-flag" role="button" tabindex="0" data-lang="de" title="Deutsch" aria-label="German (Deutsch)">DE</span><span class="i18n-flag" role="button" tabindex="0" data-lang="fr" title="Français" aria-label="French (Français)">FR</span><span class="i18n-flag" role="button" tabindex="0" data-lang="pt" title="Português" aria-label="Portuguese (Português)">PT</span><span class="i18n-flag" role="button" tabindex="0" data-lang="ru" title="Русский" aria-label="Russian (Русский)">RU</span><span class="i18n-flag" role="button" tabindex="0" data-lang="ar" title="العربية" aria-label="Arabic (العربية)">AR</span><span class="i18n-flag" role="button" tabindex="0" data-lang="tr" title="Türkçe" aria-label="Turkish (Türkçe)">TR</span><span class="i18n-flag" role="button" tabindex="0" data-lang="hi" title="हिंदी" aria-label="Hindi (हिंदी)">HI</span><span class="i18n-flag" role="button" tabindex="0" data-lang="vi" title="Tiếng Việt" aria-label="Vietnamese (Tiếng Việt)">VI</span><span class="i18n-flag" role="button" tabindex="0" data-lang="th" title="ไทย" aria-label="Thai (ไทย)">TH</span><span class="i18n-flag" role="button" tabindex="0" data-lang="id" title="Bahasa" aria-label="Indonesian (Bahasa Indonesia)">ID</span></span></div>
     </div>
   </div>
+  <span id="stale-pill" hidden style="display:none;align-items:center;gap:6px;margin-left:12px;padding:3px 9px;border-radius:999px;border:1px solid rgba(251,191,36,.55);background:rgba(251,191,36,.12);color:#fde68a;font-family:Rajdhani,sans-serif;font-size:11px;letter-spacing:1px;white-space:nowrap" role="status"></span>
   <div class="hdr-right">
     <div class="hdr-clock">
       <div class="rtr-clock">
@@ -8681,6 +8682,11 @@ async function fetchData(){
       /* S4: unwrap proxy response if it has a 'relays' wrapper */
         var _registryIntegrity = raw.integrity || 'unverified';
         var _registrySource = raw.source || 'direct';
+        /* v588: the proxy now serves a stale copy when upstream is down (v587),
+         * flagged `stale: true` with `cachedAt`. The SPA ignored both and showed
+         * a four-day-old snapshot as "Live · 34s ago". Same class as the explore
+         * card and the FALLBACK stats: data that looks current and is not. */
+        window._registryStale = raw.stale === true ? { cachedAt: raw.cachedAt || null, upstreamStatus: raw.upstreamStatus || null } : null;
         var _rawData = raw.relays ? raw.relays : raw;
         if(_rawData && typeof _rawData==='object' && !Array.isArray(_rawData)){
         const parsed = parseFingerprintMap(_rawData);
@@ -8693,7 +8699,7 @@ async function fetchData(){
           window._rawFingerprintData = _rawData;   // save for relay browser
           buildRelayList(_rawData);                // populate relay browser
           try { sessionStorage.setItem('anymap_zones', JSON.stringify(parsed.map(z => ({index:z.index,relayCount:z.relayCount,geo:z.geo,bwMibs:z.bwMibs||0,countryCode:z.countryCode||'',countryName:z.countryName||'',topIsps:(z.topIsps||[]).slice(0,1)})))); } catch(_){}
-          setStatus(`Live · ${parsed.length} zones · ${new Date().toLocaleTimeString()} · ${(_registryIntegrity === 'verified' || _registryIntegrity === 'signed') ? '\u2705 verified' : '\u26a0\ufe0f unverified'}${window._quarantinedCount ? ' · '+window._quarantinedCount+' hidden (geo unknown)' : ''}`);
+          setStatus(`${window._registryStale ? 'Cached' : 'Live'} · ${parsed.length} zones · ${new Date().toLocaleTimeString()} · ${(_registryIntegrity === 'verified' || _registryIntegrity === 'signed') ? '\u2705 verified' : '\u26a0\ufe0f unverified'}${window._quarantinedCount ? ' · '+window._quarantinedCount+' hidden (geo unknown)' : ''}`);
           return parsed;
         }
       }
@@ -22531,6 +22537,30 @@ function fmtAge(ms){
 function updateRefreshAge(){
   const el = document.getElementById('refresh-age');
   if(!el) return;
+  const st = window._registryStale;
+  const pill = document.getElementById('stale-pill');
+  if(pill){
+    if(st && st.cachedAt){
+      const d = new Date(st.cachedAt);
+      const dateStr = d.toLocaleDateString(undefined, { month:'short', day:'numeric' }).toUpperCase();
+      /* narrow screens: the logo + full pill + refresh button overflow a 390px header (measured right edge 420). Date only there. */
+      pill.textContent = '⚠ ' + (window.innerWidth < 600 ? dateStr : (_i18t('snapshot','SNAPSHOT').toUpperCase() + ' · ' + dateStr));
+      pill.title = _i18t('staleRelayData','Relay data is a cached snapshot — the upstream registry is unavailable. Staking, hardware and bandwidth are still live.');
+      pill.hidden = false; pill.style.display = 'inline-flex';
+    } else { pill.hidden = true; pill.style.display = 'none'; }
+  }
+  if(st && st.cachedAt){
+    /* v588: relay data is a served-stale snapshot. Show its date, not the time
+     * since we last ASKED — "34s ago" on four-day-old data was a lie by
+     * implication. Amber, with the reason in the tooltip. */
+    const d = new Date(st.cachedAt);
+    el.textContent = (_i18t('dataFrom','DATA FROM') + ' ' + d.toLocaleDateString(undefined, { month:'short', day:'numeric' })).toUpperCase();
+    el.style.color = '#fbbf24';
+    const btn = el.closest('button'); if(btn) btn.title = _i18t('staleRelayData','Relay data is a cached snapshot — the upstream registry is unavailable. Staking, hardware and bandwidth are still live.');
+    return;
+  }
+  el.style.color = '';
+  const btn = el.closest('button'); if(btn) btn.title = '';
   el.textContent = fmtAge(Date.now() - lastRefreshTs);
 }
 
