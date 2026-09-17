@@ -5628,7 +5628,21 @@ async function storeSnapshot(env) {
      * are very slightly undercounted on a derived day — better than 0. */
     let fpData = null;
     const cachedReg = await env.FP_INDEX.get(REGISTRY_CACHE_KEY, { type: "json" }).catch(() => null);
-    if (cachedReg && cachedReg.data && Object.keys(cachedReg.data).length > 500) fpData = cachedReg.data;
+    /* v597: 2026-09-17's snapshot wrote zones 0 / countries 0 / isps 0 — not
+     * undefined (the block did not throw), ZERO: the loop ran over >500 entries
+     * that had none of the fields. Object.keys().length > 500 is satisfied by a
+     * long string too, and Object.values() of a string yields characters. So the
+     * guard now demands the registry SHAPE: an object whose values are objects
+     * carrying countryCode. Anything else falls through to the upstream fetch,
+     * and what was rejected is recorded so the next zero is diagnosable. */
+    let cand = cachedReg && cachedReg.data;
+    if (typeof cand === "string") { try { cand = JSON.parse(cand); } catch (_) { cand = null; } }
+    if (cand && typeof cand === "object" && !Array.isArray(cand)) {
+      const vals = Object.values(cand);
+      const good = vals.length > 500 && vals.slice(0, 50).filter((v) => v && typeof v === "object" && v.countryCode).length >= 25;
+      if (good) fpData = cand;
+      else await env.FP_INDEX.put("growth_last_shape_error", JSON.stringify({ at: Date.now(), keys: vals.length, sample: JSON.stringify(vals[0]).slice(0, 120), dataType: typeof cachedReg.data }), { expirationTtl: 7 * 86400 }).catch(() => {});
+    }
     let fpR = null;
     if (!fpData) fpR = await fetch("https://api.ec.anyone.tech/fingerprint-map", { signal: AbortSignal.timeout(8e3) });
     if (fpData || (fpR && fpR.ok)) {
