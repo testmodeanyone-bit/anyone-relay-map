@@ -5643,6 +5643,10 @@ async function storeSnapshot(env) {
       if (good) fpData = cand;
       else await env.FP_INDEX.put("growth_last_shape_error", JSON.stringify({ at: Date.now(), keys: vals.length, sample: JSON.stringify(vals[0]).slice(0, 120), dataType: typeof cachedReg.data }), { expirationTtl: 7 * 86400 }).catch(() => {});
     }
+    /* v598: record the branch and the inputs on EVERY run, not only on rejection.
+     * 2026-09-17: the KV registry was healthy and the same data produced 401
+     * zones locally, yet production wrote 0 twice. Guessing has not found it. */
+    const _enrichDiag = { at: Date.now(), cachedPresent: !!cachedReg, dataType: typeof (cachedReg && cachedReg.data), keys: cachedReg && cachedReg.data && typeof cachedReg.data === "object" ? Object.keys(cachedReg.data).length : null, branch: fpData ? "cache" : "upstream" };
     let fpR = null;
     if (!fpData) fpR = await fetch("https://api.ec.anyone.tech/fingerprint-map", { signal: AbortSignal.timeout(8e3) });
     if (fpData || (fpR && fpR.ok)) {
@@ -5658,8 +5662,12 @@ async function storeSnapshot(env) {
       snapshot.zones = zones.size;
       snapshot.countries = countries.size;
       snapshot.isps = isps.size;
-    }
-  } catch (_) {}
+      _enrichDiag.result = { zones: zones.size, countries: countries.size, isps: isps.size, valuesSeen: Object.values(fpData).length, firstValue: JSON.stringify(Object.values(fpData)[0]).slice(0, 140) };
+    } else { _enrichDiag.result = "no data: fpR status " + (fpR && fpR.status); }
+    await env.FP_INDEX.put("growth_last_enrich", JSON.stringify(_enrichDiag), { expirationTtl: 7 * 86400 }).catch(() => {});
+  } catch (e) {
+    try { await env.FP_INDEX.put("growth_last_enrich", JSON.stringify({ at: Date.now(), threw: String(e && e.message || e).slice(0, 200) }), { expirationTtl: 7 * 86400 }); } catch (_) {}
+  }
 
   try {
     await env.FP_INDEX.put(key, JSON.stringify(snapshot), { expirationTtl: 35 * 24 * 3600 });
@@ -7782,6 +7790,12 @@ var worker_source_default = {
       }
     }
     if (url.pathname === "/api/growth") {
+      if (request.method === "GET" && url.searchParams.get("diag") === "1") {
+        /* v598: read the last enrichment diagnostic. Public, non-sensitive. */
+        const d = await env.FP_INDEX.get("growth_last_enrich", { type: "json" }).catch(() => null);
+        const shape = await env.FP_INDEX.get("growth_last_shape_error", { type: "json" }).catch(() => null);
+        return cors(JSON.stringify({ lastEnrich: d, lastShapeError: shape }), 200);
+      }
       if (request.method === "GET") {
         const bust = url.searchParams.get("bust") === "1";
         /* v49 SECURITY FIX: ?bust=1 forces a synchronous storeSnapshot()
