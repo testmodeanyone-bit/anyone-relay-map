@@ -34,7 +34,7 @@
  * on next page navigation, which deletes the old cache (the activate
  * handler filters keys !== CACHE) and re-precaches STATIC against the
  * current worker. Bump per release. */
-const WORKER_VERSION = 'v561';
+const WORKER_VERSION = 'v559';
 
 /* v410: shared cross-worker KV schema. Inlined at build time from kv-schema.js
  * (single source of truth). Exposes _kvSchema.validate(obj, schema, opts) and
@@ -1082,8 +1082,16 @@ const _htmlEtagBase = (() => {
           }
         }
       }
+      /* v605: `total` was Object.keys(nodes).length — the mirror's 500-node
+       * SAMPLE, not the network. The panel's "Total nodes" read 500 while the
+       * mirror's total_nodes was 25,796, and the degraded-data guard above
+       * (which trusts a previous snapshot only when total >= 1000) could never
+       * be satisfied, so it never protected anything. The network figure is the
+       * mirror's total_nodes; the sample size is carried separately. */
+      const _networkTotal = (typeof data.total_nodes === 'number' && data.total_nodes >= _MIN_PLAUSIBLE_NODES) ? data.total_nodes : Object.keys(nodes).length;
       const snapshot = {
-        total: Object.keys(nodes).length,
+        total: _networkTotal,
+        sampled: Object.keys(nodes).length,
         sample: reduced,
         timestamp: data.timestamp,
         cachedAt: Math.floor(Date.now() / 1000),
@@ -1122,7 +1130,7 @@ const _htmlEtagBase = (() => {
       /* v577: only reached when a snapshot was actually stored — see the
        * cron:last-run comment at the top of this handler. */
       ctx.waitUntil(_snapKv.put('cron:last-success', JSON.stringify({
-        at: Date.now(), nodes: reduced.length, total: snapshot.total
+        at: Date.now(), nodes: reduced.length, total: snapshot.total, sampled: snapshot.sampled
       }), { expirationTtl: 604800 }).catch(() => {}));
       console.log('bitnodes-snapshot cron: stored snapshot with ' + reduced.length + ' nodes across ' + Object.keys(buckets).length + ' countries (total network: ' + snapshot.total + ')');
     } catch (e) {
