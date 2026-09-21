@@ -5628,6 +5628,7 @@ body.light #compass{ filter:drop-shadow(0 0 6px rgba(0,100,180,0.25)); }
 .dp-stat:last-child{ border-right:none; }
 .dp-stat-val{ font-family:'Orbitron',sans-serif;font-size:12px;font-weight:700;color:#00f5ff;line-height:1; }
 .dp-stat-lbl{ font-size:9px;color:rgba(200,235,245,.85);letter-spacing:1px;text-transform:uppercase;margin-top:2px;font-weight:600; }
+.dp-stat-sub{ font-size:8px;color:rgba(138,188,196,.55);letter-spacing:.5px;margin-top:1px; }   /* v599 */
 #dp-new-badge{ display:none;padding:5px 14px;background:rgba(0,255,136,.06);border-bottom:1px solid rgba(0,255,136,.15);flex-shrink:0;align-items:center;gap:6px; }
 #dp-new-badge.visible{ display:flex; }
 .dp-new-dot{ width:6px;height:6px;border-radius:50%;background:var(--an-green,#00ff88);animation:blink 1s ease-in-out infinite;flex-shrink:0; }
@@ -8563,7 +8564,7 @@ _allBanned.forEach(function(key){
 localStorage.setItem('ac_bans', JSON.stringify(AC.banned));
 
 const OP = {activePeer:null, activeTab:'lounge', collapsed:{}, personal:'', privateChats:{}, status:'online', statusColors:{ online:'#00c851', away:'#ffbb33', busy:'#ff4444', offline:'#555' }, statusLabels:{ online:'Online', away:'Away', busy:'Busy', offline:'Appear Offline' }};
-const DOM_PANEL = {data:[], known:new Set(), newToday:[], open:false, query:'', timer:null};
+const DOM_PANEL = { chain:null, /* v599 */data:[], known:new Set(), newToday:[], open:false, query:'', timer:null};
 const FB = {cats:[], mood:null, open:false};
 
 /* ══════════════════════════════════════════
@@ -13592,6 +13593,7 @@ function updateHealthRing(score){
 ══════════════════════════════════════════ */
 const DOMAIN_API    = 'https://api.ec.anyone.tech/anyone-domains';
 const DOMAIN_MARKET = 'https://get.unstoppabledomains.com/anyone/';
+const DOMAIN_CHAIN_API = 'https://anyclip-proxy.anyonerelaysmap.workers.dev/api/domains-chain';   /* v599: on-chain total, see fetchDomainsChain. Literal, not AC_PROXY: that const is declared in a later script block (TDZ). */
 const DOMAIN_POLL_MS = 60000;
 
 DOM_PANEL.data     = [];       // full list, newest-first
@@ -13723,6 +13725,37 @@ function toggleDomainPanel(){
   }
 }
 
+/* v599: the DOMAINS figure comes from the chain, not from api.ec.anyone.tech.
+ * That API served a fixed 1,687-entry list on 2026-09-21 — pagination ignored,
+ * identical between fetches — while the chain held 1,694, including a name minted
+ * the day before. The API list still drives the feed (rows, owners, search); the header shows the chain
+ * total with the indexed count beneath it so the gap is visible. NEW TODAY is
+ * the chain's last-24h mint count. Non-blocking: a chain failure leaves the API
+ * figures in place and says nothing, which is exactly what happened before. */
+async function fetchDomainsChain(indexedCount){
+  try{
+    const r = await fetch(DOMAIN_CHAIN_API, { signal: AbortSignal.timeout(8000) });
+    if(!r.ok) return;
+    const c = await r.json();
+    if(!c || typeof c.total !== 'number') return;
+    DOM_PANEL.chain = c;
+    const totalEl = document.getElementById('dp-total');
+    const subEl   = document.getElementById('dp-total-sub');
+    const newEl   = document.getElementById('dp-new-count');
+    const stEl    = document.getElementById('dp-chain-status');
+    if(totalEl) totalEl.textContent = c.total.toLocaleString();
+    if(subEl){
+      const idx = Number(indexedCount) || 0;
+      subEl.textContent = idx.toLocaleString() + ' ' + _i18t('dpIndexed','indexed');
+      subEl.style.display = (idx && idx !== c.total) ? '' : 'none';
+    }
+    if(newEl && typeof c.new24h === 'number') newEl.textContent = c.new24h > 0 ? '+' + c.new24h : '0';
+    if(stEl){
+      stEl.textContent = c.synced ? 'Base ⛓' : 'Base ⛓ ' + Number(c.lagBlocks||0).toLocaleString() + ' ' + _i18t('dpBehind','behind');
+      stEl.style.color = c.synced ? 'rgba(138,188,196,.4)' : '#fbbf24';
+    }
+  }catch(e){ console.warn('[Domains] chain fetch:', e.message); }
+}
 async function fetchDomains(){
   const pollEl = document.getElementById('dp-poll-status');
   if(pollEl) pollEl.style.color = '#fbbf24'; // amber = fetching
@@ -13757,7 +13790,10 @@ async function fetchDomains(){
     const newCntEl = document.getElementById('dp-new-count');
     if(totalEl) totalEl.textContent  = raw.length.toLocaleString();
     if(ownerEl) ownerEl.textContent  = owners.size.toLocaleString();
-    if(newCntEl) newCntEl.textContent = DOM_PANEL.newToday.length > 0 ? '+' + DOM_PANEL.newToday.length : '0';
+    /* v599: once the chain figure exists it owns NEW TODAY (true 24h); the session
+     * counter below is 0 on every fresh page load and only ever meant 'since opened'. */
+    if(newCntEl && !DOM_PANEL.chain) newCntEl.textContent = DOM_PANEL.newToday.length > 0 ? '+' + DOM_PANEL.newToday.length : '0';
+    fetchDomainsChain(raw.length);
 
     const updEl = document.getElementById('dp-updated');
     if(updEl) updEl.textContent = new Date().toLocaleTimeString();
@@ -31420,6 +31456,7 @@ body.light #geo-info-side-panel .hw-tip-section {
     <div class="dp-stat">
       <span class="dp-stat-val" id="dp-total">—</span>
       <span class="dp-stat-lbl" data-i18n="dpDomains">Domains</span>
+      <span class="dp-stat-sub" id="dp-total-sub" style="display:none"></span>
     </div>
     <div class="dp-stat">
       <span class="dp-stat-val" id="dp-owners">—</span>
@@ -31444,6 +31481,7 @@ body.light #geo-info-side-panel .hw-tip-section {
   <!-- Footer -->
   <div id="dp-footer">
     <span class="dp-ft"><span data-i18n="dpUpdates">Updates every 60s</span> · <a href="https://get.unstoppabledomains.com/anyone/" target="_blank"><span data-i18n="dpGetYours">Get yours</span> ↗</a></span>
+    <span class="dp-ft" id="dp-chain-status" title="Total counted from the Unstoppable UNS registry on Base"></span>
     <span class="dp-ft" id="dp-poll-status">●</span>
   </div>
 </div>

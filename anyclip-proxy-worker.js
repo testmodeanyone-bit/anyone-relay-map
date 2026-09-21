@@ -6196,6 +6196,164 @@ async function recordCronOutcome(env, task, ok, errMsg) {
   } catch (e) { console.warn("[cron-health] write failed:", e.message); }
 }
 
+
+/* v599: on-chain count of .anyone domains.
+ *
+ * The DOMAINS panel read api.ec.anyone.tech/anyone-domains and showed its length
+ * as the total. On 2026-09-21 that API returned a fixed 1,687-entry list — every
+ * pagination/limit parameter ignored, identical between fetches half an hour
+ * apart — while a full scan of the chain found 1,694: seven live names the API
+ * lacks, one of them minted the day before. A third-party bot claimed 1,937;
+ * nothing on-chain supports that figure. Small gap, but nothing said so, and it
+ * is the same host that 404'd for days on 2026-09-12 and froze the relay
+ * registry on a seed. A number the map can verify itself beats one it trusts.
+ *
+ * Source of truth for the TOTAL is now the chain. .anyone is an Unstoppable
+ * Domains TLD: the names are ERC-721 tokens on the UNS Registry on Base (8453),
+ * tokenId = UD namehash(name). Every mint emits NewURI(uint256 indexed tokenId,
+ * string uri) with the full name in `uri`, so the count is "NewURI logs on the
+ * registry whose uri ends in .anyone", deduplicated by name (a burn+re-mint
+ * emits twice). Verified: namehash("bitcoinhq.anyone") equals the API's tokenId
+ * and ownerOf() on Base returns the API's owner; Ethereum and Polygon registries
+ * revert for the same token.
+ *
+ * Incremental: a KV cursor advances a bounded number of eth_getLogs calls per
+ * cron tick (public Base RPCs cap the block range at 2k–10k, so the whole
+ * history is ~9,500 calls — far more than one invocation). Cold start fetches a
+ * seed committed to the repo by the one-off backfill (data/anyone-domains-
+ * chain.json); if that is missing it walks from the TLD's mint block and catches
+ * up over ~240 ticks on its own. Re-scans DOMCHAIN_REORG blocks behind the
+ * cursor every tick; NewURI is idempotent by name so overlap costs nothing.
+ *
+ * The API list is still what the feed BROWSES (owners, rows, search) — the
+ * chain scan stores name -> mint block only. The panel shows the chain total
+ * with the API's indexed count beneath it, so the gap is visible instead of
+ * hidden. NEW TODAY also moves here: the old figure counted arrivals since the
+ * panel was opened in this browser session, which is 0 on every page load. */
+var DOMCHAIN_KEY = "anyone_domains_chain_v1";
+var DOMCHAIN_REGISTRY = "0xF6c1b83977DE3dEffC476f5048A0a84d3375d498";   /* Unstoppable UNS Registry, Base mainnet */
+var DOMCHAIN_NEWURI = "0xc5beef08f693b11c316c0c8394a377a0033c9cf701b8cd8afd79cecef60c3952";   /* keccak256("NewURI(uint256,string)") */
+var DOMCHAIN_TLD_BLOCK = 32681580;   /* block that minted the "anyone" TLD token — 2025-07-10 13:01:47Z. Nothing before it can be a .anyone name. */
+/* Measured 2026-09-21 with eth_getLogs at block 33.0M (deep history):
+ *   mainnet.base.org / developer-access-mainnet.base.org  ok at 2k, 413 at 5k
+ *   base.gateway.tenderly.co / gateway.tenderly.co/public  ok at 1k, fails at 2k
+ *   base-rpc.publicnode.com  10k near head but 403 "Archive request" on history — useless for a cursor
+ *   drpc, llamarpc, meowrpc, 1rpc, blockpi, omniatech, lava  no getLogs, quota, or dead
+ * A synced cursor needs one 2k call per 15-min tick (≈450 new blocks + 64 reorg). */
+var DOMCHAIN_RPCS = [
+  { url: "https://mainnet.base.org",                  span: 2000 },
+  { url: "https://developer-access-mainnet.base.org", span: 2000 },
+  { url: "https://base.gateway.tenderly.co",          span: 1000 }
+];
+var DOMCHAIN_REORG = 64;             /* blocks re-scanned behind the cursor each tick */
+var DOMCHAIN_MAX_CALLS = 60;         /* eth_getLogs per tick: 1 when synced; 60 (~120k blocks, ~12 s) while catching up */
+var DOMCHAIN_SYNC_LAG = 600;         /* <= 20 min of Base blocks behind head counts as synced */
+var DOMCHAIN_DAY_BLOCKS = 43200;     /* 24h at 2s blocks — for new24h */
+var DOMCHAIN_SEED_URL = "https://raw.githubusercontent.com/testmodeanyone-bit/anyone-relay-map/main/data/anyone-domains-chain.json";
+
+function domchainEndpoints(env) {
+  const list = [];
+  /* A keyed endpoint (Alchemy/Infura free tier) is faster and allows 10k-block
+   * ranges; keep span conservative because we cannot measure it here. */
+  if (env && env.BASE_RPC_URL) list.push({ url: env.BASE_RPC_URL, span: 2000 });
+  list.push(...DOMCHAIN_RPCS);
+  return list;
+}
+
+async function domchainRpc(ep, method, params) {
+  const r = await fetch(ep.url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    signal: AbortSignal.timeout(15e3),
+    body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params })
+  });
+  if (!r.ok) throw new Error("HTTP " + r.status);
+  const j = await r.json();
+  if (j.error) throw new Error(j.error.message || "rpc error");
+  return j.result;
+}
+
+/* ABI-decode a single dynamic `string` return: [offset][length][utf8 bytes]. */
+function domchainDecodeUri(data) {
+  const hex = String(data || "").slice(2);
+  if (hex.length < 128) return "";
+  const len = parseInt(hex.slice(64, 128), 16);
+  if (!(len > 0) || len > 512) return "";
+  const u8 = new Uint8Array(len);
+  for (let i = 0; i < len; i++) u8[i] = parseInt(hex.substr(128 + i * 2, 2), 16);
+  try { return new TextDecoder().decode(u8); } catch (_) { return ""; }
+}
+
+function domchainSummarize(state, head) {
+  const names = Object.keys(state.names);
+  const dayFloor = head - DOMCHAIN_DAY_BLOCKS;
+  let new24h = 0;
+  for (const n of names) if (state.names[n] >= dayFloor) new24h++;
+  state.total = names.length;
+  state.new24h = new24h;
+  state.head = head;
+  state.lagBlocks = Math.max(0, head - state.cursor);
+  state.synced = state.lagBlocks <= DOMCHAIN_SYNC_LAG;
+  state.updatedAt = Date.now();
+  return state;
+}
+
+async function warmDomainsChain(env) {
+  if (!env.FP_INDEX) return;
+  let state = null;
+  try { state = await env.FP_INDEX.get(DOMCHAIN_KEY, { type: "json" }); } catch (_) {}
+  if (!state || !state.names || typeof state.cursor !== "number") {
+    state = { names: {}, cursor: DOMCHAIN_TLD_BLOCK - 1, startBlock: DOMCHAIN_TLD_BLOCK, source: "cold" };
+    try {
+      const r = await fetch(DOMCHAIN_SEED_URL, { signal: AbortSignal.timeout(15e3) });
+      if (r.ok) {
+        const seed = await r.json();
+        if (seed && seed.names && typeof seed.cursor === "number" && seed.cursor > DOMCHAIN_TLD_BLOCK) {
+          state.names = seed.names; state.cursor = seed.cursor; state.source = "seed@" + seed.cursor;
+          console.log(`[domchain] bootstrapped from seed: ${Object.keys(seed.names).length} names, cursor ${seed.cursor}`);
+        }
+      } else console.warn("[domchain] seed HTTP " + r.status + " — walking from TLD block");
+    } catch (e) { console.warn("[domchain] seed fetch failed:", e.message, "— walking from TLD block"); }
+  }
+
+  const eps = domchainEndpoints(env);
+  let epi = 0, calls = 0, head = null;
+  for (let a = 0; a < eps.length && head == null; a++) {
+    try { head = parseInt(await domchainRpc(eps[epi++ % eps.length], "eth_blockNumber", []), 16); } catch (_) {}
+  }
+  if (!(head > 0)) throw new Error("no Base RPC answered eth_blockNumber");
+
+  let from = Math.max(DOMCHAIN_TLD_BLOCK, state.cursor - DOMCHAIN_REORG + 1);
+  let added = 0, scanned = 0;
+  while (from <= head && calls < DOMCHAIN_MAX_CALLS) {
+    const ep = eps[epi % eps.length];
+    const to = Math.min(head, from + ep.span - 1);
+    calls++;
+    let logs;
+    try {
+      logs = await domchainRpc(ep, "eth_getLogs", [{
+        address: DOMCHAIN_REGISTRY,
+        fromBlock: "0x" + from.toString(16),
+        toBlock: "0x" + to.toString(16),
+        topics: [DOMCHAIN_NEWURI]
+      }]);
+    } catch (e) { epi++; continue; }   /* rotate endpoint, retry the same range; `calls` still bounds the loop */
+    for (const lg of logs) {
+      const uri = domchainDecodeUri(lg.data);
+      if (uri === "anyone" || !uri.endsWith(".anyone")) continue;
+      if (!(uri in state.names)) added++;
+      state.names[uri] = parseInt(lg.blockNumber, 16);   /* last mint wins (burn + re-mint) */
+    }
+    scanned += to - from + 1;
+    state.cursor = to;
+    from = to + 1;
+  }
+
+  domchainSummarize(state, head);
+  await env.FP_INDEX.put(DOMCHAIN_KEY, JSON.stringify(state), { expirationTtl: 30 * 86400 });
+  console.log(`[domchain] total=${state.total} new24h=${state.new24h} +${added} this tick, scanned ${scanned} blocks in ${calls} calls, cursor ${state.cursor}/${head} (${state.synced ? "synced" : state.lagBlocks + " behind"})`);
+}
+
 var worker_source_default = {
   /* v585: handler-level catch. There was none, so any uncaught throw in any
    * route surfaced as Cloudflare's HTML error page — no CORS header, so the
@@ -6408,6 +6566,24 @@ var worker_source_default = {
       }
     }
 
+    if (url.pathname === "/api/domains-chain" && request.method === "GET") {
+      /* v599: on-chain .anyone total. Served straight from KV — the cron owns the
+       * scan, a visitor never triggers RPC calls. ?names=1 adds the name -> mint
+       * block map (≈70 KB) for diffing against the API list. */
+      let st = null;
+      try { st = env.FP_INDEX ? await env.FP_INDEX.get(DOMCHAIN_KEY, { type: "json" }) : null; } catch (_) {}
+      if (!st || typeof st.total !== "number") {
+        return cors(JSON.stringify({ error: "not indexed yet", key: DOMCHAIN_KEY, hint: "populated by the cron (warmDomainsChain)" }), 503, { "Cache-Control": "no-store" });
+      }
+      const body = {
+        chain: "base", registry: DOMCHAIN_REGISTRY, tld: "anyone",
+        total: st.total, new24h: st.new24h,
+        cursor: st.cursor, head: st.head, lagBlocks: st.lagBlocks, synced: !!st.synced,
+        startBlock: DOMCHAIN_TLD_BLOCK, source: st.source || null, updatedAt: st.updatedAt
+      };
+      if (url.searchParams.get("names") === "1") body.names = st.names;
+      return cors(JSON.stringify(body), 200, { "Cache-Control": "public, max-age=60", "X-Age": ((Date.now() - (st.updatedAt || 0)) / 1e3).toFixed(0) + "s" });
+    }
     if (url.pathname === "/api/total-staked" && request.method === "GET") {
       /* v530: same stale-while-error treatment as /api/hw-relays — this route hits
        * the same AO registry through the same CU, so it fails in lockstep with it.
@@ -12475,6 +12651,8 @@ Issued: ${(/* @__PURE__ */ new Date()).toISOString()}
     ctx.waitUntil(warmTotalStaked(env).then(() => recordCronOutcome(env, "stakedwarm", true)).catch(e => { console.warn("[cron] staked warm failed:", e.message); return recordCronOutcome(env, "stakedwarm", false, e.message); }));
     /* v575: keep /api/exit-relays served from cache. See warmExitRelays. */
     ctx.waitUntil(warmExitRelays(env, ctx).then(() => recordCronOutcome(env, "exitwarm", true)).catch(e => { console.warn("[cron] exit-relays warm failed:", e.message); return recordCronOutcome(env, "exitwarm", false, e.message); }));
+    /* v599: on-chain .anyone domain count. See warmDomainsChain. */
+    ctx.waitUntil(warmDomainsChain(env).then(() => recordCronOutcome(env, "domchain", true)).catch(e => { console.warn("[cron] domchain warm failed:", e.message); return recordCronOutcome(env, "domchain", false, e.message); }));
     /* v593: hardware set from Arweave. See warmHwRelays. */
     ctx.waitUntil(warmHwRelays(env).then(() => recordCronOutcome(env, "hwwarm", true)).catch(e => { console.warn("[cron] hw warm failed:", e.message); return recordCronOutcome(env, "hwwarm", false, e.message); }));
     /* v57 FIX: warm fp-index on the cron. Previously NOTHING warmed fp-index —
