@@ -30321,13 +30321,30 @@ body.light #geo-info-side-panel .hw-tip-section {
     {k:['color','colour','white','cyan','green','gold','orange','legend','mean'],
      a:"Node colors show relay density — White = 500+ relays, Cyan = 100–499, Green = 20–99, Gold = 5–19, Orange = 1–4. The brighter the node, the more routing power it has!"},
     {k:['most','top','biggest','hub','largest','strongest','country'],
-     a:"Frankfurt 🇩🇪 leads with 652 relays! Top 5: Frankfurt (652), Amsterdam (502), Netherlands (470), London (422), Romania (311). Europe dominates the network!"},
+     /* v609: was a hardcoded "Frankfurt leads with 652 relays… Top 5 …" written
+      * when the network looked like that; Frankfurt had 322 on 2026-09-21. The
+      * answer is now computed from the same `ranked` zones the map draws. */
+     a:function(){
+       try{
+         if(typeof ranked !== 'undefined' && ranked && ranked.length){
+           var top = ranked.slice(0,5).map(function(z){
+             var name = z.cityName || z.regionName || z.countryName || 'Unknown';
+             return name + (z.countryCode ? ' ' + z.countryCode : '') + ' (' + z.relayCount + ')';
+           });
+           var byCountry = {};
+           ranked.forEach(function(z){ var c = z.countryName || z.countryCode || '?'; byCountry[c] = (byCountry[c]||0) + (z.relayCount||0); });
+           var topC = Object.keys(byCountry).sort(function(a,b){ return byCountry[b]-byCountry[a]; })[0];
+           return "Right now the biggest zone is " + top[0] + ". Top 5 zones: " + top.join(', ') + ". Largest country by relays: " + topC + " (" + byCountry[topC] + "). Tap any zone on the map for its breakdown.";
+         }
+       }catch(_){}
+       return "The biggest zones are the brightest dots on the map — tap one to see its relay count, ISPs and bandwidth. The HEALTH panel ranks countries and zones live.";
+     }},
     {k:['signal','animation','packet','live','⚡','transfer'],
      a:"Hit ⚡ SIGNALS to activate two layers: a connection web between major hubs, plus animated glowing packets. Cyan = outgoing, Green = incoming. Larger dots = stronger hubs!"},
     {k:['yellow','gold','line','arc','connection','web','route'],
      a:"Gold lines show the strongest estimated backbone routes between top relay hubs. Thickness scales with combined relay power. These are estimated — real peer topology needs a network API."},
     {k:['zoom','pan','move','navigate','scroll'],
-     a:"Scroll to zoom, click & drag to pan. Use the +/−/⊙ buttons on the right. ⊙ resets to world view. You can zoom up to 14x!"},
+     a:"Scroll to zoom, click & drag to pan. Use the +/−/⊙ buttons on the right. ⊙ resets to world view. You can zoom in to level 15 — street scale."},
     {k:['dark','light','mode','theme','☀'],
      a:"Click ☀ MODE in the top bar to switch between dark and light mode. Dark mode makes the glowing relay nodes really pop!"},
     {k:['how many','total','count','number','stat'],
@@ -30404,7 +30421,8 @@ body.light #geo-info-side-panel .hw-tip-section {
       const s = e.k.filter(k=>lq.includes(k)).length;
       if(s > bestScore){ bestScore=s; best=e; }
     });
-    return bestScore > 0 ? best.a : _staticFb('noMatch');
+    if(bestScore <= 0) return _staticFb('noMatch');
+    return typeof best.a === 'function' ? best.a() : best.a;   /* v609: answers may be computed */
   }
 
   let _cachedToken = null;
