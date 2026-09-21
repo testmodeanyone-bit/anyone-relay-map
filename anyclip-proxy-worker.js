@@ -3271,26 +3271,10 @@ async function computeExitRelays(env, ctx) {
          *   - 6 in flight, not 20 — the resets look like overload, not chance
          *   - pages are fetched ONCE and reused by the ip-sum fallback below,
          *     which used to refetch all of them */
-        const WL_PER_PAGE = 50, WL_CONC = 6, WL_TRIES = 4, WL_TIMEOUT_MS = 12000;
-        const fetchPage = async (pg) => {
-          let last = null;
-          for (let a = 0; a < WL_TRIES; a++) {
-            try {
-              const r = await fetchT(`${WALLET_LOOKUP}&per_page=${WL_PER_PAGE}&page=${pg}`, {}, WL_TIMEOUT_MS);
-              if (!r.ok) throw new Error("HTTP " + r.status);
-              return await r.json();
-            } catch (e) { last = e; }
-          }
-          /* v575: a compute function must THROW, not return a Response. */
-          throw new Error(`wallet lookup page ${pg} failed ${WL_TRIES}x: ` + String(last && last.message || last));
-        };
-        const d0 = await fetchPage(1);
-        const pages = d0.pages || 1;
-        const pageData = [d0];
-        for (let p = 2; p <= pages; p += WL_CONC) {
-          const batch = Array.from({ length: Math.min(WL_CONC, pages - p + 1) }, (_, i) => p + i);
-          pageData.push(...await Promise.all(batch.map(fetchPage)));
-        }
+        /* v603: shared reader, see fetchWalletLookupPages. Throws on a lost page
+         * (v575: a compute function must THROW, not return a Response). */
+        const pageData = await fetchWalletLookupPages();
+        const d0 = pageData[0];
         const walletAddrs = [];
         for (const d of pageData) collectWallets(d.wallets);
         let exitCount = null, guardCount = null, middleCount = null;
@@ -3578,6 +3562,81 @@ var GROWTH_DAYS = 30;
  * shorter builds the background warm can actually finish. Shared by the
  * fp-index and all-uptimes builds. Tune up if the upstream proves capable. */
 var IPS_BATCH_SIZE = 15;
+
+/* v603: ONE resilient reader for the wallet-lookup pages, shared by
+ * computeExitRelays (v602) and buildAndStoreUptimes. The upstream resets about
+ * every other connection after ~11 s and answers the rest in under a second
+ * (measured 2026-09-21). per_page=50 is its cap; every page gets up to 4
+ * attempts at 12 s; a page that still fails THROWS — callers must not cache a
+ * shorter list as a complete one. Returns every page's JSON in order. */
+/* Timeouts are SHORT on purpose: a good answer arrives in <1 s and a reset
+ * arrives at ~11 s, so waiting 12 s just pays full price for every reset.
+ * 5 s with more attempts makes a reset cost 5 s and a success cost 1 s. */
+var WL_PER_PAGE = 50, WL_CONC = 6, WL_TRIES = 8, WL_TIMEOUT_MS = 5000;
+var IPS_TRIES = 3, IPS_TIMEOUT_MS = 5000;
+/* A Worker invocation allows 1,000 subrequests. At the 21% success rate
+ * measured at 15:40 ET on 2026-09-21 a cold build would need ~2,700, so no
+ * retry policy can finish one during an outage like that. The wallet pass
+ * therefore carries a call budget; once spent, remaining wallets use their
+ * stale KV copy or count as lost, the degraded-guard keeps the previous
+ * cache, and /health shows the failure — which is the correct outcome. */
+var IPS_CALL_BUDGET = 600;
+async function fetchWalletLookupPage(pg) {
+  let last = null;
+  for (let a = 0; a < WL_TRIES; a++) {
+    try {
+      const r = await fetchT(`${WALLET_LOOKUP}&per_page=${WL_PER_PAGE}&page=${pg}`, {}, WL_TIMEOUT_MS);
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      return await r.json();
+    } catch (e) { last = e; }
+  }
+  throw new Error(`wallet lookup page ${pg} failed ${WL_TRIES}x: ` + String(last && last.message || last));
+}
+async function fetchWalletLookupPages() {
+  const d0 = await fetchWalletLookupPage(1);
+  const pages = d0.pages || 1;
+  const out = [d0];
+  for (let p = 2; p <= pages; p += WL_CONC) {
+    const batch = Array.from({ length: Math.min(WL_CONC, pages - p + 1) }, (_, i) => p + i);
+    out.push(...await Promise.all(batch.map(fetchWalletLookupPage)));
+  }
+  return out;
+}
+
+/* v603: one wallet's relay list — KV first (the v543 warm keeps
+ * wallet-ips:<wallet> fresh 40 wallets per tick), upstream only on a miss or a
+ * copy older than maxAgeMs, and a fetched copy is written back in the warm's
+ * exact shape so both paths feed the same cache. Returns null only when the
+ * upstream failed every attempt and nothing usable was cached. */
+async function readWalletIps(env, wallet, maxAgeMs, budget) {
+  const key = `wallet-ips:${wallet.toLowerCase()}`;
+  let cached = null;
+  if (env && env.FP_INDEX) { try { cached = await env.FP_INDEX.get(key, { type: "json" }); } catch (_) {} }
+  if (cached && Array.isArray(cached.relays) && (Date.now() - (cached.builtAt || 0)) < maxAgeMs) return { relays: cached.relays, from: "kv" };
+  let last = null;
+  for (let attempt = 1; attempt <= IPS_TRIES; attempt++) {
+    if (budget) { if (budget.left <= 0) break; budget.left--; }
+    try {
+      const r = await fetchT(`${IPS_BASE}${encodeURIComponent(wallet)}`, {}, IPS_TIMEOUT_MS);
+      if (!r.ok) { last = new Error("HTTP " + r.status); if (r.status < 500 && r.status !== 429) break; }
+      else {
+        const data = await r.json();
+        const relays = (data.ips || []).map((x) => ({
+          fp: x.fingerprint, n: x.descriptor_nickname, ip: x.ip,
+          cc: x.country_code, co: x.country, bw: x.bandwidth,
+          up: x.uptime_seconds, cw: x.consensus_weight, fl: x.flags,
+          ic: x.in_consensus, hw: x.ao_is_hardware, lm: x.ao_location_multiplier, fm: x.ao_family_multiplier
+        }));
+        if (env && env.FP_INDEX) env.FP_INDEX.put(key, JSON.stringify({ relays, builtAt: Date.now() }), { expirationTtl: KV_TTL_SECS }).catch(() => {});
+        return { relays, from: "upstream" };
+      }
+    } catch (e) { last = e; }
+    if (attempt < IPS_TRIES) await new Promise((res) => setTimeout(res, 300 * attempt));
+  }
+  /* upstream dead for this wallet: a stale cached copy beats nothing */
+  if (cached && Array.isArray(cached.relays)) return { relays: cached.relays, from: "kv-stale" };
+  return null;
+}
 async function hashWallet(wallet) {
   const data = new TextEncoder().encode(wallet.toLowerCase().trim());
   const hash = await crypto.subtle.digest("SHA-256", data);
@@ -5860,28 +5919,19 @@ var KV_UPTIME_KEY = "all_uptimes_v1";
 var UPTIME_STALE_MS = 55 * 60 * 1e3;
 async function buildAndStoreUptimes(env) {
   const t0 = Date.now();
-  let _pagesTimeout = 0, _walletsTimeout = 0;
+  let _pagesTimeout = 0, _walletsTimeout = 0, _fromKv = 0, _fromUpstream = 0, _fromStale = 0;
   const _step1T0 = Date.now();
-  const r0 = await fetch(`${WALLET_LOOKUP}&page=1`, { signal: AbortSignal.timeout(8e3) });
-  if (!r0.ok) throw new Error("upstream error: " + r0.status);
-  const d0 = await r0.json();
-  const totalPages = d0.pages || 1;
-  const walletRows = [...d0.wallets || []];
-  for (let p = 2; p <= totalPages; p += 20) {
-    const batch = Array.from({ length: Math.min(20, totalPages - p + 1) }, (_, i) => p + i);
-    const results = await Promise.all(
-      batch.map(
-        (pg) => fetch(`${WALLET_LOOKUP}&page=${pg}`, { signal: AbortSignal.timeout(8e3) }).then((r) => r.json()).then((d) => d.wallets || []).catch(() => {
-          _pagesTimeout++;
-          return [];
-        })
-      )
-    );
-    for (const rows of results) walletRows.push(...rows);
-  }
+  /* v603: step 1 had the same one-try-and-swallow pagination v602 removed from
+   * computeExitRelays. The build that was serving on 2026-09-21 had found 270
+   * wallets where 565 exist — and the degraded-guard below never saw it, since
+   * it only counts step-2 losses. Shared reader; a lost page throws. */
+  const pageData = await fetchWalletLookupPages();
+  const totalPages = pageData.length;
+  const walletRows = [];
+  for (const d of pageData) walletRows.push(...(d.wallets || []));
   const allWallets = walletRows.filter((w) => w.wallet && (w.in_consensus_ips || 0) > 0).map((w) => w.wallet);
   const _step1Dt = Date.now() - _step1T0;
-  console.log(`[buildAndStoreUptimes] step1 done \u2014 ${totalPages} pages, ${allWallets.length} wallets, ${_pagesTimeout} page timeouts, ${_step1Dt}ms`);
+  console.log(`[buildAndStoreUptimes] step1 done \u2014 ${totalPages} pages, ${allWallets.length} wallets, ${_step1Dt}ms`);
   const _step2T0 = Date.now();
   const relays = {};
   /* v20: wallet→fingerprints reverse index, built in the same pass. Lets
@@ -5890,39 +5940,33 @@ async function buildAndStoreUptimes(env) {
    * the wallet address being verified, in the URL path, to the upstream's
    * access logs every time someone signed in). */
   const walletRelays = {};
+  /* v603: hard budget. A cold build against a half-dead upstream can run past
+   * the scheduled-event limit; wallets not reached by the deadline count as
+   * lost, which trips the degraded-guard below and keeps the previous cache. */
+  const UPTIMES_BUDGET_MS = 8 * 60 * 1e3;
+  const _ipsBudget = { left: IPS_CALL_BUDGET };
   for (let i = 0; i < allWallets.length; i += IPS_BATCH_SIZE) {
+    if (Date.now() - t0 > UPTIMES_BUDGET_MS) { _walletsTimeout += allWallets.length - i; console.warn(`[buildAndStoreUptimes] budget exhausted at wallet ${i}/${allWallets.length}`); break; }
     const batch = allWallets.slice(i, i + IPS_BATCH_SIZE);
     await Promise.all(batch.map(async (wallet) => {
-      /* FIX: match the fp-index fetchWalletIps behavior — 8s timeout + up to 3
-       * retries with backoff on timeout/5xx/429. The previous one-shot 5s fetch
-       * is why all-uptimes saw ~71% wallet timeouts while the (retrying) fp-index
-       * saw 0% on the SAME wallets, silently under-counting relays. */
-      let d = null;
-      for (let attempt = 1; attempt <= 3; attempt++) {
-        try {
-          const r = await fetch(`${IPS_BASE}${encodeURIComponent(wallet)}`, { signal: AbortSignal.timeout(8e3) });
-          if (!r.ok) {
-            if (attempt < 3 && (r.status >= 500 || r.status === 429)) { await new Promise((res) => setTimeout(res, 500 * attempt)); continue; }
-            break; // non-retryable HTTP error
-          }
-          d = await r.json();
-          break;
-        } catch (_) {
-          if (attempt < 3) { await new Promise((res) => setTimeout(res, 500 * attempt)); continue; }
-        }
-      }
-      if (!d) { _walletsTimeout++; return; }
+      /* v603: KV first. The v543 warm keeps wallet-ips:<wallet> within 30 min
+       * for its slice; anything under 4 h is used as-is (uptime is shown in days; the warm cycles every wallet in ~3.5 h),
+       * so a build touches the flaky upstream only for the wallets the warm has
+       * not reached. Each upstream fetch is written back for the next build. */
+      const got = await readWalletIps(env, wallet, 4 * 3600 * 1e3, _ipsBudget);
+      if (!got) { _walletsTimeout++; return; }
+      if (got.from === "kv") _fromKv++; else if (got.from === "upstream") _fromUpstream++; else _fromStale++;
       const _walletKey = wallet.toLowerCase();
       const _fpList = [];
-      for (const relay of d.ips || []) {
-        const fp = (relay.fingerprint || "").toUpperCase();
+      for (const relay of got.relays || []) {
+        const fp = (relay.fp || "").toUpperCase();
         if (!fp) continue;
         relays[fp] = {
-          up: relay.uptime_seconds || 0,
-          n: relay.descriptor_nickname || "",
-          bw: relay.bandwidth || 0,
-          cw: relay.consensus_weight || 0,
-          fl: relay.flags || []
+          up: relay.up || 0,
+          n: relay.n || "",
+          bw: relay.bw || 0,
+          cw: relay.cw || 0,
+          fl: relay.fl || []
         };
         _fpList.push(fp);
       }
@@ -5939,7 +5983,8 @@ async function buildAndStoreUptimes(env) {
     elapsed
   };
   const _step2Dt = Date.now() - _step2T0;
-  console.log(`[buildAndStoreUptimes] step2 done \u2014 ${Object.keys(relays).length} relays, ${_walletsTimeout} wallet timeouts, ${_step2Dt}ms`);
+  console.log(`[buildAndStoreUptimes] step2 done \u2014 ${Object.keys(relays).length} relays from ${allWallets.length} wallets (kv ${_fromKv}, upstream ${_fromUpstream}, stale-kv ${_fromStale}, lost ${_walletsTimeout}), ${_step2Dt}ms`);
+  result.sources = { kv: _fromKv, upstream: _fromUpstream, staleKv: _fromStale, lost: _walletsTimeout, upstreamCalls: IPS_CALL_BUDGET - _ipsBudget.left };   /* v603 */
   /* FIX (degraded-build guard): mirror the fp-index v47 guard. If too many
    * wallets timed out, this build is partial and under-counts relays (uptime
    * silently disappears for everyone whose wallet fetch failed — observed as
