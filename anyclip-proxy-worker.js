@@ -13191,7 +13191,17 @@ async function buildAndStoreIndex(env) {
  * keys of VerifiedHardwareFingerprints count. */
 async function fetchHardwareFPsFromArweave(env) {
   const PROCESS = AO_REGISTRY_ID;
-  const GQL = "https://arweave.net/graphql";
+  /* v601: arweave.net/graphql began returning ZERO edges for this query around
+   * 2026-09-19 — HTTP 200, valid JSON, no results — so the run threw "expected
+   * exactly one Init message, found 0" 125 ticks in a row and the hardware count
+   * lived on its KV copy. The messages never moved: Goldsky's index of the same
+   * chain returns all 76 (1 Init + 75 Add). The data bodies still download from
+   * arweave.net. So the index is asked in this order, an EMPTY first page is
+   * treated as a gateway failure (not an answer) and the next gateway is tried.
+   * The AO CU fallback (cu.anyone.tech) is 404 on every path and public CUs
+   * whitelist processes, so this path is the only working source now. */
+  const GQLS = ["https://arweave-search.goldsky.com/graphql", "https://arweave.net/graphql"];
+  let gqlIdx = 0;
   /* v595: the data fetch was failing with 403 FROM THE WORKER ONLY. arweave.net/<id>
    * 302s to a sandboxed *.arweave.net subdomain, and that host refuses requests
    * with no User-Agent — which is what Workers send by default. Node sends one,
@@ -13199,11 +13209,24 @@ async function fetchHardwareFPsFromArweave(env) {
    * request. Found only because v594 surfaced the real error message. */
   const UA = { "User-Agent": "AnyoneMap-Proxy/1.0 (+https://anyonemap.anyonerelaysmap.workers.dev)" };
   const gql = async (query) => {
-    const r = await fetchT(GQL, { method: "POST", headers: { "Content-Type": "application/json", ...UA }, body: JSON.stringify({ query }) }, 15000);
-    if (!r.ok) throw new Error("arweave graphql " + r.status);
-    const j = await r.json(); if (!j.data) throw new Error("arweave graphql: no data");
-    return j.data.transactions;
+    let last = null;
+    for (let a = 0; a < GQLS.length; a++) {
+      const url = GQLS[(gqlIdx + a) % GQLS.length];
+      try {
+        const r = await fetchT(url, { method: "POST", headers: { "Content-Type": "application/json", ...UA }, body: JSON.stringify({ query }) }, 15000);
+        if (!r.ok) throw new Error("graphql " + r.status);
+        const j = await r.json(); if (!j.data || !j.data.transactions) throw new Error("graphql: no data");
+        const t = j.data.transactions;
+        /* v601: a first page with no edges means this index does not know the
+         * process — rotate. (Later pages can legitimately be empty.) */
+        if (firstPage && (!t.edges || t.edges.length === 0)) throw new Error("graphql: empty index");
+        gqlIdx = (gqlIdx + a) % GQLS.length;   /* stick with the gateway that answered */
+        return t;
+      } catch (e) { last = e; console.warn("[hw] " + url.split("/")[2] + ": " + (e && e.message)); }
+    }
+    throw new Error("arweave graphql: all gateways failed — " + String(last && last.message || last));
   };
+  let firstPage = true;
   /* /raw/<id> 404s for bundled data items (the Add/Remove messages are ANS-104
    * items inside bundles), so the plain path + redirect is the one that works
    * for every message — it just needs the User-Agent. */
@@ -13235,6 +13258,7 @@ async function fetchHardwareFPsFromArweave(env) {
   const msgs = []; let cursor = null;
   for (let i = 0; i < 30; i++) {
     const t = await gql(`{ transactions(recipients:["${PROCESS}"], tags:[{name:"Action", values:["Init","Add-Verified-Hardware","Remove-Verified-Hardware"]}], sort:HEIGHT_ASC, first:100${cursor ? `, after:"${cursor}"` : ""}) { pageInfo{hasNextPage} edges{ cursor node{ id tags{name value} } } } }`);
+    firstPage = false;
     for (const e of t.edges) msgs.push({ id: e.node.id, action: (e.node.tags.find((x) => x.name === "Action") || {}).value });
     if (!t.pageInfo.hasNextPage) break;
     cursor = t.edges[t.edges.length - 1].cursor;
