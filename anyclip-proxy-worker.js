@@ -6301,18 +6301,49 @@ async function warmNonWalletEnrichment(env) {
  * the /health endpoint reads it and goes 503 when something has been failing.
  * Converts "find out at 9 AM when a user emails" into "a URL anything can poll." */
 var CRON_HEALTH_KEY = "cron_health_v1";
+/* v612: one KV key PER TASK. Until now every task did read-blob / set-own-entry
+ * / write-blob on the single cron_health_v1 key. Ten tasks finish at different
+ * moments within a tick, and a KV get is served from a 60 s edge cache, so a
+ * task that finished 20 s after another read the blob from BEFORE that other
+ * task's write and put it back without it — last writer wins, the earlier
+ * record is gone. Observed 2026-09-21: walletwarm had run and logged on every
+ * tick for three hours while /health showed its lastSuccess three hours old
+ * and no error, because uptimes/hwwarm/stakedwarm kept overwriting it. The
+ * fix is structural: a task only ever writes its own key, so nothing can
+ * clobber it. /health reads the per-task keys and falls back to the legacy
+ * blob for a task that has not written a key since this deploy. */
+var CRON_TASKS = ["snapshot", "registry", "enrich", "walletwarm", "stakedwarm", "exitwarm", "domchain", "hwwarm", "fpindex", "uptimes"];
+/* How old a task's last success may be before /health calls it stale. Every
+ * task records a success on every 15-min tick, including a "still fresh, skip"
+ * — except uptimes, which only records when it actually rebuilds (it returns
+ * early on a fresh cache, at most every UPTIME_STALE_MS = 55 min). */
+var CRON_STALE_MS = { default: 60 * 60 * 1e3, uptimes: 2 * 60 * 60 * 1e3 };
 async function recordCronOutcome(env, task, ok, errMsg) {
   if (!env.FP_INDEX) return;
   try {
-    let health = {};
-    try { const raw = await env.FP_INDEX.get(CRON_HEALTH_KEY); if (raw) health = JSON.parse(raw); } catch (_) {}
-    const t = health[task] || { lastSuccess: 0, lastError: 0, lastErrorMsg: "", consecutiveFailures: 0 };
+    const key = CRON_HEALTH_KEY + ":" + task;
+    let t = null;
+    try { t = await env.FP_INDEX.get(key, { type: "json" }); } catch (_) {}
+    if (!t) {
+      /* first write after the v612 deploy: carry the legacy entry over so
+       * consecutiveFailures and the last error are not reset to zero */
+      try { const raw = await env.FP_INDEX.get(CRON_HEALTH_KEY); if (raw) t = (JSON.parse(raw) || {})[task] || null; } catch (_) {}
+    }
+    if (!t) t = { lastSuccess: 0, lastError: 0, lastErrorMsg: "", consecutiveFailures: 0 };
     const now = Date.now();
     if (ok) { t.lastSuccess = now; t.consecutiveFailures = 0; t.lastErrorMsg = ""; }
     else { t.lastError = now; t.lastErrorMsg = String(errMsg || "unknown").slice(0, 200); t.consecutiveFailures = (t.consecutiveFailures || 0) + 1; }
-    health[task] = t;
-    await env.FP_INDEX.put(CRON_HEALTH_KEY, JSON.stringify(health), { expirationTtl: 604800 });
+    await env.FP_INDEX.put(key, JSON.stringify(t), { expirationTtl: 604800 });
   } catch (e) { console.warn("[cron-health] write failed:", e.message); }
+}
+/* v612: assemble the /health view — per-task keys first, legacy blob as fallback. */
+async function readCronHealth(env) {
+  const out = {};
+  let legacy = {};
+  try { const raw = await env.FP_INDEX.get(CRON_HEALTH_KEY); if (raw) legacy = JSON.parse(raw) || {}; } catch (_) {}
+  const rows = await Promise.all(CRON_TASKS.map((task) => env.FP_INDEX.get(CRON_HEALTH_KEY + ":" + task, { type: "json" }).catch(() => null)));
+  CRON_TASKS.forEach((task, i) => { if (rows[i]) out[task] = rows[i]; else if (legacy[task]) out[task] = legacy[task]; });
+  return out;
 }
 
 
@@ -6941,7 +6972,7 @@ var worker_source_default = {
       const now = Date.now();
       let cronHealth = {}, enrichBuiltAt = 0;
       if (env.FP_INDEX) {
-        try { const raw = await env.FP_INDEX.get(CRON_HEALTH_KEY); if (raw) cronHealth = JSON.parse(raw); } catch (_) {}
+        try { cronHealth = await readCronHealth(env); } catch (_) {}   /* v612 */
         try { const e = await env.FP_INDEX.get(ENRICH_NONWALLET_KEY); if (e) enrichBuiltAt = (JSON.parse(e).builtAt) || 0; } catch (_) {}
       }
       // staleness: enrichment cron should touch its data well within ~45 min
@@ -6953,14 +6984,27 @@ var worker_source_default = {
       for (const task in cronHealth) {
         if ((cronHealth[task].consecutiveFailures || 0) >= 3) failingTasks.push(task);
       }
-      const healthy = !enrichmentStale && failingTasks.length === 0;
+      /* v612: a task that neither succeeds nor fails was invisible here —
+       * failingTasks only counts recorded errors. A task killed by the worker's
+       * wall-clock limit, or one whose record was clobbered, records nothing.
+       * Every task in CRON_TASKS must have a lastSuccess within its cadence. */
+      const staleTasks = [];
+      for (const task of CRON_TASKS) {
+        const t = cronHealth[task];
+        const limit = CRON_STALE_MS[task] || CRON_STALE_MS.default;
+        const age = t && t.lastSuccess ? now - t.lastSuccess : Infinity;
+        if (age > limit) staleTasks.push(task);
+        if (t) t.lastSuccessAgoMin = isFinite(age) ? Math.round(age / 6e4) : null;
+      }
+      const healthy = !enrichmentStale && failingTasks.length === 0 && staleTasks.length === 0;
       const body = {
         ok: healthy,
         checkedAt: now,
         enrichment: { builtAt: enrichBuiltAt, ageMin: enrichAgeMs != null ? Math.round(enrichAgeMs / 6e4) : null, stale: enrichmentStale },
         cron: cronHealth,
         failingTasks,
-        note: healthy ? "all cron tasks healthy" : (enrichmentStale ? "enrichment data stale — cron may have stalled" : "cron task(s) failing: " + failingTasks.join(", "))
+        staleTasks,   /* v612 */
+        note: healthy ? "all cron tasks healthy" : (enrichmentStale ? "enrichment data stale — cron may have stalled" : failingTasks.length ? "cron task(s) failing: " + failingTasks.join(", ") : "cron task(s) silent past their cadence: " + staleTasks.join(", "))
       };
       return new Response(JSON.stringify(body, null, 2), { status: healthy ? 200 : 503, headers: jsonHeaders({ "Cache-Control": "no-store" }) });
     }
@@ -7560,6 +7604,9 @@ var worker_source_default = {
               if (cached && cached.relays && cached.relays[fp]) {
                 const d = cached.relays[fp];
                 const secs = d.up || 0;
+                /* v607: hardware flag from the KV set instead of a hardcoded false */
+                let _isHw = false;
+                try { const hw = await env.FP_INDEX.get("hw_relays_v1", { type: "json" }); _isHw = !!(hw && Array.isArray(hw.fingerprints) && hw.fingerprints.some((x) => String(x).toUpperCase() === fp)); } catch (_) {}
                 return new Response(JSON.stringify({
                   fingerprint: fp,
                   nickname: d.n || "\u2014",
@@ -7573,7 +7620,7 @@ var worker_source_default = {
                   uptime_seconds: secs,
                   consensus_weight: d.cw || 0,
                   in_consensus: true,
-                  is_hardware: false,
+                  is_hardware: _isHw,
                   registered: true,
                   source: "all-uptimes-cache"
                 }), { headers: jsonHeaders({ "Cache-Control": "max-age=60" }) });
@@ -7599,9 +7646,10 @@ var worker_source_default = {
          * each = 250 outbound fetches per request. Now: same iteration logic but the
          * per-IP rate limit above prevents abuse. */
         for (let page = 1; page <= 5 && !found; page++) {
-          const netRes = await fetchT(`${WALLET_LOOKUP}&page=${page}`);
-          if (!netRes.ok) break;
-          const netData = await netRes.json();
+          /* v607: shared reader — per_page=50 and retries, so this fallback
+           * covers 250 wallets instead of 50 and survives a reset. */
+          let netData;
+          try { netData = await fetchWalletLookupPage(page); } catch (_) { break; }
           const wallets = (netData.wallets || []).filter((w) => w.in_consensus_ips > 0).map((w) => w.wallet);
           const results = await Promise.all(wallets.map(
             (wallet) => fetchT(`${IPS_BASE}${encodeURIComponent(wallet)}`).then((r) => r.json()).then((data) => {
@@ -12732,7 +12780,8 @@ Issued: ${(/* @__PURE__ */ new Date()).toISOString()}
       }
       ctx.waitUntil(env.FP_INDEX.put(lockKey, String(Date.now()), { expirationTtl: 60 }).catch(() => {}));
     }
-    ctx.waitUntil(storeSnapshot(env));
+    /* v612: the growth snapshot was the one cron task that never reported. */
+    ctx.waitUntil(storeSnapshot(env).then(() => recordCronOutcome(env, "snapshot", true)).catch(e => { console.warn("[cron] snapshot failed:", e.message); return recordCronOutcome(env, "snapshot", false, e.message); }));
     /* v56: warm relay-registry-cache on the cron so the key never depends on
      * organic /api/relay-registry traffic landing within the eviction window.
      * Shares buildAndCacheRegistry with the route, so both write the same shape
