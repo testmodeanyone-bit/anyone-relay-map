@@ -12979,6 +12979,25 @@ function renderSparkline(history) {
   const tooltip = document.getElementById('growth-tooltip');
   if (!svg || !badge || !history.length) return;
 
+  /* v611: rows the producer marked `provisional` (v600: enrichment missing,
+   * totals unavailable, or total under 60% of the previous day — the 00:00 UTC
+   * tick catching an upstream mid-rollover) are not the network; they are a
+   * day still being rebuilt. Rows written before v600 carry no flag, so the
+   * same 60% test is applied against the neighbours. Such rows are dropped
+   * from the relay line and from the deltas — a half-size day drew as a real
+   * dip, and a week-ago comparison could land on one. If TODAY is the
+   * provisional row, the badge says so instead of computing a delta from it. */
+  const _rawHistory = history;
+  const _suspect = (h, i, arr) => {
+    if (h.provisional) return true;
+    const prev = arr[i - 1], next = arr[i + 1];
+    const ref = Math.max(prev ? (prev.total || 0) : 0, next ? (next.total || 0) : 0);
+    return ref > 0 && (h.total || 0) < ref * 0.6;
+  };
+  const _todayProvisional = !!(_rawHistory[_rawHistory.length - 1] && _rawHistory[_rawHistory.length - 1].provisional);
+  history = _rawHistory.filter((h, i, arr) => !_suspect(h, i, arr));
+  if (!history.length) history = _rawHistory;
+
   const first     = history[0];
   const last      = history[history.length - 1];
 
@@ -13024,6 +13043,7 @@ function renderSparkline(history) {
   label.textContent  = weekDelta === null
     ? _i18t('noWeekData','not enough history')
     : history.length === 1 ? _i18t('relaysToday','relays today') : _i18t('relaysThisWeek','relays this week');
+  if (_todayProvisional) { badge.style.color = '#7fa3ad'; label.textContent = _i18t('todayRebuilding', "today's row still building"); }   /* v611 */
 
   const hasBW = history.some(h => h.bw_gibs > 0);
   const bwLegend = document.getElementById('bw-legend');
@@ -23922,6 +23942,7 @@ async function enrichAllViaAnyoneAPI(){
       const fp_u = relay.fp.toUpperCase();
       const d = data.relays[fp_u];
       if(!d) return;
+      relay._upCovered = true;   /* v610: has an uptimes record (uptime/flags may still be empty) */
 
       if(d.up > 0){
         relay.uptimeSecs = d.up;
@@ -25479,14 +25500,22 @@ function _scoreIsp(allRelays, total){
     _isps: isps };
 }
 function _scoreExit(total){
+  /* v610: exitFps is populated from the all-uptimes cache, which covers only
+   * the relays that build reached (44% for weeks before v603). Dividing a
+   * partial exit set by ALL relays halved the ratio and pushed it out of the
+   * ideal range — up to 10 points off the grade for a data gap, not a network
+   * change. The ratio is now taken over the relays that actually carry flag
+   * data, and the coverage is shown. */
+  const flagged = (typeof allRelays !== 'undefined' && allRelays.length) ? allRelays.filter(r => r._upCovered || (r.fl && r.fl.length)).length : 0;
   const exitCount = exitFps.size>0 ? exitFps.size : parseInt((document.getElementById('sX')?.textContent||'0').replace(/[^0-9]/g,''),10)||0;
-  const totalR = parseInt((document.getElementById('sR')?.textContent||'0').replace(/[^0-9]/g,''),10)||total;
+  const totalR = (exitFps.size>0 && flagged>0) ? flagged : (parseInt((document.getElementById('sR')?.textContent||'0').replace(/[^0-9]/g,''),10)||total);
   const ratio = exitCount/totalR;
+  const _cov = total>0 ? flagged/total : 1;
   const score = Math.min(15, Math.round(ratio>=0.40&&ratio<=0.65?15:ratio>=0.30&&ratio<=0.75?10:5));
   return { score, max:15, iconKey:'exit', label:_i18t('exitRelayRatio','Exit Relay Ratio'), icon:'🟠',
-    detail:`${(ratio*100).toFixed(0)}% exits · ${exitCount.toLocaleString()} ${_i18t('relays','relays').toLowerCase()}`,
-    sub: ratio>=0.40&&ratio<=0.65?_i18t('idealRange','Ideal range (40–65%)'):ratio>=0.30?_i18t('acceptableRange','Acceptable range'):_i18t('outsideRange','Outside ideal range'),
-    color: score>=13?'#2dd4bf':score>=9?'#f59e0b':'#ef4444' };
+    detail:`${(ratio*100).toFixed(0)}% exits · ${exitCount.toLocaleString()} ${_i18t('relays','relays').toLowerCase()}` + (flagged>0 && _cov<0.9 ? ` · ${(_cov*100).toFixed(0)}% ${_i18t('covered','covered')}` : ''),
+    sub: (flagged>0 && _cov<0.6) ? _i18t('partialFlagData','Partial flag data — ratio from covered relays') : ratio>=0.40&&ratio<=0.65?_i18t('idealRange','Ideal range (40–65%)'):ratio>=0.30?_i18t('acceptableRange','Acceptable range'):_i18t('outsideRange','Outside ideal range'),
+    color: (flagged>0 && _cov<0.6) ? '#f59e0b' : score>=13?'#2dd4bf':score>=9?'#f59e0b':'#ef4444', _coverage:_cov };
 }
 function _scoreBandwidth(relayData, total){
   let totalBW = relayData.reduce((s,z)=>s+(z.bwMibs||0),0);
@@ -25501,21 +25530,31 @@ function _scoreBandwidth(relayData, total){
 }
 function _scoreUptime(allRelays, total){
   const DAY=86400;
-  const up90=allRelays.filter(r=>(r.uptimeSecs||0)>=DAY*90).length;
-  const up30=allRelays.filter(r=>(r.uptimeSecs||0)>=DAY*30).length;
-  const up7=allRelays.filter(r=>(r.uptimeSecs||0)>=DAY*7).length;
-  const upAvgDays=total>0?Math.round(allRelays.reduce((s,r)=>s+(r.uptimeSecs||0),0)/total/DAY):0;
+  /* v610: a relay with NO uptime record was scored as zero uptime, and the
+   * shares were divided by ALL relays. With the uptimes build covering 44% of
+   * the network for weeks (v603 fixed that), the 30d/90d shares and the
+   * stable share were all roughly halved — a data gap read as a bad network.
+   * Shares are now over the relays that carry uptime data; coverage is shown
+   * and, under 60%, the sub-score is flagged rather than trusted. */
+  const covered=allRelays.filter(r=>r._upCovered || (r.uptimeSecs||0)>0);
+  const denom=covered.length>0?covered.length:total;
+  const cov=total>0?covered.length/total:0;
+  const up90=covered.filter(r=>r.uptimeSecs>=DAY*90).length;
+  const up30=covered.filter(r=>r.uptimeSecs>=DAY*30).length;
+  const up7=covered.filter(r=>r.uptimeSecs>=DAY*7).length;
+  const upAvgDays=denom>0?Math.round(covered.reduce((s,r)=>s+(r.uptimeSecs||0),0)/denom/DAY):0;
   const stableCount=stableFps&&stableFps.size>0?stableFps.size:0;
-  const qualityPct=stableCount>0?stableCount/total:0;
+  const qualityPct=stableCount>0?stableCount/denom:0;
   const base=Math.min(10,Math.round(Math.min(qualityPct/0.70,1)*10));
-  const mid=Math.min(3,Math.round(Math.min((up30/total)/0.20,1)*3));
-  const bonus=Math.min(2,Math.round(Math.min((up90/total)/0.10,1)*2));
+  const mid=Math.min(3,Math.round(Math.min((up30/denom)/0.20,1)*3));
+  const bonus=Math.min(2,Math.round(Math.min((up90/denom)/0.10,1)*2));
   const score=base+mid+bonus;
-  window._uptimeHistory={up7,up30,up90,upAvgDays,total};
+  window._uptimeHistory={up7,up30,up90,upAvgDays,total,covered:covered.length,coverage:cov};
   /* v246 (Bug #4): _kind tag lets renderHealthPanel detect this metric without */
   /* string-comparing label, which broke for non-English languages. */
   return { score, max:15, _kind:'uptime', iconKey:'uptime', label:_i18t('uptimeHistory','Uptime History'), icon:'⬆',
-    detail:`${(qualityPct*100).toFixed(0)}% ${_i18t('stable','stable')} · ${up30.toLocaleString()} ${_i18t('relays','relays').toLowerCase()} 30d+ · ${up90.toLocaleString()} ${_i18t('relays','relays').toLowerCase()} 90d+`,
+    detail:`${(qualityPct*100).toFixed(0)}% ${_i18t('stable','stable')} · ${up30.toLocaleString()} ${_i18t('relays','relays').toLowerCase()} 30d+ · ${up90.toLocaleString()} ${_i18t('relays','relays').toLowerCase()} 90d+` + (cov>0 && cov<0.9 ? ` · ${(cov*100).toFixed(0)}% ${_i18t('covered','covered')}` : ''),
+    _coverage: cov,
     sub: qualityPct>=0.70?`${_i18t('majorityStable','Majority stable')} · ${_i18t('avgUptime','avg uptime')} ${upAvgDays}d · ${up90.toLocaleString()} ${_i18t('veterans','veterans')} 90d+`
        : qualityPct>=0.50?`${_i18t('mostReliable','Most relays reliable')} · ${up30.toLocaleString()} ${_i18t('running','running')} 30d+ · ${_i18t('avgUptime','avg uptime')} ${upAvgDays}d`
        : `${stableCount.toLocaleString()} ${_i18t('stable','stable')} ${_i18t('relays','relays').toLowerCase()} · ${up30.toLocaleString()} ${_i18t('running','running')} 30d+ · ${_i18t('growing','growing')}`,
