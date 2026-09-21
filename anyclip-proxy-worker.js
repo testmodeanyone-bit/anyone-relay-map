@@ -3603,6 +3603,36 @@ async function fetchWalletLookupPages() {
   return out;
 }
 
+/* v607: "is this wallet an operator, and how many relays?" — answered from
+ * the uptimes cache first (count), then the exit-relays cache (its wallet_list
+ * is every wallet with a relay in consensus; complete since v602), and only on
+ * a miss from the wallet-lookup pages via the shared reader. Two routes
+ * (/api/chat-verify, /api/wallet-relay-count) used to page through the
+ * upstream per request with drops swallowed — a lost page told a real
+ * operator they were not one. A lost page now THROWS; callers treat that as
+ * "unknown", never as "no". Returns { known, count, source }. */
+async function lookupOperatorWallet(env, walletLower) {
+  if (env && env.FP_INDEX) {
+    try {
+      const up = await env.FP_INDEX.get(KV_UPTIME_KEY, { type: "json" });
+      const fps = up && up.walletRelays && up.walletRelays[walletLower];
+      if (Array.isArray(fps) && fps.length > 0) return { known: true, count: fps.length, source: "uptimes-cache" };
+    } catch (_) {}
+    try {
+      const er = await env.FP_INDEX.get(EXIT_RELAYS_KEY, { type: "json" });
+      if (er && Array.isArray(er.wallet_list) && er.wallet_list.some((w) => String(w).toLowerCase() === walletLower)) return { known: true, count: null, source: "exit-relays-cache" };
+    } catch (_) {}
+  }
+  const pages = await fetchWalletLookupPages();   /* throws on a lost page */
+  for (const d of pages) for (const w of d.wallets || []) {
+    if ((typeof w === "string" ? w : w.wallet || "").toLowerCase() === walletLower) {
+      const c = typeof w === "string" ? null : (w.in_consensus_ips || 0);
+      return { known: c === null || c > 0, count: c, source: "upstream" };
+    }
+  }
+  return { known: false, count: 0, source: "upstream" };
+}
+
 /* v603: one wallet's relay list — KV first (the v543 warm keeps
  * wallet-ips:<wallet> fresh 40 wallets per tick), upstream only on a miss or a
  * copy older than maxAgeMs, and a fetched copy is written back in the warm's
@@ -5516,6 +5546,7 @@ function snapshotIsProvisional(s, prevTotal) {
   if (!s) return true;
   if (s.provisional) return true;
   if (typeof s.zones !== "number" || typeof s.countries !== "number") return true;
+  if (typeof s.wallets !== "number" || typeof s.bw_gibs !== "number") return true;   /* v607 */
   if (prevTotal && s.total < prevTotal * GROWTH_TOTAL_FLOOR) return true;
   return false;
 }
@@ -5676,15 +5707,20 @@ async function storeSnapshot(env) {
    * them in a single page-1 call. */
   let bwMibsTotal = 0;
   let walletsTotal = 0;
+  let _totalsOk = false;   /* v607 */
   try {
-    const r = await fetch(`${WALLET_LOOKUP}&page=1`, { signal: AbortSignal.timeout(8e3) });
+    /* v607: was a single 8 s fetch; on failure the day's row got bw 0 and
+     * wallets 0 as if measured. Retried read; on failure the row is marked
+     * provisional so a later tick rewrites it. */
+    const r = { ok: true, json: async () => await fetchWalletLookupPage(1) };
     if (r.ok) {
       const d = await r.json();
+      _totalsOk = true;
       bwMibsTotal = d.totals?.total_bw_mibs_total || 0;
       walletsTotal = d.totals?.wallets_total || (d.wallets || []).length;
     }
   } catch (_) {
-    /* Non-fatal: bw_gibs falls back to 0, chart still renders. */
+    /* v607: non-fatal, but no longer silent — the row is marked provisional below. */
   }
 
   /* v61: HW count comes from the AO-registry cache (hw_relays_v1) — the same
@@ -5705,11 +5741,12 @@ async function storeSnapshot(env) {
     guards: fpIndex.guards,
     middles: fpIndex.middles,
     hardware: hwCount,
-    bw_gibs: Math.round(bwMibsTotal / 1024 * 10) / 10,
-    wallets: walletsTotal,
+    bw_gibs: _totalsOk ? Math.round(bwMibsTotal / 1024 * 10) / 10 : undefined,   /* v607: unset, not 0, when the totals read failed */
+    wallets: _totalsOk ? walletsTotal : undefined,
     source: "fp-index-v48",
     fp_built_at: fpIndex.builtAt || null
   };
+  if (!_totalsOk) { snapshot.provisional = true; snapshot.provisionalReason = "wallet-lookup totals unavailable"; }
 
   /* Optional: zones/countries/isps from the geo fingerprint-map.
    * Same as v45 behavior, kept intact. Non-fatal on failure. */
@@ -5847,19 +5884,11 @@ async function getGrowthHistory(env, days = GROWTH_DAYS) {
 }
 async function backfillHistory(env, days = 30) {
   if (!env.FP_INDEX) return { error: "no KV binding" };
-  const r0 = await fetchT(`${WALLET_LOOKUP}&page=1`);
-  if (!r0.ok) throw new Error("upstream error: " + r0.status);
-  const d0 = await r0.json();
-  const totalPages = d0.pages || 1;
+  const _pages = await fetchWalletLookupPages();   /* v607: shared reader, lost page throws */
+  const d0 = _pages[0];
   const bwMibsTotal = d0.totals?.total_bw_mibs_total || 0;
-  const allWallets = [...d0.wallets || []];
-  for (let p = 2; p <= totalPages; p += 20) {
-    const batch = Array.from({ length: Math.min(20, totalPages - p + 1) }, (_, i) => p + i);
-    const results = await Promise.all(
-      batch.map((pg) => fetchT(`${WALLET_LOOKUP}&page=${pg}`).then((r) => r.json()).then((d) => d.wallets || []).catch(() => []))
-    );
-    for (const rows of results) allWallets.push(...rows);
-  }
+  const allWallets = [];
+  for (const d of _pages) allWallets.push(...(d.wallets || []));
   const relays = allWallets.map((w) => ({
     total: w.in_consensus_ips || 0,
     /* v48: keep `uptime_days` for the total-relays reconstruction (which
@@ -7261,47 +7290,29 @@ var worker_source_default = {
         let count = 0;
         let fingerprints = [];
         try {
-          const r0 = await fetch(`${WALLET_LOOKUP}&page=1`, { signal: AbortSignal.timeout(8e3) });
-          if (!r0.ok) {
-            return cors(JSON.stringify({ ok: false, error: "Upstream unavailable" }), 502);
-          }
-          const d0 = await r0.json();
-          const pages = d0.pages || 1;
-          const checkWallets = (wallets) => {
-            for (const w of wallets || []) {
-              if ((w.wallet || "").toLowerCase() === wallet) {
-                count = w.in_consensus_ips || 0;
-                return true;
-              }
-            }
-            return false;
-          };
-          let found = checkWallets(d0.wallets);
-          if (!found) {
-            for (let p = 2; p <= pages && !found; p += 10) {
-              const batch = Array.from({ length: Math.min(10, pages - p + 1) }, (_, i) => p + i);
-              const results = await Promise.all(batch.map(
-                (pg) => fetch(`${WALLET_LOOKUP}&page=${pg}`, { signal: AbortSignal.timeout(8e3) }).then((r) => r.json()).catch(() => ({ wallets: [] }))
-              ));
-              for (const d of results) {
-                if (checkWallets(d.wallets)) { found = true; break; }
-              }
-            }
-          }
+          /* v607: cache-first, resilient upstream, no swallowed pages. */
+          let _op;
+          try { _op = await lookupOperatorWallet(env, wallet); }
+          catch (_e) { return cors(JSON.stringify({ ok: false, error: "Upstream unavailable" }), 502); }
+          let found = _op.known;
+          count = typeof _op.count === "number" ? _op.count : 0;
           /* Get fingerprints + HW status if wallet was found */
           let isHW = false;
-          if (found && count > 0) {
+          if (found) {
             try {
-              const ipsRes = await fetch(`${IPS_BASE}${wallet}`, { signal: AbortSignal.timeout(5e3) });
-              if (ipsRes.ok) {
-                const ipsData = await ipsRes.json();
-                const relays = ipsData.relays || ipsData.ips || [];
-                fingerprints = relays.map((r) => (r.fingerprint || r.fp || "").toUpperCase()).filter(Boolean);
-                /* Check HW set */
-                const hwRes = await fetch(`${url.origin}/api/hw-relays`, { signal: AbortSignal.timeout(5e3) });
-                if (hwRes.ok) {
-                  const hwData = await hwRes.json();
-                  const hwSet = new Set((hwData.fingerprints || []).map((fp) => fp.toUpperCase()));
+              /* v607: relay list via readWalletIps (KV first, retried upstream)
+               * instead of one 5 s try; fills the count when the cache only
+               * knew the wallet, not its relays. HW set read from KV
+               * (hw_relays_v1) — the old fetch(url.origin + "/api/hw-relays")
+               * was a same-zone Worker self-call, which Cloudflare refuses
+               * (error 1042), so isHW could never have been true here. */
+              const got = await readWalletIps(env, wallet, 4 * 3600 * 1e3);
+              if (got && Array.isArray(got.relays)) {
+                fingerprints = got.relays.map((r) => (r.fp || "").toUpperCase()).filter(Boolean);
+                if (count === 0) count = got.relays.filter((r) => r.ic !== false).length;
+                const hw = env.FP_INDEX ? await env.FP_INDEX.get("hw_relays_v1", { type: "json" }).catch(() => null) : null;
+                if (hw && Array.isArray(hw.fingerprints)) {
+                  const hwSet = new Set(hw.fingerprints.map((fp) => String(fp).toUpperCase()));
                   isHW = fingerprints.some((fp) => hwSet.has(fp));
                 }
               }
@@ -8362,22 +8373,10 @@ var worker_source_default = {
           isOperator = _opCached.isOperator;
         } else {
           try {
-            const r0 = await fetchT(`${WALLET_LOOKUP}&page=1`);
-            if (!r0.ok) throw new Error("upstream " + r0.status);
-            const d0 = await r0.json();
-            const totalPages = d0.pages || 1;
-            const pageHas = (data) => (data.wallets || []).some((w) => (typeof w === "string" ? w : w.wallet || "").toLowerCase() === cleanedWallet);
-            isOperator = pageHas(d0);
-            if (!isOperator && totalPages > 1) {
-              for (let p = 2; p <= totalPages && !isOperator; p += 20) {
-                const batch = Array.from({ length: Math.min(20, totalPages - p + 1) }, (_, i) => p + i);
-                const results = await Promise.all(batch.map((pg) => fetchT(`${WALLET_LOOKUP}&page=${pg}`).then((r) => r.json()).catch(() => ({}))));
-                if (results.some(pageHas)) {
-                  isOperator = true;
-                  break;
-                }
-              }
-            }
+            /* v607: cache-first, resilient upstream. A lost page throws out of
+             * this block, so a lookup failure is never cached as "not an
+             * operator" (the negative-cache put below is skipped on throw). */
+            isOperator = (await lookupOperatorWallet(env, cleanedWallet)).known;
             /* Asymmetric TTL: 5 min for positive (sticky), 30s for negative
              * (so fresh operators aren't locked out). */
             const _opTtl = isOperator ? 300 : 30;
@@ -13017,11 +13016,17 @@ async function buildAndStoreIndex(env) {
    * instead of throwing — so a slow/flaky page-1 degrades to STALE rather than
    * wiping enrichment. Single attempt (no retry loop) to stay well inside the
    * Worker request budget; the handler's stale path + the cron warm cover repeats. */
-  let d0;
+  /* v607: the wallet listing here had the same one-try-and-swallow pagination
+   * as exit-relays (v602) and uptimes (v603): pages 2..58 in batches of 20
+   * with .catch(() => []), and dropRate counted only per-wallet IP failures,
+   * so a build that lost half its PAGES reported dropRate 0 and was written
+   * as healthy. That is the halved growth totals of 09-19 and 09-21 (2,754 /
+   * 2,748 vs ~4,700) — the fp-index simply saw half the wallets. Shared
+   * reader now; a lost page throws into the keep-previous fallback below. */
+  let d0, _pageData;
   try {
-    const r0 = await fetch(`${WALLET_LOOKUP}&page=1`, { signal: AbortSignal.timeout(15e3) });
-    if (!r0.ok) throw new Error("upstream error: " + r0.status);
-    d0 = await r0.json();
+    _pageData = await fetchWalletLookupPages();
+    d0 = _pageData[0];
   } catch (e) {
     if (env.FP_INDEX) {
       try {
@@ -13037,17 +13042,11 @@ async function buildAndStoreIndex(env) {
     }
     /* No previous cache to fall back to — let the caller's handler return its
      * stale-on-error path or, ultimately, a 502. */
-    throw e instanceof Error ? e : new Error("page1 failed");
+    throw e instanceof Error ? e : new Error("wallet listing failed");
   }
-  const totalPages = d0.pages || 1;
-  const walletRows = [...d0.wallets || []];
-  for (let p = 2; p <= totalPages; p += 20) {
-    const batch = Array.from({ length: Math.min(20, totalPages - p + 1) }, (_, i) => p + i);
-    const results = await Promise.all(
-      batch.map((pg) => fetch(`${WALLET_LOOKUP}&page=${pg}`, { signal: AbortSignal.timeout(8e3) }).then((r) => r.json()).then((d) => d.wallets || []).catch(() => []))
-    );
-    for (const rows of results) walletRows.push(...rows);
-  }
+  const totalPages = _pageData.length;
+  const walletRows = [];
+  for (const d of _pageData) walletRows.push(...(d.wallets || []));
   const allWallets = walletRows.filter((w) => w.wallet && (w.in_consensus_ips || 0) > 0).map((w) => w.wallet);
 
   /* v47 FIX (variance bug): per-wallet IPs fetches must be RESILIENT.
