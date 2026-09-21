@@ -3258,22 +3258,41 @@ async function computeExitRelays(env, ctx) {
             if (w.wallet && consensus > 0) walletAddrs.push(w.wallet);
           }
         };
-        const r0 = await fetchT(`${WALLET_LOOKUP}&page=1`);
-        /* v575: this was `return cors(..., 502)` when the code lived in the route.
-         * As a compute function it must THROW — returning a Response here would be
-         * cached and stringified as the payload. The route catches and 502s. */
-        if (!r0.ok) throw new Error("wallet lookup upstream " + r0.status);
-        const d0 = await r0.json();
+        /* v602: the wallet-lookup upstream resets roughly every other connection
+         * after ~11 s (measured 2026-09-21: 6 of 12 pages reset; successes answer
+         * in <1 s — a balancer with a dead backend). This code fetched page 1 with
+         * one 8 s attempt (the "aborted due to timeout" in cron health) and pages
+         * 2..58 in batches of 20 with .catch(() => {}) — every reset silently
+         * dropped 10 wallets and the partial list was cached as complete.
+         *   - per_page=50 (the upstream's cap): 12 pages instead of 58
+         *   - every page: up to 4 attempts, 12 s each; a page that still fails
+         *     THROWS, so the cron logs it and the route serves the last good copy
+         *     rather than a shorter one
+         *   - 6 in flight, not 20 — the resets look like overload, not chance
+         *   - pages are fetched ONCE and reused by the ip-sum fallback below,
+         *     which used to refetch all of them */
+        const WL_PER_PAGE = 50, WL_CONC = 6, WL_TRIES = 4, WL_TIMEOUT_MS = 12000;
+        const fetchPage = async (pg) => {
+          let last = null;
+          for (let a = 0; a < WL_TRIES; a++) {
+            try {
+              const r = await fetchT(`${WALLET_LOOKUP}&per_page=${WL_PER_PAGE}&page=${pg}`, {}, WL_TIMEOUT_MS);
+              if (!r.ok) throw new Error("HTTP " + r.status);
+              return await r.json();
+            } catch (e) { last = e; }
+          }
+          /* v575: a compute function must THROW, not return a Response. */
+          throw new Error(`wallet lookup page ${pg} failed ${WL_TRIES}x: ` + String(last && last.message || last));
+        };
+        const d0 = await fetchPage(1);
         const pages = d0.pages || 1;
-        const walletAddrs = [];
-        collectWallets(d0.wallets);
-        for (let p = 2; p <= pages; p += 20) {
-          const batch = Array.from({ length: Math.min(20, pages - p + 1) }, (_, i) => p + i);
-          await Promise.all(batch.map(
-            (pg) => fetchT(`${WALLET_LOOKUP}&page=${pg}`).then((r) => r.json()).then((d) => collectWallets(d.wallets)).catch(() => {
-            })
-          ));
+        const pageData = [d0];
+        for (let p = 2; p <= pages; p += WL_CONC) {
+          const batch = Array.from({ length: Math.min(WL_CONC, pages - p + 1) }, (_, i) => p + i);
+          pageData.push(...await Promise.all(batch.map(fetchPage)));
         }
+        const walletAddrs = [];
+        for (const d of pageData) collectWallets(d.wallets);
         let exitCount = null, guardCount = null, middleCount = null;
         let countSource = "fp-index";
         if (env.FP_INDEX) {
@@ -3316,14 +3335,7 @@ async function computeExitRelays(env, ctx) {
             }
           };
           let totalExit = 0, totalGuard = 0, totalMiddle = 0;
-          sumIps(d0.wallets);
-          for (let p = 2; p <= pages; p += 20) {
-            const batch = Array.from({ length: Math.min(20, pages - p + 1) }, (_, i) => p + i);
-            await Promise.all(batch.map(
-              (pg) => fetchT(`${WALLET_LOOKUP}&page=${pg}`).then((r) => r.json()).then((d) => sumIps(d.wallets)).catch(() => {
-              })
-            ));
-          }
+          for (const d of pageData) sumIps(d.wallets);   /* v602: pages already in hand */
           if (exitCount === null) exitCount = totalExit;
           if (guardCount === null) guardCount = totalGuard;
           if (middleCount === null) middleCount = totalMiddle;
