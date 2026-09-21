@@ -5432,6 +5432,22 @@ async function checkRelayHealth() {
 function todayKey() {
   return GROWTH_PREFIX + (/* @__PURE__ */ new Date()).toISOString().slice(0, 10);
 }
+/* v600 */
+var GROWTH_TOTAL_FLOOR = 0.6;   /* a day under this fraction of the previous day is provisional */
+async function prevDayTotal(env) {
+  try {
+    const d = new Date(Date.now() - 864e5).toISOString().slice(0, 10);
+    const prev = await env.FP_INDEX.get(GROWTH_PREFIX + d, { type: "json" });
+    return prev && typeof prev.total === "number" && !prev.provisional ? prev.total : null;
+  } catch (_) { return null; }
+}
+function snapshotIsProvisional(s, prevTotal) {
+  if (!s) return true;
+  if (s.provisional) return true;
+  if (typeof s.zones !== "number" || typeof s.countries !== "number") return true;
+  if (prevTotal && s.total < prevTotal * GROWTH_TOTAL_FLOOR) return true;
+  return false;
+}
 /* v56 (M1): stable content signature of an exit-relays:latest payload, EXCLUDING
  * the volatile `cachedAt` timestamp. Used to skip redundant KV writes: the
  * cached-snapshot path of storeSnapshot ran on every /api/growth request and
@@ -5484,7 +5500,15 @@ async function storeSnapshot(env) {
    * v48 (carries a `source` field). Older v47-buggy snapshots are
    * overwritten. */
   const existing = await env.FP_INDEX.get(key, { type: "json" }).catch(() => null);
-  if (existing && existing.total > 0 && existing.source === "fp-index-v48") {
+  /* v600: first-write-wins only for a COMPLETE row. The 00:00 UTC tick is the
+   * first of the day and the one most likely to catch upstream mid-rollover;
+   * on 09-18/20/21 it froze the day with no enrichment, and on 09-19/21 with
+   * a total about half of the neighbours' (2,754 / 2,748 vs ~4,700). A row is
+   * provisional — and gets rebuilt by the next tick — when enrichment is
+   * missing, when the enrichment block said so, or when the total is under
+   * 60% of the previous day's. The provisional row still stands if no later
+   * tick manages better, so the series never loses a day entirely. */
+  if (existing && existing.total > 0 && existing.source === "fp-index-v48" && !snapshotIsProvisional(existing, await prevDayTotal(env))) {
     /* v51 FIX: publish to SNAPSHOT_KV on the cached-snapshot path too. v50
      * placed the SNAPSHOT_KV publish at the end of storeSnapshot, but the
      * function early-returns here whenever today's daily snapshot already
@@ -5641,7 +5665,7 @@ async function storeSnapshot(env) {
       const vals = Object.values(cand);
       const good = vals.length > 500 && vals.slice(0, 50).filter((v) => v && typeof v === "object" && v.countryCode).length >= 25;
       if (good) fpData = cand;
-      else await env.FP_INDEX.put("growth_last_shape_error", JSON.stringify({ at: Date.now(), keys: vals.length, sample: JSON.stringify(vals[0]).slice(0, 120), dataType: typeof cachedReg.data }), { expirationTtl: 7 * 86400 }).catch(() => {});
+      else await env.FP_INDEX.put("growth_last_shape_error", JSON.stringify({ at: Date.now(), keys: vals.length, sample: String(JSON.stringify(vals[0])).slice(0, 120) /* v600: was .slice on undefined when vals was empty — the throw that blanked 09-18/20/21 */, dataType: typeof cachedReg.data }), { expirationTtl: 7 * 86400 }).catch(() => {});
     }
     /* v598: record the branch and the inputs on EVERY run, not only on rejection.
      * 2026-09-17: the KV registry was healthy and the same data produced 401
@@ -5659,17 +5683,26 @@ async function storeSnapshot(env) {
         if (r2.countryCode) countries.add(r2.countryCode);
         if (r2.asName) isps.add(r2.asName);
       });
-      snapshot.zones = zones.size;
-      snapshot.countries = countries.size;
-      snapshot.isps = isps.size;
-      _enrichDiag.result = { zones: zones.size, countries: countries.size, isps: isps.size, valuesSeen: Object.values(fpData).length, firstValue: JSON.stringify(Object.values(fpData)[0]).slice(0, 140) };
-    } else { _enrichDiag.result = "no data: fpR status " + (fpR && fpR.status); }
+      /* v600: an empty or fieldless registry yields three zeros — a value the
+       * chart plots as a real dip. Leave the fields unset and mark the row
+       * provisional instead; a later tick with real data replaces it. */
+      if (zones.size > 0 || countries.size > 0) {
+        snapshot.zones = zones.size;
+        snapshot.countries = countries.size;
+        snapshot.isps = isps.size;
+      } else { snapshot.provisional = true; snapshot.provisionalReason = "enrichment saw " + Object.values(fpData).length + " entries with no geo fields"; }
+      _enrichDiag.result = { zones: zones.size, countries: countries.size, isps: isps.size, valuesSeen: Object.values(fpData).length, firstValue: String(JSON.stringify(Object.values(fpData)[0])).slice(0, 140) };
+    } else { _enrichDiag.result = "no data: fpR status " + (fpR && fpR.status); snapshot.provisional = true; snapshot.provisionalReason = _enrichDiag.result; }
     await env.FP_INDEX.put("growth_last_enrich", JSON.stringify(_enrichDiag), { expirationTtl: 7 * 86400 }).catch(() => {});
   } catch (e) {
+    snapshot.provisional = true; snapshot.provisionalReason = "enrichment threw: " + String(e && e.message || e).slice(0, 120);   /* v600 */
     try { await env.FP_INDEX.put("growth_last_enrich", JSON.stringify({ at: Date.now(), threw: String(e && e.message || e).slice(0, 200) }), { expirationTtl: 7 * 86400 }); } catch (_) {}
   }
 
   try {
+    /* v600: tag a half-size day so the row explains itself and a later tick retries. */
+    { const pt = await prevDayTotal(env); if (pt && snapshot.total < pt * GROWTH_TOTAL_FLOOR) { snapshot.provisional = true; snapshot.provisionalReason = (snapshot.provisionalReason ? snapshot.provisionalReason + "; " : "") + `total ${snapshot.total} under ${GROWTH_TOTAL_FLOOR * 100}% of previous day ${pt}`; } }
+    if (snapshot.provisional) console.warn("[Growth] provisional snapshot for " + key + ": " + snapshot.provisionalReason);
     await env.FP_INDEX.put(key, JSON.stringify(snapshot), { expirationTtl: 35 * 24 * 3600 });
   } catch (err) {
     console.error("[Growth] storeSnapshot put error:", err.message);
@@ -12488,7 +12521,7 @@ Issued: ${(/* @__PURE__ */ new Date()).toISOString()}
                 return cors(JSON.stringify({
                   relays: stale.data, relayCount: Object.keys(stale.data).length,
                   source: "anyone-proxy-cache", cachedAt: stale.ts, mac: stale.mac, integrity: "verified",
-                  stale: true, upstreamStatus: e.upstreamStatus
+                  stale: true, upstreamStatus: e.upstreamStatus, rejected: e.rejected || undefined   /* v600 */
                 }), 200, { "X-Cache": "STALE", "X-Age": String(ageS), "Cache-Control": "max-age=60" });
               }
             }
@@ -12752,6 +12785,7 @@ const REGISTRY_CACHE_TTL = 300;            // serve-fresh window (route)
  * days. On 2026-09-16 api.ec.anyone.tech began returning 404 for every
  * route; the registry was gone from KV before anyone noticed. */
 const REGISTRY_PERSIST_TTL = 7 * 24 * 60 * 60;
+const REGISTRY_MIN_RELAYS = 1000;   /* v600: below this a fingerprint-map response is treated as an outage, not a network */
 /* v589: REGISTRY FROM CONSENSUS — an independent source when the API is down.
  *
  * 2026-09-16: api.ec.anyone.tech returned 404 for every route. The map ran on
@@ -12836,9 +12870,27 @@ async function buildAndCacheRegistry(env, ctx) {
     data_raw = await upstream.json();
   }
   const { filtered: data } = applyQuarantineFilter(data_raw);
+  const relayCount = Object.keys(data).length;
+  /* v600: never overwrite a good cache with a tiny one. On 2026-09-18, -20 and
+   * -21 the 00:00 UTC tick found relay-registry-cache holding data = {} —
+   * fingerprint-map had answered 200 with (near) nothing during its midnight
+   * rollover and this function wrote it straight over ~5,000 relays. The map
+   * then served an empty registry for up to a tick, and the growth snapshot
+   * (first-write-wins per day) froze the day's row on that empty read. A
+   * result is rejected when it is under REGISTRY_MIN_RELAYS, or under half of
+   * what the cache already holds. The throw carries upstreamStatus so the
+   * route's v587 stale-while-error path serves the previous copy. */
+  if (env.FP_INDEX) {
+    let prevCount = 0;
+    try { const prev = await env.FP_INDEX.get(REGISTRY_CACHE_KEY, { type: "json" }); if (prev && prev.data && typeof prev.data === "object") prevCount = Object.keys(prev.data).length; } catch (_) {}
+    if (relayCount < REGISTRY_MIN_RELAYS || (prevCount >= REGISTRY_MIN_RELAYS && relayCount < prevCount * 0.5)) {
+      const reason = `upstream returned ${relayCount} relays (cache holds ${prevCount}, floor ${REGISTRY_MIN_RELAYS})${derived ? " [consensus-derived]" : ""}`;
+      await env.FP_INDEX.put("registry_last_rejected", JSON.stringify({ at: Date.now(), relayCount, prevCount, derived, upstreamStatus: upstream.status }), { expirationTtl: 7 * 86400 }).catch(() => {});
+      const e = new Error("registry rejected: " + reason); e.upstreamStatus = upstream.status; e.rejected = reason; throw e;
+    }
+  }
   const enrichStart = Date.now();
   const enrichResult = await enrichFromCache(data, env);
-  const relayCount = Object.keys(data).length;
   let mac = null;
   if (env.HMAC_SECRET) {
     const canonical = JSON.stringify(data); // deterministic since keys are hex fingerprints
