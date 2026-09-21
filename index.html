@@ -13738,18 +13738,27 @@ async function fetchDomainsChain(indexedCount){
     if(!r.ok) return;
     const c = await r.json();
     if(!c || typeof c.total !== 'number') return;
-    DOM_PANEL.chain = c;
+    const idx = Number(indexedCount) || 0;
+    /* v604: while the chain cursor is still catching up its total can be LOWER
+     * than the indexed list (a cold walk from the TLD block). Never show that
+     * as the headline: keep the indexed count, and say the chain is syncing. */
+    const chainUsable = c.synced || c.total >= idx;
+    DOM_PANEL.chain = chainUsable ? c : null;
     const totalEl = document.getElementById('dp-total');
     const subEl   = document.getElementById('dp-total-sub');
     const newEl   = document.getElementById('dp-new-count');
     const stEl    = document.getElementById('dp-chain-status');
-    if(totalEl) totalEl.textContent = c.total.toLocaleString();
+    if(totalEl && chainUsable) totalEl.textContent = c.total.toLocaleString();
     if(subEl){
-      const idx = Number(indexedCount) || 0;
-      subEl.textContent = idx.toLocaleString() + ' ' + _i18t('dpIndexed','indexed');
-      subEl.style.display = (idx && idx !== c.total) ? '' : 'none';
+      if(chainUsable){
+        subEl.textContent = idx.toLocaleString() + ' ' + _i18t('dpIndexed','indexed');
+        subEl.style.display = (idx && idx !== c.total) ? '' : 'none';
+      } else {
+        subEl.textContent = _i18t('dpChainSyncing','chain syncing') + ' · ' + c.total.toLocaleString();
+        subEl.style.display = '';
+      }
     }
-    if(newEl && typeof c.new24h === 'number') newEl.textContent = c.new24h > 0 ? '+' + c.new24h : '0';
+    if(newEl && chainUsable && typeof c.new24h === 'number') newEl.textContent = c.new24h > 0 ? '+' + c.new24h : '0';
     if(stEl){
       stEl.textContent = c.synced ? 'Base ⛓' : 'Base ⛓ ' + Number(c.lagBlocks||0).toLocaleString() + ' ' + _i18t('dpBehind','behind');
       stEl.style.color = c.synced ? 'rgba(138,188,196,.4)' : '#fbbf24';
