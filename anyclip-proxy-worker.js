@@ -6340,6 +6340,7 @@ var DOMCHAIN_MAX_CALLS = 60;         /* eth_getLogs per tick: 1 when synced; 60 
 var DOMCHAIN_SYNC_LAG = 600;         /* <= 20 min of Base blocks behind head counts as synced */
 var DOMCHAIN_DAY_BLOCKS = 43200;     /* 24h at 2s blocks — for new24h */
 var DOMCHAIN_SEED_URL = "https://raw.githubusercontent.com/testmodeanyone-bit/anyone-relay-map/main/data/anyone-domains-chain.json";
+var DOMCHAIN_SEED_LAG = 200000;      /* v604: more than ~4.6 days behind head -> look for a seed each tick */
 
 function domchainEndpoints(env) {
   const list = [];
@@ -6394,16 +6395,25 @@ async function warmDomainsChain(env) {
   try { state = await env.FP_INDEX.get(DOMCHAIN_KEY, { type: "json" }); } catch (_) {}
   if (!state || !state.names || typeof state.cursor !== "number") {
     state = { names: {}, cursor: DOMCHAIN_TLD_BLOCK - 1, startBlock: DOMCHAIN_TLD_BLOCK, source: "cold" };
+  }
+  /* v604: the seed is consulted on EVERY tick while the cursor is far behind,
+   * not only on an empty KV. The first deploy ticked before the seed was on
+   * main, took the cold path, and then never looked again — the panel showed
+   * 907 (18 M blocks behind) with "1,687 indexed" beneath it. If the seed's
+   * cursor is ahead of ours, its names are merged and the cursor jumps. */
+  if (!state.synced && (typeof state.head !== "number" || state.head - state.cursor > DOMCHAIN_SEED_LAG)) {   /* no head yet = brand-new state: always look */
     try {
       const r = await fetch(DOMCHAIN_SEED_URL, { signal: AbortSignal.timeout(15e3) });
       if (r.ok) {
         const seed = await r.json();
-        if (seed && seed.names && typeof seed.cursor === "number" && seed.cursor > DOMCHAIN_TLD_BLOCK) {
-          state.names = seed.names; state.cursor = seed.cursor; state.source = "seed@" + seed.cursor;
-          console.log(`[domchain] bootstrapped from seed: ${Object.keys(seed.names).length} names, cursor ${seed.cursor}`);
+        if (seed && seed.names && typeof seed.cursor === "number" && seed.cursor > state.cursor) {
+          const before = Object.keys(state.names).length;
+          for (const [n, b] of Object.entries(seed.names)) if (!(n in state.names) || state.names[n] < b) state.names[n] = b;
+          state.cursor = seed.cursor; state.source = "seed@" + seed.cursor;
+          console.log(`[domchain] adopted seed: ${before} -> ${Object.keys(state.names).length} names, cursor ${seed.cursor}`);
         }
-      } else console.warn("[domchain] seed HTTP " + r.status + " — walking from TLD block");
-    } catch (e) { console.warn("[domchain] seed fetch failed:", e.message, "— walking from TLD block"); }
+      } else console.warn("[domchain] seed HTTP " + r.status + " — continuing the walk");
+    } catch (e) { console.warn("[domchain] seed fetch failed:", e.message, "— continuing the walk"); }
   }
 
   const eps = domchainEndpoints(env);
@@ -12761,7 +12771,11 @@ Issued: ${(/* @__PURE__ */ new Date()).toISOString()}
           try {
             const cached = JSON.parse(raw);
             const age = Date.now() - (cached.builtAt || 0);
-            if (cached.index && age < STALE_MS) {
+            /* v604: rebuild one tick BEFORE the route's STALE_MS, not at it. With
+             * both at 55 min and a 15-min cron, the copy was served X-Cache:STALE
+             * for up to 15 min of every cycle (observed at 58 min) while the warm
+             * reported "fresh, skip". Mirrors the uptimes warm's early margin. */
+            if (cached.index && age < STALE_MS - 16 * 60 * 1e3) {
               console.log(`[cron] fp-index fresh (age=${Math.round(age / 6e4)}min) \u2014 skip warm`);
               needWarm = false;
             }
