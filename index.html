@@ -25574,11 +25574,20 @@ function _scoreUptime(allRelays, total){
     color: score>=12?'#2dd4bf':score>=8?'#f59e0b':'#ef4444' };
 }
 function _scoreHardware(total){
-  const hwCount=hwFps&&hwFps.size>0?hwFps.size:0;
+  /* v629: the ratio was REGISTERED hardware (hwFps.size, which includes every
+   * device ever registered, ~half of them offline) over relays IN CONSENSUS.
+   * Measured 2026-09-22: 1,081 registered / 5,201 = 20.8% → 10/10, while only
+   * 555 of those devices were actually routing (10.7% → 6/10). Registered
+   * devices that are offline are not part of the network's resilience. The
+   * ratio is now active hardware over the consensus total — the same
+   * "X active of Y registered" the tooltip and AnyClip already report. */
+  const hwReg=hwFps&&hwFps.size>0?hwFps.size:0;
+  let hwCount=0;
+  if(hwReg>0 && Array.isArray(allRelays) && allRelays.length){ const live=new Set(allRelays.map(r=>(r.fp||'').toUpperCase())); for(const fp of hwFps) if(live.has(fp)) hwCount++; }
   const hwPct=hwCount/total;
   const score=Math.min(10,Math.round(Math.min(hwPct/0.18,1)*10));
   return { score, max:10, iconKey:'hw', label:_i18t('hardwareRelayRatio','Hardware Relay Ratio'), icon:'🔧',
-    detail:hwCount>0?`${(hwPct*100).toFixed(1)}% ${_i18t('hardware','hardware').toLowerCase()} · ${hwCount.toLocaleString()} ${_i18t('verifiedRouters','verified routers')}`:_i18t('loadingHW','Loading hardware data…'),
+    detail:hwReg>0?`${(hwPct*100).toFixed(1)}% ${_i18t('hardware','hardware').toLowerCase()} · ${hwCount.toLocaleString()} ${_i18t('hwActiveCons','Active in consensus').toLowerCase()} · ${hwReg.toLocaleString()} ${_i18t('hwRegistered','Registered total').toLowerCase()}`:_i18t('loadingHW','Loading hardware data…'),
     sub: hwPct>=0.15?_i18t('excellentHardware','Excellent hardware infrastructure'):hwPct>=0.08?_i18t('goodHardware','Good hardware relay presence'):hwPct>0?_i18t('growingHardware','Growing hardware infrastructure'):_i18t('awaitingHW','Awaiting hardware data'),
     color: score>=8?'#2dd4bf':score>=5?'#f59e0b':'#ef4444',
     _risk: hwPct>0&&hwPct<0.05?`${_i18t('only','Only')} ${(hwPct*100).toFixed(1)}% ${_i18t('hardware','hardware')} ${_i18t('relays','relays').toLowerCase()} — ${_i18t('mostlyVirtual','mostly virtual nodes')}`:null };
