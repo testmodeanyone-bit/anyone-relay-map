@@ -24077,6 +24077,11 @@ function enrichBlankRelaysViaProxy(){
    Reads from proxy /api/total-staked (on-chain ERC20 balanceOf)
    Fallback: walletCount × 100
 ══════════════════════════════════════════ */
+/* v630: the only caller sat at the END of the enrichment pipeline, so "Total
+ * Staked" and "APY" showed the loading dash for ~35 s on every visit although
+ * the value is one cached request. Fetch it as soon as the DOM exists; the
+ * later call is harmless (same value, or a refresh). */
+document.addEventListener('DOMContentLoaded', function(){ try { fetchStakingData(); } catch(_){} });
 async function fetchStakingData(){
   const stakedEl = document.getElementById('sb-staked');
   const apyEl = document.getElementById('sb-apy');
