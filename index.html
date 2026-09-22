@@ -13935,7 +13935,7 @@ function renderDomains(newTokenIds = []){
       </div>
       ${isNew ? '<span class="dp-new-tag">' + _i18t('newBadge','NEW') + '</span>' : ''}
     </a>`;
-  }).join('') + (list.length > 120 ? `<div style="padding:10px;text-align:center;font-size:9px;color:rgba(138,188,196,.4);">Showing 120 of ${list.length.toLocaleString()} — search to filter</div>` : '');
+  }).join('') + (list.length > 120 ? `<div style="padding:10px;text-align:center;font-size:9px;color:rgba(138,188,196,.4);">${_i18tFmt('rlShowingOf', 'Showing {n} of {total} — search or sort to see others', { n: 120, total: list.length.toLocaleString() })}</div>` : '');   /* v639: was English-only */
 }
 
 function dpSearch(q){
