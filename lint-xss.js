@@ -47,7 +47,10 @@ const SAFE_HELPERS = ['_i18t(', '.toLocaleString(', '.toFixed(', '.length',
 const SENSITIVE_FIELDS = [
   '.name', '.owner', '.nickname', '.asName', '.as_name', '.isp', '.contact',
   '.host', '.hostname', '.domain', '.platform', '.operator', 'topIsps',
-  '.message', '.body', '.text'
+  '.message', '.body', '.text',
+  /* GeoIP strings from the registry (fingerprint-map) — upstream-controlled,
+   * reached innerHTML unescaped at three sites until v637 */
+  '.cityName', '.countryName', '.regionName'
 ];
 // Relay nickname is accessed as `.n` in the raw enriched data — match `.n`
 // only when it is a complete property (followed by a non-word char).
@@ -114,7 +117,8 @@ function classify(expr) {
    * — the chat path escapes this way rather than via a named helper. */
   const inlineEscaped = expr.includes('&amp;') && expr.includes('&lt;');
   if (hasEscaper || inlineEscaped) return 'safe';
-  const sensitive = SENSITIVE_FIELDS.find(f => expr.includes(f)) ||
+  /* whole-property match: `.text` must not match `.textContent` (a DOM read) */
+  const sensitive = SENSITIVE_FIELDS.find(f => new RegExp(escapeRe(f) + '(?![\\w$])').test(expr)) ||
                     (NICKNAME_RE.test(expr) ? '.n' : null);
   if (sensitive) return { level: 'HIGH', field: sensitive };
   const looksSafe = SAFE_HELPERS.some(h => expr.includes(h)) ||
@@ -158,9 +162,32 @@ function findInterpsForFile(src) {
     const e = src.indexOf('\n', idx);
     return src.slice(s, e === -1 ? src.length : e);
   };
-  const collect = (interps, line, via) => {
+  /* One-level LOCAL resolution. `${isp}` / `${loc}` / `${name}` classify as
+   * WARN on their own — and 170+ WARNs is where a real sink hides (that is
+   * exactly how the three v637 sites survived: local names holding r.asName
+   * and r.cityName). For a bare identifier, find its nearest preceding
+   * `const|let|var NAME =` within the enclosing ~60 lines and classify the
+   * right-hand side instead; a sensitive, unescaped RHS makes the sink HIGH. */
+  const resolveLocal = (expr, sinkIdx) => {
+    if (!/^[A-Za-z_$][\w$]*$/.test(expr)) return null;
+    const from = Math.max(0, sinkIdx - 6000);
+    const window = src.slice(from, sinkIdx);
+    const re = new RegExp('(?:const|let|var)\\s+' + escapeRe(expr) + '\\s*=\\s*([^;]{1,300})', 'g');
+    let last = null, mm;
+    while ((mm = re.exec(window)) !== null) last = mm[1];
+    return last;
+  };
+  const collect = (interps, line, via, sinkIdx) => {
     for (const expr of interps) {
-      const verdict = classify(expr);
+      let verdict = classify(expr);
+      if (verdict !== 'safe' && verdict.level === 'WARN' && sinkIdx != null) {
+        const rhs = resolveLocal(expr, sinkIdx);
+        if (rhs) {
+          const v2 = classify(rhs);
+          if (v2 === 'safe') verdict = 'safe';
+          else if (v2.level === 'HIGH') verdict = { level: 'HIGH', field: v2.field + ' (via local ' + expr + ')' };
+        }
+      }
       if (verdict === 'safe') continue;
       const key = line + '|' + expr;
       if (seen.has(key)) continue;
@@ -190,7 +217,7 @@ function findInterpsForFile(src) {
         /* Auditable suppression: an `xss-ok` marker between the sink token and
          * the template's end skips it. Use ONLY for provably developer-
          * controlled data (e.g. a hardcoded constant array). Greppable. */
-        if (!src.slice(m.index, tpl.end).includes('xss-ok')) collect(tpl.interps, lineOf(j), null);
+        if (!src.slice(m.index, tpl.end).includes('xss-ok')) collect(tpl.interps, lineOf(j), null, j);
         j = tpl.end + 1; continue;
       }
       if (c === '"' || c === "'") { j = skipString(src, j, c); continue; }
@@ -224,7 +251,7 @@ function findInterpsForFile(src) {
       if (tk === -1) continue;
       const tpl = scanTemplate(src, tk);
       if (src.slice(a.index, tpl.end).includes('xss-ok')) continue;
-      collect(tpl.interps, lineOf(tk), varName);
+      collect(tpl.interps, lineOf(tk), varName, tk);
     }
   }
   return findings;
