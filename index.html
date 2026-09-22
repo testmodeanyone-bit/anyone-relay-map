@@ -719,7 +719,10 @@ setTimeout(function() {
         if (c) recentCmds.push(Object.assign({}, c, { group: 'Recent' }));
       });
       // Filter non-country out of default view, unless no recent
-      var nonCountries = all.filter(function(c){ return c.group !== 'Countries'; });
+      /* v643: a recent command was listed twice — once under Recent, again in its
+       * group two rows down. Recents are removed from their groups. */
+      var recentIds = {}; recentCmds.forEach(function(c){ recentIds[c.id] = 1; });
+      var nonCountries = all.filter(function(c){ return c.group !== 'Countries' && !recentIds[c.id]; });
       return recentCmds.concat(nonCountries);
     }
     /* v641: field-aware ranking. One flat "title subtitle keywords" string ranked
@@ -742,7 +745,7 @@ setTimeout(function() {
       return { cmd: c, score: score, match: score > 0 };
     }).filter(function(x){ return x.match; });
     scored.sort(function(a, b){ return b.score - a.score; });
-    return scored.slice(0, 50).map(function(x){ return x.cmd; });
+    return scored.slice(0, 100).map(function(x){ return x.cmd; });   /* v643: was 50 — 10 of 60 countries never listed under "jump to" */
   }
   
   function renderList() {
@@ -767,6 +770,7 @@ setTimeout(function() {
       var el = document.createElement('div');
       el.className = 'cmdk-item' + (item.className ? ' ' + item.className : '') + (i === 0 ? ' selected' : '');
       el.dataset.idx = i;
+      el.id = 'cmdk-opt-' + i; el.setAttribute('role', 'option'); el.setAttribute('aria-selected', i === 0 ? 'true' : 'false');   /* v643 a11y */
       el.innerHTML = '<div class="cmdk-item-icon">' + (item.icon || '▸') + '</div>' +
         '<div class="cmdk-item-body">' +
         '<div class="cmdk-item-title">' + item.title.replace(/[<>&]/g, '') + '</div>' +
@@ -782,9 +786,11 @@ setTimeout(function() {
     cmdkSelected = i;
     var items = document.querySelectorAll('.cmdk-item');
     items.forEach(function(el, idx){
-      if (parseInt(el.dataset.idx) === i) el.classList.add('selected');
-      else el.classList.remove('selected');
+      var on = parseInt(el.dataset.idx) === i;
+      el.classList.toggle('selected', on);
+      el.setAttribute('aria-selected', on ? 'true' : 'false');   /* v643 a11y */
     });
+    var _inp = document.getElementById('cmdk-input'); if (_inp) _inp.setAttribute('aria-activedescendant', 'cmdk-opt-' + i);
     var selEl = document.querySelector('.cmdk-item.selected');
     if (selEl) selEl.scrollIntoView({ block: 'nearest' });
   }
@@ -799,11 +805,13 @@ setTimeout(function() {
     }, 150);
   }
   
+  var _cmdkPrevFocus = null;   /* v643: element to return focus to on close */
   function openCmdK() {
     cmdkOpen = true;
     var overlay = document.getElementById('cmdk-overlay');
     var input = document.getElementById('cmdk-input');
     if (!overlay || !input) return;
+    _cmdkPrevFocus = (document.activeElement && document.activeElement !== document.body) ? document.activeElement : null;
     overlay.classList.add('open');
     input.value = '';
     cmdkFilter = '';
@@ -815,6 +823,9 @@ setTimeout(function() {
     cmdkOpen = false;
     var overlay = document.getElementById('cmdk-overlay');
     if (overlay) overlay.classList.remove('open');
+    /* v643: focus was left on the now-hidden input; return it to where it was */
+    try { if (_cmdkPrevFocus && document.contains(_cmdkPrevFocus) && _cmdkPrevFocus !== document.getElementById('cmdk-input')) _cmdkPrevFocus.focus(); else document.getElementById('cmdk-input').blur(); } catch(_) {}
+    _cmdkPrevFocus = null;
   }
   
   window.openCmdK = openCmdK;
@@ -1414,29 +1425,35 @@ function acGroupMessages(){
 setInterval(acGroupMessages, 3000);
 // ═══ MOBILE BOTTOM TAB BAR ═══
 function mobTabSwitch(btn, tab){
+  /* v643: three of the five tabs on the phone bar were dead, verified on a
+   * 375px viewport. Health added a `.visible` class no CSS rule reads
+   * (openHealthPanel uses style.display). Relays set #relay-panel to block,
+   * which the phone stylesheet overrides with display:none !important — the
+   * phone uses the bottom sheet (mobileToggleRelays). More toggled `.open` on
+   * #sidebar, display:none !important on phones. Now each tab calls the same
+   * function the working desktop control calls, and More opens the command
+   * palette — the phone's only way to reach Signals, theme, domains, alerts. */
   document.querySelectorAll('#mob-tab-bar .mt-tab').forEach(function(t){ t.classList.remove('active'); });
   btn.classList.add('active');
   var health = document.getElementById('health-panel');
-  if(health) health.classList.remove('visible');
-  var relay = document.getElementById('relay-panel');
-  if(relay) relay.style.display = 'none';
-  if(AC && AC.open && typeof toggleAnyChat === 'function') toggleAnyChat();
+  if(health && health.style.display === 'flex' && typeof openHealthPanel === 'function') openHealthPanel();   /* close */
+  if(typeof _bsOpen !== 'undefined' && _bsOpen && typeof mobileToggleRelays === 'function') mobileToggleRelays();   /* close sheet */
+  if(AC && AC.open && typeof toggleAnyChat === 'function' && tab !== 'chat') toggleAnyChat();
   var domains = document.getElementById('domain-panel');
-  if(domains && domains.classList.contains('open')){ var _db2 = document.getElementById('btn-domains'); if(_db2) _db2.click(); } /* v566: was '#domains-panel'/.visible (dead null-guarded ref) */
+  if(domains && domains.classList.contains('open')){ var _db2 = document.getElementById('btn-domains'); if(_db2) _db2.click(); }
   switch(tab){
     case 'map': break;
     case 'health':
-      if(health) health.classList.add('visible');
+      if(typeof openHealthPanel === 'function') openHealthPanel();
       break;
     case 'relays':
-      if(relay){ relay.style.display = 'block'; localStorage.setItem('rb_open','1'); }
+      if(typeof mobileToggleRelays === 'function') mobileToggleRelays();
       break;
     case 'chat':
-      if(typeof toggleAnyChat === 'function') toggleAnyChat();
+      if(!(AC && AC.open) && typeof toggleAnyChat === 'function') toggleAnyChat();
       break;
     case 'more':
-      var sidebar = document.getElementById('sidebar');
-      if(sidebar) sidebar.classList.toggle('open');
+      if(typeof window.openCmdK === 'function') window.openCmdK();
       break;
   }
 }
@@ -6035,7 +6052,7 @@ body.light #fb-relay-note{ color:rgba(0,100,160,.45); }
   #relay-panel{ display:none !important; }
   #health-panel{ width:100% !important;left:0 !important;right:0 !important; }
   #country-banner{ top:52px !important;left:8px !important;right:8px !important;transform:none !important;min-width:0 !important;max-width:none !important; }
-  #anyclip-wrap{ bottom:68px !important; }
+  #anyclip, #anyclip-wrap{ bottom:68px !important; right:12px !important; }   /* v643: #anyclip-wrap does not exist; the mascot (#anyclip) sat on the phone tab bar and swallowed taps on "More" */
   #zc{ bottom:68px !important;top:auto !important;transform:none !important; }
   #compass{ display:none !important; }
   #tip{ max-width:220px !important; }
@@ -26830,6 +26847,7 @@ body.light #ac-send{background:rgba(0,100,150,.12);border-color:rgba(0,100,150,.
 }
 #cmdk-input::placeholder { color: #94a3b8; }
 #cmdk-kbd {
+    cursor: pointer; line-height: 1.2;   /* v643: it is a <button> now */
     font-family: 'JetBrains Mono', monospace; font-size: 10px;
     color: #94a3b8; padding: 3px 8px;
     background: rgba(148, 163, 184, 0.1); border-radius: 4px;
@@ -31768,10 +31786,10 @@ body.light #geo-info-side-panel .hw-tip-section {
   <div id="cmdk-panel">
     <div id="cmdk-header">
       <svg aria-hidden="true" id="cmdk-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-      <input id="cmdk-input" type="text" placeholder="Type a command or search..." autocomplete="off" spellcheck="false" />
-      <span id="cmdk-kbd">ESC</span>
+      <input id="cmdk-input" type="text" placeholder="Type a command or search..." autocomplete="off" spellcheck="false" role="combobox" aria-label="Search commands" aria-controls="cmdk-list" aria-expanded="true" aria-autocomplete="list" />
+      <button type="button" id="cmdk-kbd" onclick="closeCmdK()" aria-label="Close command palette">ESC</button>   <!-- v643: a real close control — phones have no Escape key -->
     </div>
-    <div id="cmdk-list"></div>
+    <div id="cmdk-list" role="listbox" aria-label="Commands"></div>
     <div id="cmdk-footer">
       <span class="cmdk-footer-key"><b>↑↓</b> navigate</span>
       <span class="cmdk-footer-key"><b>⏎</b> select</span>
