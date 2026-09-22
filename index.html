@@ -29855,7 +29855,12 @@ body.light #geo-info-side-panel .hw-tip-section {
       selectedCountry:(typeof selectedCountryName!=='undefined'&&selectedCountryName)?`Currently viewing: ${selectedCountryName} (${selectedCountryIso})`:'Viewing: global (all countries)',
       growthWeek:fmtDelta(typeof _growthWeekDelta!=='undefined'?_growthWeekDelta:null),
       growthMonth:fmtDelta(typeof _growthMonthDelta!=='undefined'?_growthMonthDelta:null),
-      growthDays:(typeof _growthDays!=='undefined')?_growthDays:0, growthTrend:trend
+      growthDays:(typeof _growthDays!=='undefined')?_growthDays:0, growthTrend:trend,
+      /* v620: the two panels AnyClip used to deny existed. dp-total is the
+       * on-chain .anyone count (v599); btc-total is bitnodes' network total
+       * (v605). '—' before load reads as '?' server-side via the raw() fallback. */
+      anyoneDomains:(()=>{ const v=raw('dp-total'); return /\d/.test(v)?v:'?'; })(),
+      bitcoinNodes:(()=>{ const v=raw('btc-total'); return /\d/.test(v)?v:'?'; })()
     };
   }
 
