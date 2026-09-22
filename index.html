@@ -9209,9 +9209,9 @@ function buildTicker(data){
     const s=ns(d.relayCount);
     const _tcc = (d.countryCode || '').toUpperCase();
     const _useCity = d.cityName && d.cityName.toUpperCase() !== _tcc;
-    const loc = _useCity ? `${d.cityName}, ${d.countryCode||''}` :
+    const loc = _aoEscHtml(_useCity ? `${d.cityName}, ${d.countryCode||''}` :
                 d.countryName ? d.countryName :
-                `${d.geo[0].toFixed(2)}°, ${d.geo[1].toFixed(2)}°`;
+                `${d.geo[0].toFixed(2)}°, ${d.geo[1].toFixed(2)}°`);   /* v637: upstream geo strings escaped */
     const isp = d.topIsps && d.topIsps.length ? ` · ${_aoEscHtml(d.topIsps[0].name)}` : '';
     return `<span style="color:${s.col}">${d.relayCount.toLocaleString()} ${(typeof _i18t==='function')?_i18t('tickerRelays','RELAYS'):'RELAYS'}</span>`+
            `<span style="color:#1b404e;margin:0 7px">@</span>`+
@@ -10649,7 +10649,7 @@ function selectCountry(id, feat, skipZoom){
     const barPct = Math.round(count/maxIspCount*100);
     const pct    = (count/relayCount*100).toFixed(0);
     return `<div class="cb-isp-row">
-      <span class="cb-isp-name" title="${name}">${name}</span>
+      <span class="cb-isp-name" title="${_aoEscHtml(name)}">${_aoEscHtml(name)}</span>
       <div class="cb-isp-bar-wrap"><div class="cb-isp-bar" style="width:${barPct}%"></div></div>
       <span class="cb-isp-count">${count} <span style="color:rgba(0,245,255,.4);font-size:8px">${pct}%</span></span>
     </div>`;
@@ -24621,8 +24621,8 @@ function renderRelayList(list){
     return `<div role="button" tabindex="0" class="rl-item ${tierClass}" onclick="selectRelay('${r.fp}',${r.lat},${r.lon})" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();selectRelay('${r.fp}',${r.lat},${r.lon});}">
       <button class="rl-share" title="Copy shareable link" data-i18n-title="rbCopyShareLink" onclick="event.stopPropagation();copyRelayLink('${r.fp}',this)">⬡ ${_i18t('rdShare','SHARE')}</button>
       <button class="rl-compare-btn ${inCompare?'added':''}" title="${inCompare?_i18t('rbRemoveCompare','Remove from compare'):_i18t('rbAddCompare','Add to compare')}" onclick="event.stopPropagation();toggleCompare('${r.fp}')">${inCompare?'✓':'⬡+'}</button>
-      <div class="rl-loc">${flag} ${loc}</div>
-      <div class="rl-isp">${nick ? `<span style="color:rgba(0,245,255,.7);margin-right:4px;">${acSanitize(nick)}</span>` : ""}${isp}</div>
+      <div class="rl-loc">${flag} ${_aoEscHtml(loc)}</div>
+      <div class="rl-isp">${nick ? `<span style="color:rgba(0,245,255,.7);margin-right:4px;">${acSanitize(nick)}</span>` : ""}${_aoEscHtml(isp)}</div>
       <div class="rl-badges">${badges}<span style="font-size:8px;color:rgba(138,188,196,.55);margin-left:3px;font-family:'Share Tech Mono',monospace">${r.fp.slice(0,8)}&hellip;</span>${bwStr ? `<span style="font-size:8px;font-weight:700;color:var(--an-teal,#2dd4bf);margin-left:auto;font-family:var(--ac-font,Outfit,system-ui);letter-spacing:.5px;">${bwStr}</span>` : ''}</div>
     </div>`;
   }).join('');
