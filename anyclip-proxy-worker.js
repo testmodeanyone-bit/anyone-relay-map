@@ -2922,7 +2922,10 @@ const STAT_FIELDS = {
   exitZones: 'scalar', guardZones: 'scalar', middleZones: 'scalar', hwZones: 'scalar',
   topCountriesStr: 'text', topISPsStr: 'text', hwLocStr: 'text',
   selectedCountry: 'text',
-  growthWeek: 'text', growthMonth: 'text', growthDays: 'scalar', growthTrend: 'scalar'
+  growthWeek: 'text', growthMonth: 'text', growthDays: 'scalar', growthTrend: 'scalar',
+  /* v619: the map also shows these; asked, AnyClip said it did not track Bitcoin
+   * nodes and had no domain data — both are panels on the same screen. */
+  anyoneDomains: 'scalar', bitcoinNodes: 'scalar'
 };
 
 const _SCALAR_MAX = 32;   // a count / short label
@@ -2996,7 +2999,10 @@ ${s.selectedCountry}
 - Week relay change: ${s.growthWeek}
 - Month relay change: ${s.growthMonth}
 - Days of history: ${s.growthDays}
-- Trend: ${s.growthTrend}
+- Trend (7-day): ${s.growthTrend}
+=== OTHER LAYERS ON THIS MAP ===
+- .anyone domains minted on-chain (Unstoppable Domains registry on Base): ${s.anyoneDomains}
+- Bitcoin nodes shown on the map's Bitcoin layer (from bitnodes.io): ${s.bitcoinNodes}
 ${_U_CLOSE}`;
 }
 
@@ -3010,7 +3016,7 @@ const ANYCLIP_PERSONA =
 `You are AnyClip, a friendly and helpful AI assistant for ANyone Protocol's global relay network map. You appear as an animated hexagon character in the corner of an interactive world map.
 
 === ROLE & PERSONALITY (C.R.I.S.P) ===
-Context: You live inside a real-time network visualization dashboard showing 7,000+ relay nodes worldwide.
+Context: You live inside a real-time network visualization dashboard showing every relay in the Anyone network (the current count is in LIVE STATS — never quote a number from memory).
 Role: You are AnyClip — the relay network's voice. A knowledgeable guide at a mission-control center.
 Instructions: Answer using ONLY the knowledge and the LIVE NETWORK STATS provided in the untrusted-data block. Never invent stats. If you don't know, say so and direct to docs.anyone.io or Telegram.
 Style: Warm, confident, concise (2-4 sentences max). Use exact numbers from the LIVE STATS block. Plain text only — no markdown, no bullets, no asterisks.
@@ -3023,6 +3029,17 @@ Purpose: Help relay operators, investors, and curious visitors understand the An
 4. SETUP HELP: For running a relay — give the one-command install, mention the 100 $ANYONE lock requirement, link docs.anyone.io/relay.
 5. TOKEN QUESTIONS: For $ANYONE price/trading/investment — you cannot give financial advice; share factual tokenomics only.
 6. UNKNOWN: If asked something outside your knowledge — admit it warmly and direct to docs.anyone.io, anyone.io, or Telegram t.me/anyoneprotocol.
+7. MISSING VALUE: a stat shown as "?" has not loaded yet. Say that the figure is not available right now. Never guess it, never say it is "updating" or "on the dashboard", never substitute a number from memory.
+8. GROWTH HONESTY: report the week change and the month change separately, each with its sign. A negative number is a decline — never call it growth, momentum, or expansion. If they disagree (week up, month down) say exactly that.
+9. FORMAT: plain text. No markdown of any kind — no asterisks, no bold, no bullet characters, no headings. Two to four sentences.
+=== WHAT THIS MAP SHOWS (you can answer about all of it) ===
+- Relay layer: every Anyone relay in consensus, by location; Exit / Guard / Middle / Hardware filters; H3 hexagonal zones.
+- Hardware relays: physical Anyone Router devices, registered on-chain via the AO registry; the "registered" count includes offline devices.
+- Network Growth panel: one row per UTC day (relays, bandwidth, zones); the week and month deltas in LIVE STATS come from it.
+- Domains panel: .anyone domains are Unstoppable Domains names minted on the Base blockchain; the total in LIVE STATS is counted from on-chain mint events, not from a third-party API.
+- Bitcoin layer: reachable Bitcoin nodes from bitnodes.io drawn on the same map; the count in LIVE STATS is the network total bitnodes reports.
+- The /bitcoin page ("Anyone for Bitcoin"): a bitcoin.conf generator for routing a Bitcoin Core node's traffic through Anyone as a SOCKS5 proxy (a drop-in alternative to Tor for outbound traffic; the generated config sets onion=0 so .onion peers are not sent to Anyone).
+- Operators Lounge: a chat for relay operators, where you also answer.
 
 === RELAY FLAG SEMANTICS (CRITICAL) ===
 Anyone Protocol uses Tor's relay flag system (it is a fork of ator-protocol). A single relay can carry MULTIPLE flags — a relay can have BOTH the Exit and Guard flag. Never present exit+guard+middle as disjoint groups that sum to the total; they overlap.
@@ -3136,6 +3153,18 @@ function parseModerationVerdict(task, modelText) {
   return { action, reason: typeof p.reason === 'string' ? p.reason.slice(0, 120) : '' };
 }
 
+/* v619: markdown → plain text for the assistant reply. Bold/italic markers,
+ * inline code, headings and list bullets go; the words stay. Links are left
+ * as written (the persona already avoids them). */
+function _anyclipPlainText(t) {
+  return String(t)
+    .replace(/\*\*([^*]+)\*\*/g, "$1").replace(/__([^_]+)__/g, "$1")
+    .replace(/(^|[\s(])\*([^*\n]+)\*(?=[\s).,;:!?]|$)/g, "$1$2").replace(/(^|[\s(])_([^_\n]+)_(?=[\s).,;:!?]|$)/g, "$1$2")
+    .replace(/`([^`]+)`/g, "$1")
+    .replace(/^\s{0,3}#{1,6}\s+/gm, "")
+    .replace(/^\s*[-*\u2022]\s+/gm, "")
+    .replace(/\n{3,}/g, "\n\n").trim();
+}
 // === END ANYCLIP_PROMPTS_INLINE ===
 /* v547: staking moved to Ethereum. Anyone's own docs (docs.anyone.io, "Tracking"
  * reference) state that staked balances live in the HodlerV5 contract on Ethereum
@@ -8167,6 +8196,13 @@ var worker_source_default = {
             .map((b) => b.text)
             .join("");
           return cors(JSON.stringify(parseModerationVerdict(_task, _verdictText)), 200);
+        }
+        /* v619: the persona says "plain text, no markdown" and the model still
+         * emits **bold** and bullets on about half of the answers; the widget
+         * renders the asterisks literally. Strip it here, deterministically,
+         * instead of hoping. Content only — the envelope is unchanged. */
+        if (_aiJson && Array.isArray(_aiJson.content)) {
+          for (const b of _aiJson.content) if (b && b.type === "text" && typeof b.text === "string") b.text = _anyclipPlainText(b.text);
         }
         return cors(JSON.stringify(_aiJson), anthropicRes.status);
       } catch (err) {
