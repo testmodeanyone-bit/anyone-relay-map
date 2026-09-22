@@ -13059,10 +13059,24 @@ function renderSparkline(history) {
   const minR = Math.min(...relayVals), maxR = Math.max(...relayVals);
   const rangeR = maxR - minR || 1;
 
-  const xScale  = i  => PAD + (i / Math.max(history.length - 1, 1)) * (W - PAD * 2);
+  /* v617: x is the DATE, not the array index. Index spacing hid every hole in
+   * the series — after v611/v613 drop provisional rows (Sep 2-7 stale index,
+   * Sep 19 half-size), the line simply joined Sep 1 to Sep 8 as if nothing
+   * happened, and 30 rows spanning 35 days drew as 30 even steps. Days with
+   * no row are now empty space, and the line breaks across them. */
+  const _dayNum = h => Math.round(new Date(h.date + 'T00:00:00Z').getTime() / 864e5);
+  const _d0 = _dayNum(history[0]), _d1 = _dayNum(last);
+  const _span = Math.max(_d1 - _d0, 1);
+  const xScale  = i  => PAD + ((_dayNum(history[i]) - _d0) / _span) * (W - PAD * 2);
   const yScaleR = v  => H - PAD - 6 - ((v - minR) / rangeR) * (H - PAD * 2 - 10);
 
   const relayPts = history.map((h, i) => [xScale(i), yScaleR(h.total)]);
+  /* v617: runs of consecutive days; the line and area are drawn per run */
+  const _runs = [];
+  history.forEach((h, i) => {
+    if (i > 0 && _dayNum(h) - _dayNum(history[i - 1]) <= 1) _runs[_runs.length - 1].push(i);
+    else _runs.push([i]);
+  });
 
   const buildPath = pts => {
     let p = `M ${pts[0][0].toFixed(1)} ${pts[0][1].toFixed(1)}`;
@@ -13075,14 +13089,26 @@ function renderSparkline(history) {
   };
 
   const firstRealIdx = history.findIndex(h => !h.backfilled);
-  const relayPath = buildPath(relayPts);
-  const lastPt = relayPts[relayPts.length - 1];
-  const areaStartIdx = firstRealIdx >= 0 ? firstRealIdx : 0;
-  const areaStartPt = relayPts[areaStartIdx];
-  const areaPath = (firstRealIdx > 0
-    ? buildPath(relayPts.slice(areaStartIdx))
-    : relayPath)
-    + ` L ${lastPt[0].toFixed(1)} ${H} L ${areaStartPt[0].toFixed(1)} ${H} Z`;
+  /* v617: one line + one area per run of consecutive days. A run of backfilled
+   * (estimated) rows keeps the v341 dashed style; a single-point run is a dot. */
+  const _runPath = idxs => idxs.length > 1 ? buildPath(idxs.map(i => relayPts[i])) : '';
+  const relayLinesSVG = _runs.map(idxs => {
+    const d = _runPath(idxs); if (!d) return '';
+    const est = idxs.every(i => history[i].backfilled);
+    return `<path class="spark-line" d="${d}"${est ? ' stroke-opacity="0.35" stroke-dasharray="3,2"' : ''}/>`;
+  }).join('');
+  const areaPath = _runs.map(idxs => {
+    const real = idxs.filter(i => !history[i].backfilled);
+    if (real.length < 2) return '';
+    const a = relayPts[real[0]], b = relayPts[real[real.length - 1]];
+    return _runPath(real) + ` L ${b[0].toFixed(1)} ${H} L ${a[0].toFixed(1)} ${H} Z`;
+  }).join(' ');
+  /* v617: mark each hole wider than a day so the break reads as "no data" */
+  const gapMarksSVG = _runs.slice(1).map((idxs, k) => {
+    const a = relayPts[_runs[k][_runs[k].length - 1]][0], b = relayPts[idxs[0]][0];
+    const n = _dayNum(history[idxs[0]]) - _dayNum(history[_runs[k][_runs[k].length - 1]]) - 1;
+    return `<line x1="${((a + b) / 2).toFixed(1)}" y1="${PAD}" x2="${((a + b) / 2).toFixed(1)}" y2="${H - PAD}" stroke="rgba(180,220,235,.25)" stroke-width="0.6" stroke-dasharray="1.5,2"><title>${n} ${_i18t('daysNoRow', 'day(s) without a complete row')}</title></line>`;
+  }).join('');
 
   let bwPathSVG = '', bwDotsSVG = '', bwStartDate = null, bwDisplayDate = null;  /* v341: rolling label */
   if (hasBW) {
@@ -13109,9 +13135,9 @@ function renderSparkline(history) {
     }
 
     if (bwEntries.length >= 2) {
-      const bwPts = bwEntries.map(e => [e.x, e.y]);
-      const bwPath = buildPath(bwPts);
-      bwPathSVG = `<path class="spark-line-bw" d="${bwPath}"/>`;
+      /* v617: break where more than one day separates two BW readings */
+      const segs = []; bwEntries.forEach((e, j) => { if (j > 0 && _dayNum(e.h) - _dayNum(bwEntries[j - 1].h) <= 1) segs[segs.length - 1].push(e); else segs.push([e]); });
+      bwPathSVG = segs.filter(sg => sg.length > 1).map(sg => `<path class="spark-line-bw" d="${buildPath(sg.map(e => [e.x, e.y]))}"/>`).join('');
     } else if (bwEntries.length === 1) {
       bwPathSVG = '';
     }
@@ -13134,8 +13160,8 @@ function renderSparkline(history) {
       const maxZ = Math.max(...zonesEntries.map(e => e.zones)) * 1.02;
       const rangeZ = maxZ - minZ || 1;
       const yScaleZ = v => H - PAD - 6 - ((v - minZ) / rangeZ) * (H - PAD * 2 - 10);
-      const zPts = zonesEntries.map(e => [e.x, yScaleZ(e.zones)]);
-      zonesPathSVG = `<path class="spark-line-zones" d="${buildPath(zPts)}"/>`;
+      const zSegs = []; zonesEntries.forEach((e, j) => { if (j > 0 && _dayNum(e.h) - _dayNum(zonesEntries[j - 1].h) <= 1) zSegs[zSegs.length - 1].push(e); else zSegs.push([e]); });   /* v617 */
+      zonesPathSVG = zSegs.filter(sg => sg.length > 1).map(sg => `<path class="spark-line-zones" d="${buildPath(sg.map(e => [e.x, yScaleZ(e.zones)]))}"/>`).join('');
       zonesDotsSVG = zonesEntries.map((e, j) => {
         const isLast = j === zonesEntries.length - 1;
         return `<circle class="spark-dot-zones" cx="${e.x.toFixed(1)}" cy="${yScaleZ(e.zones).toFixed(1)}"
@@ -13167,12 +13193,9 @@ function renderSparkline(history) {
         <stop offset="100%" stop-color="#00f5ff" stop-opacity="0.0"/>
       </linearGradient>
     </defs>
-    <path class="spark-area" d="${areaPath}"/>
-    ${firstRealIdx > 0 && relayPts.length > 1 ? `
-      <path class="spark-line" d="${buildPath(relayPts.slice(0, firstRealIdx + 1))}"
-        stroke-opacity="0.35" stroke-dasharray="3,2"/>
-      <path class="spark-line" d="${buildPath(relayPts.slice(firstRealIdx))}"/>
-    ` : `<path class="spark-line" d="${relayPath}"/>`}
+    ${areaPath ? `<path class="spark-area" d="${areaPath}"/>` : ''}
+    ${gapMarksSVG}
+    ${relayLinesSVG}
     ${bwPathSVG}
     ${zonesPathSVG}
     ${relayDotsSVG}
@@ -13185,12 +13208,20 @@ function renderSparkline(history) {
     dot.addEventListener('mouseenter', e => {
       const d = e.target.dataset;
       const idx = history.findIndex(h => h.date === d.date);
+      const cur = idx >= 0 ? history[idx] : null;
       const prev = idx > 0 ? history[idx - 1] : null;
-      const dayDelta = prev ? last.total - prev.total : null;
+      /* v617: the delta is THIS row against the row before it. It read
+       * `last.total - prev.total` — the newest row minus the hovered row's
+       * neighbour — so every dot but the last showed a number that belonged to
+       * no day. When the previous row is not the previous calendar day, the
+       * label says which day it is compared with. */
+      const dayDelta = (cur && prev) ? cur.total - prev.total : null;
+      const _gapDays = (cur && prev) ? _dayNum(cur) - _dayNum(prev) : 1;
       const deltaStr = dayDelta !== null
         ? (dayDelta >= 0
             ? ` <span style="color:#00f5ff">↑${Math.abs(dayDelta).toLocaleString()}</span>`
             : ` <span style="color:#ff6b35">↓${Math.abs(dayDelta).toLocaleString()}</span>`)
+          + (_gapDays > 1 ? ` <span style="color:rgba(180,220,235,.5);font-size:9px">${_i18t('vs','vs')} ${prev.date.slice(5)}</span>` : '')
         : '';
       const bwVal = parseFloat(d.bw) || 0;
       const bwLine = bwVal > 0
