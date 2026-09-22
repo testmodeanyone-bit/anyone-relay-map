@@ -16056,36 +16056,29 @@ async function acAskAnyClip(query){
       if(found) relayContext = '\nRELAY LOOKUP for ' + relayMatch[1] + ': ' + JSON.stringify(found);
     }
 
-    let context;
-    if(typeof acBuildSystemPrompt === 'function'){
-      context = acBuildSystemPrompt();
-      context += operatorContext + relayContext + '\n\n=== CHAT CONTEXT ===\nYou are AnyClip, answering in the Operators Lounge chat.\nRULES: Respond concisely (2-4 sentences). Use exact numbers from LIVE STATS. Plain text only — no markdown.\nAlways distinguish HW relays (physical Anyone Router devices) from software relays (VPS/servers).\nBreak down counts: total, exit, guard, middle, hardware. Address operators by name.';
-    } else {
-      const relays = allRelays?.length || 0;
-      const bw = relayData ? (relayData.reduce((s,z)=>s+(z.bwMibs||0),0)/1024).toFixed(1) : '—';
-      const countries = relays > 0 ? [...new Set(allRelays.map(r=>r.countryCode))].length : 0;
-      const h = computeHealthScore?.();
-      /* v288: read exit count from cached /api/exit-relays — allRelays has no exit flag */
-      var exits = (window.__exitRelaysCache && window.__exitRelaysCache.exit_relays) || 0;
-      var guards = (window.__exitRelaysCache && window.__exitRelaysCache.guard_relays) || 0;
-      /* v288: compute active HW from zone data, keep total from hwFps */
-      var hwActive = 0; if(typeof relayData !== 'undefined' && Array.isArray(relayData)){ relayData.forEach(function(z){ hwActive += (z.hwCount || 0); }); }
-      var hw = hwFps?.size || 0;
-      context = 'You are AnyClip.' + operatorContext + relayContext + ' Network: ' + relays + ' relays (' + exits + ' exit, ' + guards + ' guard, ' + hw + ' HW), ' + bw + ' GB/s, ' + countries + ' countries, health ' + (h?.total||'?') + '/100. Plain text, 2-4 sentences.';
-    }
+    /* v625: the client-side prompt (`context`) was assembled here and never
+     * sent — the server owns the prompt since v533/v541. Removed. The operator
+     * and relay lookups above still travel in `memory`, which the proxy now
+     * places in a fenced untrusted block (v625). */
 
     acShowTyping(['AnyClip']);
 
     let token = '';
     try { const tr = await fetch(AC_PROXY + '/api/chat-token?wh=' + encodeURIComponent((await acWalletHash())) + '&nick=' + encodeURIComponent((_acUser && _acUser.nick) || '')); const td = await tr.json(); token = td.token || ''; } catch(e){}
 
+    /* v625: acCollectStats lives inside the AnyClip Brain IIFE (a later script
+     * block); this function is global, so the bare reference threw
+     * ReferenceError on every lounge question and the catch below answered
+     * "Network query unavailable right now." — since v541 removed the old
+     * client-side prompt builder. The Brain now exports it on window. */
+    const _stats = (typeof window.acCollectStats === 'function') ? window.acCollectStats() : {};
     const res = await fetch(AC_PROXY + '/api/chat', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'x-token': token },
       body: JSON.stringify({
         task: 'assistant',
         lounge: true,
-        stats: acCollectStats(),
+        stats: _stats,
         memory: (typeof operatorContext === 'string' ? operatorContext : '')
               + (typeof relayContext   === 'string' ? relayContext   : ''),
         messages: [...acClipGetHistory(), { role: 'user', content: query }]
@@ -16133,11 +16126,11 @@ async function acAskAnyClip(query){
       }
     }
 
-    fetch(AC_PROXY + '/api/chat-send', {
-      method: 'POST', headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({ nick: '\ud83e\udd16 AnyClip', tier: 'ai', wallet: 'anyclip',
-        text: '[Reply to @' + (_acUser?.nick||'operator') + ']: ' + reply, time: Date.now() })
-    }).catch(()=>{});
+    /* v625: the reply used to be re-posted to the room via /api/chat-send as
+     * nick "🤖 AnyClip", tier "ai". The server rejects both (cleanNick has no
+     * emoji and reserves "anyclip"; tier "ai" is server-only), so every call
+     * was a silent 400. AnyClip's answers are shown to the asker only, which
+     * is the behaviour the room has always actually had. Call removed. */
   } catch(e){
     acHideTyping();
     acAddMessage('\ud83e\udd16 AnyClip', 'ai', 'Network query unavailable right now.', Date.now());
@@ -29813,6 +29806,9 @@ body.light #geo-info-side-panel .hw-tip-section {
 /* ══ AnyClip Brain ══ */
 (function(){
   function acCollectStats() {
+    /* v625: warm the Bitcoin total in the background so the next question has
+     * it; /api/bitnodes is edge-cached for an hour, so this is one cheap call. */
+    try { if (typeof _btcNodes !== 'undefined' && !_btcNodes && typeof loadBtcNodes === 'function') loadBtcNodes().catch(()=>{}); } catch(_){}
     const g = id => { try { return (document.getElementById(id)?.textContent||'').replace(/,/g,'').trim()||'?'; } catch(_){ return '?'; } };
     const raw = id => { try { return document.getElementById(id)?.textContent?.trim()||'?'; } catch(_){ return '?'; } };
     let hwActive = '?', hwOffline = '?';
@@ -29839,7 +29835,9 @@ body.light #geo-info-side-panel .hw-tip-section {
       hwl.forEach(r=>{ const cc=r.countryCode||'??'; m[cc]=(m[cc]||0)+1; });
       return Object.entries(m).sort((a,b)=>b[1]-a[1]).slice(0,5).map(([cc,n])=>`${cc}:${n}`).join(', ');
     } catch(_){ return '?'; }})();
-    const fmtDelta = d => (typeof d!=='undefined'&&d!==null) ? ((d>=0?'+':'')+d+' relays') : 'loading';
+    /* v625: null here means the window is not covered by the history we hold
+     * (v542), not "loading" — the model read "loading" as a transient. */
+    const fmtDelta = d => (typeof d!=='undefined'&&d!==null) ? ((d>=0?'+':'')+d+' relays') : 'not available (history does not reach that far back)';
     const trend = (typeof _growthWeekDelta!=='undefined'&&_growthWeekDelta!==null)
       ? (_growthWeekDelta>100?'strongly growing':_growthWeekDelta>0?'growing':_growthWeekDelta<-100?'declining':'stable') : 'unknown';
     return {
@@ -29849,7 +29847,11 @@ body.light #geo-info-side-panel .hw-tip-section {
       hwActiveInConsensus:hwActive, hwFpsCount:(typeof hwFps!=='undefined')?hwFps.size:'?', hwOfflineRegistered:hwOffline,
       totalBW:raw('sBW'), zones:g('sZ'), topZone:g('sM'), avgPerZone:g('sA'),
       countries:raw('rs-countries'), isps:raw('rs-isps'),
-      healthScore:g('btn-health-score'), healthGrade:raw('health-grade'),
+      /* v625: #health-grade is only written when the health panel opens — the
+       * widget sent "—" for the grade next to a real score. Read the score
+       * object instead; fall back to the DOM. */
+      healthScore:(()=>{ try { const h=computeHealthScore?.(); if(h&&Number.isFinite(h.total)) return String(h.total); } catch(_){} return g('btn-health-score'); })(),
+      healthGrade:(()=>{ try { const h=computeHealthScore?.(); if(h&&h.grade) return String(h.grade); } catch(_){} return raw('health-grade'); })(),
       exitZones:zoneCount('exit'), guardZones:zoneCount('guard'), middleZones:zoneCount('middle'), hwZones:zoneCount('hardware'),
       topCountriesStr, topISPsStr, hwLocStr,
       selectedCountry:(typeof selectedCountryName!=='undefined'&&selectedCountryName)?`Currently viewing: ${selectedCountryName} (${selectedCountryIso})`:'Viewing: global (all countries)',
@@ -29860,9 +29862,13 @@ body.light #geo-info-side-panel .hw-tip-section {
        * on-chain .anyone count (v599); btc-total is bitnodes' network total
        * (v605). '—' before load reads as '?' server-side via the raw() fallback. */
       anyoneDomains:(()=>{ const v=raw('dp-total'); return /\d/.test(v)?v:'?'; })(),
-      bitcoinNodes:(()=>{ const v=raw('btc-total'); return /\d/.test(v)?v:'?'; })()
+      /* v625: btc-total is only written when the layer is toggled on; the
+       * loader's cache (_btcNodes) has the total whenever it has been fetched. */
+      bitcoinNodes:(()=>{ try { if (typeof _btcNodes !== 'undefined' && _btcNodes && _btcNodes.total > 0) return _btcNodes.total.toLocaleString(); } catch(_){} const v=raw('btc-total'); return /\d/.test(v)?v:'?'; })()
     };
   }
+  window.acCollectStats = acCollectStats;   /* v625: the Operators Lounge (global scope) needs it */
+
 
   /* v541: buildSystem() removed — 350 lines and a ~26k-char duplicate of the
    * system prompt. The proxy has owned prompt assembly since v537
