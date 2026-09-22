@@ -13296,19 +13296,26 @@ function updateBWTrend(history){
   const delta     = today - yesterday;
   const absDelta  = Math.abs(delta).toFixed(1);
   const pct       = Math.abs(delta / yesterday * 100).toFixed(1);
+  /* v618: "yesterday" is the previous row WITH a bandwidth reading, which is
+   * not always the previous day — the wallet-lookup totals fail on some
+   * ticks (Sep 17, 19, 20 have none). On Sep 21 the arrow compared against
+   * Sep 18 while saying "vs yesterday". Name the day when it is not. */
+  const _pd = bwDays[bwDays.length - 2].date, _td = bwDays[bwDays.length - 1].date;
+  const _isPrevDay = _pd && _td && (new Date(_td + 'T00:00:00Z') - new Date(_pd + 'T00:00:00Z')) === 864e5;
+  const vs = _isPrevDay ? 'vs yesterday' : `vs ${_pd} (last day with a reading)`;
 
   if(Math.abs(delta) < 0.3){
     trendEl.textContent = '→';
     trendEl.style.color = 'rgba(180,220,235,.5)';
-    trendEl.title = `Stable vs yesterday (${yesterday.toFixed(1)} GB/s)`;
+    trendEl.title = `Stable ${vs} (${yesterday.toFixed(1)} GB/s)`;
   } else if(delta > 0){
     trendEl.textContent = `▲ +${absDelta}`;
     trendEl.style.color = '#00c8c8';
-    trendEl.title = `+${absDelta} GB/s vs yesterday (${yesterday.toFixed(1)} → ${today.toFixed(1)} GB/s, +${pct}%)`;
+    trendEl.title = `+${absDelta} GB/s ${vs} (${yesterday.toFixed(1)} → ${today.toFixed(1)} GB/s, +${pct}%)`;
   } else {
     trendEl.textContent = `▼ −${absDelta}`;
     trendEl.style.color = '#ff6b35';
-    trendEl.title = `−${absDelta} GB/s vs yesterday (${yesterday.toFixed(1)} → ${today.toFixed(1)} GB/s, −${pct}%)`;
+    trendEl.title = `−${absDelta} GB/s ${vs} (${yesterday.toFixed(1)} → ${today.toFixed(1)} GB/s, −${pct}%)`;
   }
   trendEl.style.opacity = '1';
 }
