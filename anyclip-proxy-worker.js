@@ -5535,6 +5535,11 @@ function todayKey() {
 }
 /* v600 */
 var GROWTH_TOTAL_FLOOR = 0.6;   /* a day under this fraction of the previous day is provisional */
+var FP_SNAPSHOT_MAX_AGE_MS = 24 * 60 * 60 * 1e3;   /* v613: an index older than a day is not today's network. 24 h, not
+                                                      tighter: before the cron warm (v57) the index was rebuilt only by
+                                                      organic traffic and the Aug 24-31 rows were written from copies
+                                                      4-18 h old that were still that day's real count; the fault is an
+                                                      index that did not change ACROSS days (09-02..07: 35-155 h). */
 async function prevDayTotal(env) {
   try {
     const d = new Date(Date.now() - 864e5).toISOString().slice(0, 10);
@@ -5545,6 +5550,8 @@ async function prevDayTotal(env) {
 function snapshotIsProvisional(s, prevTotal) {
   if (!s) return true;
   if (s.provisional) return true;
+  /* v613: rows written before this version carry fp_built_at but no flag */
+  if (s.fp_built_at && s.ts && (s.ts - s.fp_built_at) > FP_SNAPSHOT_MAX_AGE_MS) return true;
   if (typeof s.zones !== "number" || typeof s.countries !== "number") return true;
   if (typeof s.wallets !== "number" || typeof s.bw_gibs !== "number") return true;   /* v607 */
   if (prevTotal && s.total < prevTotal * GROWTH_TOTAL_FLOOR) return true;
@@ -5701,6 +5708,19 @@ async function storeSnapshot(env) {
     console.warn("[Growth] storeSnapshot: fp-index marked partial, skipping snapshot");
     return null;
   }
+  /* v613: a stale index is not today's network. When every rebuild fails,
+   * buildAndStoreIndex hands back the previous copy (v607 keep-previous, and
+   * before that the same in effect), and this function happily wrote its
+   * total as a new day's row. That is the flat line of 2026-09-01..07: seven
+   * rows of exactly 5,343, the index from 08-31 copied once a day while the
+   * wallet fan-out timed out. Nothing in the row said so — fp_built_at was
+   * recorded and never checked. Now a row built from an index older than
+   * FP_SNAPSHOT_MAX_AGE_MS is provisional: it still stands if nothing better
+   * arrives, but the next tick after a real rebuild replaces it, and readers
+   * (the SPA's v611 filter, anything on /api/growth) see the flag. */
+  const _fpAgeMs = Date.now() - (fpIndex.builtAt || 0);
+  const _fpStale = !fpIndex.builtAt || _fpAgeMs > FP_SNAPSHOT_MAX_AGE_MS;
+  if (_fpStale) console.warn(`[Growth] storeSnapshot: fp-index is ${Math.round(_fpAgeMs / 36e5)} h old — row will be provisional`);
 
   /* Bandwidth and wallet count still come from the /network rollup —
    * they don't depend on flag classification and the upstream provides
@@ -5747,6 +5767,10 @@ async function storeSnapshot(env) {
     fp_built_at: fpIndex.builtAt || null
   };
   if (!_totalsOk) { snapshot.provisional = true; snapshot.provisionalReason = "wallet-lookup totals unavailable"; }
+  if (_fpStale) {   /* v613 */
+    snapshot.provisional = true;
+    snapshot.provisionalReason = (snapshot.provisionalReason ? snapshot.provisionalReason + "; " : "") + `fp-index ${Math.round(_fpAgeMs / 36e5)} h old (built ${fpIndex.builtAt ? new Date(fpIndex.builtAt).toISOString() : "unknown"})`;
+  }
 
   /* Optional: zones/countries/isps from the geo fingerprint-map.
    * Same as v45 behavior, kept intact. Non-fatal on failure. */
@@ -5874,7 +5898,16 @@ async function getGrowthHistory(env, days = GROWTH_DAYS) {
       d.setUTCDate(d.getUTCDate() - i);
       const key = GROWTH_PREFIX + d.toISOString().slice(0, 10);
       return env.FP_INDEX.get(key, { type: "json" }).then((v) => {
-        if (v) history.push(v);
+        if (!v) return;
+        /* v613: rows written before this version were never flagged, but they
+         * recorded fp_built_at. Flag them at read time so every consumer of
+         * /api/growth — not just the SPA's neighbour test — sees which rows
+         * were copies of a stale index (2026-09-01..07 = 08-31's index). */
+        if (!v.provisional && v.fp_built_at && v.ts && (v.ts - v.fp_built_at) > FP_SNAPSHOT_MAX_AGE_MS) {
+          v.provisional = true;
+          v.provisionalReason = `fp-index ${Math.round((v.ts - v.fp_built_at) / 36e5)} h old at write (flagged on read)`;
+        }
+        history.push(v);
       }).catch(() => {
       });
     })
