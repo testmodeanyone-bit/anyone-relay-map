@@ -16553,11 +16553,7 @@ try{
     const crossMsg = `🔗 ${linkedBanned} linked account${linkedBanned>1?'s':''} on the same device also banned.`;
     acAddWarning('AnyClip', crossMsg);
   }
-  if(_acUser) fetch(AC_PROXY + '/api/chat-send', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ nick: '🤖 AnyClip', tier: 'ai', wallet: 'anyclip', text: msg, time: Date.now() })
-  }).catch(()=>{});
+  /* v627: room post as AnyClip/System removed — the server rejects the nick (reserved / emoji), the wallet and the 'ai' tier, so this was a silent 400 on every call. */
 }
 function acHWLogo(color, size=18){
   return `<svg aria-hidden="true" width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
@@ -19543,9 +19539,7 @@ function acPinMessage(nick, text, pinnedBy){
   if(AC.ws && AC.ws.readyState === WebSocket.OPEN){
     AC.ws.send(JSON.stringify({ type: 'pin', nick: nick, text: text, pinnedBy: AC.pinnedMsg.pinnedBy, time: AC.pinnedMsg.time }));
   }
-  try { fetch(AC_PROXY + '/api/chat-send', { method:'POST', headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({ nick: 'System', tier: 'ai', text: '[pinned] ' + nick + ': ' + text.substring(0,200), time: Date.now(), wallet: '_system' })
-  }).catch(()=>{}); } catch(e){}
+  /* v627: room post as AnyClip/System removed — the server rejects the nick (reserved / emoji), the wallet and the 'ai' tier, so this was a silent 400 on every call. */
   acLoadPinned();
   const feed = document.getElementById('anychat-feed');
   if(feed){
@@ -19565,11 +19559,7 @@ function acPinMessage(nick, text, pinnedBy){
       }
     }
   }
-  fetch(AC_PROXY + '/api/chat-send', {
-    method: 'POST', headers: {'Content-Type':'application/json'},
-    body: JSON.stringify({ nick: '🤖 AnyClip', tier: 'ai', wallet: 'anyclip',
-      text: `📌 Pinned message from ${nick}: "${text.slice(0,60)}${text.length>60?'...':''}"`, time: Date.now() })
-  }).catch(()=>{});
+  /* v627: room post as AnyClip/System removed — the server rejects the nick (reserved / emoji), the wallet and the 'ai' tier, so this was a silent 400 on every call. */
 }
 
 function acUnpinMessage(){
@@ -19647,7 +19637,7 @@ async function acRequestPin(nick){
     const result = await res.json();
     if(result.approve){
       acPinMessage(lastMsg.nick, lastMsg.text, '🤖 AnyClip');
-      acAddMessage('🤖 AnyClip', 'ai', '📌 Message pinned! ' + (result.reason || ''), Date.now());
+      acAddMessage('🤖 AnyClip', 'ai', '📌 Message pinned in your lounge view. ' + (result.reason || ''), Date.now());
     } else {
       acAddMessage('🤖 AnyClip', 'ai', '📌 Pin request denied — ' + (result.reason || 'not relevant enough for a pin.'), Date.now());
     }
@@ -20195,20 +20185,12 @@ async function acReportUser(e, btn){
          is the local action, 'ban' is the verdict. */
       if(result.action === 'ban'){
         acBlockUser(nick);
-        acAddMessage('🤖 AnyClip', 'ai', `🚫 ${nick} has been blocked: ${result.reason || 'Violated community guidelines.'}`, Date.now());
-        fetch(AC_PROXY + '/api/chat-send', {
-          method: 'POST', headers: {'Content-Type':'application/json'},
-          body: JSON.stringify({ nick: '🤖 AnyClip', tier: 'ai', wallet: 'anyclip',
-            text: `🚫 ${nick} has been blocked by AnyClip: ${result.reason || 'Community guidelines violation.'}`, time: Date.now() })
-        }).catch(()=>{});
+        acAddMessage('🤖 AnyClip', 'ai', `🚫 ${nick} is now hidden from your lounge view: ${result.reason || 'Violated community guidelines.'} (Reports go to the operators; blocks apply to this browser only.)`, Date.now());
+  /* v627: room post as AnyClip/System removed — the server rejects the nick (reserved / emoji), the wallet and the 'ai' tier, so this was a silent 400 on every call. */
       } else if(result.action === 'mute'){
         acMuteUser(nick);
-        acAddMessage('🤖 AnyClip', 'ai', `🔇 ${nick} has been muted: ${result.reason || 'Inappropriate behavior.'}`, Date.now());
-        fetch(AC_PROXY + '/api/chat-send', {
-          method: 'POST', headers: {'Content-Type':'application/json'},
-          body: JSON.stringify({ nick: '🤖 AnyClip', tier: 'ai', wallet: 'anyclip',
-            text: `🔇 ${nick} has been muted by AnyClip: ${result.reason || 'Inappropriate behavior.'}`, time: Date.now() })
-        }).catch(()=>{});
+        acAddMessage('🤖 AnyClip', 'ai', `🔇 ${nick} is now muted in your lounge view: ${result.reason || 'Inappropriate behavior.'} (This applies to this browser only.)`, Date.now());
+  /* v627: room post as AnyClip/System removed — the server rejects the nick (reserved / emoji), the wallet and the 'ai' tier, so this was a silent 400 on every call. */
       } else {
         acAddMessage('🤖 AnyClip', 'ai', `✅ Report dismissed — ${result.reason || 'No violation found. The message appears to be fine.'}`, Date.now());
       }
