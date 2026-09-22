@@ -23780,6 +23780,7 @@ async function fetchUptimeAndGeoData(){
 
   const newStableFps   = new Set();
   const newFastFps     = new Set();
+  let _committedStable = 0, _committedFast = 0;   /* v640 */
   const newGeoBoostFps = new Set();
 
   // Returns true if the wallet returned any relays (used for retry logic).
@@ -23827,8 +23828,17 @@ async function fetchUptimeAndGeoData(){
   // the progressive (in-loop) pass historically deferred it to the
   // final commit for reasons lost to time. Preserved for parity.
   function commitEnrichment(includeGeoBoost){
-    stableFps = newStableFps;
-    fastFps   = newFastFps;
+    /* v640: MERGE, never replace. This pass sees only the top-30 wallets, but
+     * enrichAllViaAnyoneAPI folds Stable/Fast flags for the WHOLE network into
+     * the same sets (4,877 Stable on 2026-09-22). Replacing the sets here
+     * shrank them to the top-30 subset (3,993 — or fewer mid-pass), and since
+     * the two fetches race, "% Stable" landed anywhere from 52% to 96% on
+     * different page loads and the health grade flipped between B+ and A.
+     * Same rule exitFps/guardFps already follow: a partial view adds, it
+     * never removes. */
+    for(const fp of newStableFps){ stableFps.add(fp); fastFps.delete(fp); }
+    for(const fp of newFastFps){ if(!stableFps.has(fp)) fastFps.add(fp); }
+    _committedStable = newStableFps.size; _committedFast = newFastFps.size;
     if(includeGeoBoost) geoBoostFps = newGeoBoostFps;
     tagZones(relayData);
     /* v323 perf: skip the 1,700-element SVG redraw when no flags arrived */
@@ -23880,7 +23890,7 @@ async function fetchUptimeAndGeoData(){
       // Progressive render: commit if the new sets actually grew this batch.
       // geoBoostFps intentionally deferred to the final commit (parity with
       // pre-refactor behavior).
-      if(newStableFps.size > stableFps.size || newFastFps.size > fastFps.size){
+      if(newStableFps.size > _committedStable || newFastFps.size > _committedFast){   /* v640: grew since last commit */
         commitEnrichment(false);
       }
     }
