@@ -29,7 +29,11 @@ if (noLint) {
 } else {
   const linter = path.join(__dirname, 'lint-xss.js');
   if (!fs.existsSync(linter)) {
-    console.error('\x1b[33m⚠  lint-xss.js not found beside build-worker.js — XSS gate NOT enforced.\x1b[0m');
+    /* A gate that silently skips when its script is missing is not a gate.
+     * Every gate below fails the build if its file is absent; --no-lint is
+     * the only way past the policy gates, and nothing gets past the syntax one. */
+    console.error('\x1b[31mFATAL: lint-xss.js not found beside build-worker.js — XSS gate cannot run. Restore the file or use --no-lint (loud).\x1b[0m');
+    process.exit(10);
   } else {
     try {
       execFileSync(process.execPath, [linter, indexPath, shellPath], { stdio: 'inherit' });
@@ -62,7 +66,8 @@ if (noLint) {
  * not parse is never a judgement call, so this gate has no override. */
 const syntaxGate = path.join(__dirname, 'check-scripts.mjs');
 if (!fs.existsSync(syntaxGate)) {
-  console.error('\x1b[33m⚠  check-scripts.mjs not found beside build-worker.js — syntax gate NOT enforced.\x1b[0m');
+  console.error('\x1b[31mFATAL: check-scripts.mjs not found beside build-worker.js — the syntax gate has no override and cannot be skipped by omission either.\x1b[0m');
+  process.exit(11);
 } else {
   try {
     execFileSync(process.execPath, [syntaxGate, indexPath], { stdio: 'inherit' });
@@ -89,7 +94,8 @@ if (!fs.existsSync(syntaxGate)) {
 if (!noLint) {
   const deadIds = path.join(__dirname, 'check-dead-ids.js');
   const allowFile = path.join(__dirname, 'dead-ids.allow');
-  if (fs.existsSync(deadIds)) {
+  if (!fs.existsSync(deadIds)) { console.error('\x1b[31mFATAL: check-dead-ids.js not found beside build-worker.js.\x1b[0m'); process.exit(12); }
+  {
     try {
       const args = [deadIds];
       if (fs.existsSync(allowFile)) args.push('--allow-file', allowFile);
@@ -113,7 +119,8 @@ if (!noLint) {
 if (!noLint) {
   const deadFns = path.join(__dirname, 'check-dead-fns.js');
   const allowFile = path.join(__dirname, 'dead-fns.allow');
-  if (fs.existsSync(deadFns)) {
+  if (!fs.existsSync(deadFns)) { console.error('\x1b[31mFATAL: check-dead-fns.js not found beside build-worker.js.\x1b[0m'); process.exit(13); }
+  {
     try {
       const args = [deadFns, indexPath];
       if (fs.existsSync(allowFile)) args.push('--allow-file', allowFile);
@@ -148,7 +155,7 @@ let index = fs.readFileSync(indexPath, 'utf8');
  * new step that could produce something that does not parse.
  *
  * Skip with --no-minify (e.g. to bisect a bug against readable source). */
-const noMinify = process.argv.includes('--no-minify');
+const noMinify = rawArgs.includes('--no-minify');
 async function minifyIndex(html) {
   if (noMinify) { console.log('minify: skipped (--no-minify)'); return html; }
   let minify;
