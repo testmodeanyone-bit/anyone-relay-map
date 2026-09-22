@@ -7012,10 +7012,11 @@ var worker_source_default = {
      * start (warms over ~7 ticks) but is complete and fresh in steady state. */
     if (url.pathname === "/health" && request.method === "GET") {
       const now = Date.now();
-      let cronHealth = {}, enrichBuiltAt = 0;
+      let cronHealth = {}, enrichBuiltAt = 0, fpBuiltAt = 0;
       if (env.FP_INDEX) {
         try { cronHealth = await readCronHealth(env); } catch (_) {}   /* v612 */
         try { const e = await env.FP_INDEX.get(ENRICH_NONWALLET_KEY); if (e) enrichBuiltAt = (JSON.parse(e).builtAt) || 0; } catch (_) {}
+        try { const f = await env.FP_INDEX.get(KV_KEY, { type: "json" }); if (f) fpBuiltAt = f.builtAt || 0; } catch (_) {}   /* v615 */
       }
       // staleness: enrichment cron should touch its data well within ~45 min
       const STALE_MS = 45 * 60 * 1e3;
@@ -7038,15 +7039,21 @@ var worker_source_default = {
         if (age > limit) staleTasks.push(task);
         if (t) t.lastSuccessAgoMin = isFinite(age) ? Math.round(age / 6e4) : null;
       }
-      const healthy = !enrichmentStale && failingTasks.length === 0 && staleTasks.length === 0;
+      const fpStale = !fpBuiltAt || (now - fpBuiltAt) > FP_SNAPSHOT_MAX_AGE_MS;   /* v615 */
+      const healthy = !enrichmentStale && !fpStale && failingTasks.length === 0 && staleTasks.length === 0;
       const body = {
         ok: healthy,
         checkedAt: now,
         enrichment: { builtAt: enrichBuiltAt, ageMin: enrichAgeMs != null ? Math.round(enrichAgeMs / 6e4) : null, stale: enrichmentStale },
+        /* v615: age of the relay index every headline number is built from.
+         * The warm rebuilds one tick before STALE_MS (55 min); anything past
+         * FP_SNAPSHOT_MAX_AGE_MS means the growth row is being written
+         * provisional (v613) and /bitcoin is on its last good copy (v614). */
+        fpIndex: { builtAt: fpBuiltAt, ageMin: fpBuiltAt ? Math.round((now - fpBuiltAt) / 6e4) : null, stale: !fpBuiltAt || (now - fpBuiltAt) > FP_SNAPSHOT_MAX_AGE_MS },
         cron: cronHealth,
         failingTasks,
         staleTasks,   /* v612 */
-        note: healthy ? "all cron tasks healthy" : (enrichmentStale ? "enrichment data stale — cron may have stalled" : failingTasks.length ? "cron task(s) failing: " + failingTasks.join(", ") : "cron task(s) silent past their cadence: " + staleTasks.join(", "))
+        note: healthy ? "all cron tasks healthy" : (fpStale ? "relay index is stale — rebuilds are failing" : enrichmentStale ? "enrichment data stale — cron may have stalled" : failingTasks.length ? "cron task(s) failing: " + failingTasks.join(", ") : "cron task(s) silent past their cadence: " + staleTasks.join(", "))
       };
       return new Response(JSON.stringify(body, null, 2), { status: healthy ? 200 : 503, headers: jsonHeaders({ "Cache-Control": "no-store" }) });
     }
@@ -12874,7 +12881,20 @@ Issued: ${(/* @__PURE__ */ new Date()).toISOString()}
           console.log("[cron] fp-index missing \u2014 warming from cold");
         }
         if (needWarm) {
-          await buildAndStoreIndex(env);
+          /* v615: buildAndStoreIndex returns the PREVIOUS index when the rebuild
+           * fails (page-1 lost, or >2% of wallets dropped) — by design, so the
+           * map keeps serving. But it returns rather than throws, so this task
+           * recorded "success" on every one of those ticks. During 2026-09-01..07
+           * the index was not rebuilt for a week and /health said fpindex was
+           * fine the whole time. A kept-previous result from THIS run is a
+           * failure for the health record; the data path is unchanged. */
+          const _t0 = Date.now();
+          const res = await buildAndStoreIndex(env);
+          const _keptOld = res && ((res.lastFailedBuildAt && res.lastFailedBuildAt >= _t0) || (res.lastDegradedAttempt && res.lastDegradedAttempt.ts >= _t0));
+          if (_keptOld) {
+            const why = res.lastFailedBuildAt >= _t0 ? String(res.lastBuildError || "listing failed") : `dropRate ${res.lastDegradedAttempt.dropRate} (${res.lastDegradedAttempt.failedWallets} wallets)`;
+            throw new Error(`rebuild failed (${why}); serving index built ${res.builtAt ? new Date(res.builtAt).toISOString() : "unknown"}`);
+          }
           console.log("[cron] fp-index warm complete");
         }
         await recordCronOutcome(env, "fpindex", true);
