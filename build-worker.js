@@ -189,7 +189,11 @@ const HTML_TOKEN = '"__INDEX_HTML_PLACEHOLDER__"';
 if (shell.indexOf(HTML_TOKEN) === -1) {
   console.error('FATAL: ' + HTML_TOKEN + ' not found in shell'); process.exit(2);
 }
-shell = shell.replace(HTML_TOKEN, JSON.stringify(index));
+/* v2: function replacement. With a string, String.prototype.replace interprets
+ * `$&`, `$'`, `$\`` and `$1` inside the HTML — so any `$&` in index.html (a
+ * regex-escape idiom) re-inserted the placeholder and the build died with
+ * "a placeholder survived". A function returns the text verbatim. */
+shell = shell.replace(HTML_TOKEN, function(){ return JSON.stringify(index); });
 
 // 2) KV schema: wrap source in an IIFE returning the export object.
 const KV_TOKEN = '__KV_SCHEMA_PLACEHOLDER__';
@@ -201,7 +205,7 @@ const kvIife =
   kv +
   '\nreturn { SCHEMA_VERSION: SCHEMA_VERSION, SNAPSHOT_KEY: SNAPSHOT_KEY, ' +
   'EXIT_RELAYS_LATEST: EXIT_RELAYS_LATEST, validate: validate, extract: extract };\n})()';
-shell = shell.replace(KV_TOKEN, kvIife);
+shell = shell.replace(KV_TOKEN, function(){ return kvIife; });
 
 // Guard: ensure no placeholder survived.
 if (/__(INDEX_HTML|KV_SCHEMA)_PLACEHOLDER__/.test(shell)) {

@@ -629,10 +629,10 @@ setTimeout(function() {
     var actions = [
       { id: 'btc', title: 'Toggle Bitcoin nodes overlay', subtitle: 'Show/hide Bitcoin network nodes on map', group: 'Network', icon: '₿', fn: function(){ if(typeof toggleBtcNodes==='function') toggleBtcNodes(); }, keywords: 'bitcoin btc nodes overlay', className: 'btc' },
       { id: 'signals', title: 'Toggle Signals', subtitle: 'Show/hide live traffic arcs on map', group: 'Network', icon: '➤', fn: function(){ if(typeof toggleSignals==='function') toggleSignals(); }, keywords: 'signals traffic arcs live' },
-      { id: 'relays', title: 'Open Relay Browser', subtitle: 'Search and filter all relays', group: 'Browse', icon: '▣', fn: function(){ var b = document.getElementById('relay-browser-toggle') || document.querySelector('[onclick*="openRelayBrowser"]'); if(b) b.click(); else if(typeof openRelayBrowser==='function') openRelayBrowser(); }, keywords: 'relay browser search filter list' },
-      { id: 'health', title: 'Open Health Panel', subtitle: 'View network health score breakdown', group: 'Browse', icon: '❤', fn: function(){ if(typeof openHealthPanel==='function') openHealthPanel(); }, keywords: 'health score network quality' },
-      { id: 'alerts', title: 'Open Alerts', subtitle: 'View active network alerts', group: 'Browse', icon: '▲', fn: function(){ if(typeof toggleAlertPanel==='function') toggleAlertPanel(); }, keywords: 'alerts warnings notifications' },
-      { id: 'domains', title: 'Open Domains', subtitle: 'Browse .anyone domains', group: 'Browse', icon: '⊕', fn: function(){ var b = document.getElementById('btn-domains'); if(b) b.click(); }, keywords: 'domains anyone namespace dns' },
+      { id: 'relays', title: 'Open Relay Browser', subtitle: 'Search and filter all relays', group: 'Browse', icon: '▣', fn: function(){ /* v641: open, never toggle — "Open" ran twice used to close it */ if(typeof isMobile==='function' && isMobile()){ if(typeof _bsOpen!=='undefined' && !_bsOpen && typeof mobileToggleRelays==='function') mobileToggleRelays(); } else if(typeof openRelayBrowser==='function') openRelayBrowser(true); }, keywords: 'relay browser search filter list relays' },
+      { id: 'health', title: 'Open Health Panel', subtitle: 'View network health score breakdown', group: 'Browse', icon: '❤', fn: function(){ var hp = document.getElementById('health-panel'); if(hp && hp.style.display === 'flex') return; /* v641: already open */ if(typeof openHealthPanel==='function') openHealthPanel(); }, keywords: 'health score network quality grade' },
+      { id: 'alerts', title: 'Open Alerts', subtitle: 'View active network alerts', group: 'Browse', icon: '▲', fn: function(){ var ap = document.getElementById('alert-panel'); if(ap && ap.classList.contains('open')) return; /* v641 */ if(typeof toggleAlertPanel==='function') toggleAlertPanel(); }, keywords: 'alerts warnings notifications' },
+      { id: 'domains', title: 'Open Domains', subtitle: 'Browse .anyone domains', group: 'Browse', icon: '⊕', fn: function(){ if(typeof DOM_PANEL!=='undefined' && DOM_PANEL.open) return; /* v641 */ var b = document.getElementById('btn-domains'); if(b) b.click(); }, keywords: 'domains anyone namespace dns' },
       { id: 'theme', title: 'Toggle Theme', subtitle: 'Switch between light and dark mode', group: 'Settings', icon: '☀', fn: function(){ if(typeof toggleTheme==='function') toggleTheme(); }, keywords: 'theme dark light mode appearance' },
       { id: 'explore', title: 'Start Explore Mode', subtitle: 'Interactive guided tour for newcomers', group: 'Settings', icon: '▶', fn: function(){ if(typeof applyAppMode==='function') applyAppMode('explore'); if(typeof obStart==='function') obStart(); }, keywords: 'explore tour onboarding intro guide new' },
       { id: 'styleguide', title: 'Open Style Guide', subtitle: 'View design tokens and components', group: 'Settings', icon: '☸', fn: function(){ window.open('/style-guide', '_blank'); }, keywords: 'style guide design tokens components documentation' },
@@ -659,11 +659,7 @@ setTimeout(function() {
           group: 'Countries',
           icon: '⚑',
           keywords: name + ' ' + info.cc + ' country jump',
-          fn: function(){
-            // Try to zoom to country
-            if (typeof zoomToCountry === 'function') zoomToCountry(info.cc);
-            else if (info.lat && info.lon && typeof zoomToLocation === 'function') zoomToLocation(info.lat, info.lon);
-          }
+          fn: function(){ jumpToCountry(info.cc); }
         });
       });
     } catch(e) {}
@@ -671,6 +667,31 @@ setTimeout(function() {
     return cmds;
   }
   
+  /* v641: "Jump to <country>" called zoomToCountry()/zoomToLocation(), neither of
+   * which has ever existed in this file — all 60 country commands were no-ops
+   * (verified live: map centre unchanged after Enter). Now: fit the MapLibre
+   * camera to the bounding box of that country's relays (robust across the
+   * antimeridian and for countries with no topo feature: SM, LI, AD, HK, SG),
+   * and run the existing selectCountry() flow for the dim/drawer UI when the
+   * topo feature exists. */
+  function jumpToCountry(cc) {
+    try {
+      var relays = (window.allRelays || allRelays || []).filter(function(r){ return r && r.countryCode === cc && Number.isFinite(r.lat) && Number.isFinite(r.lon); }); /* Number.isFinite: isFinite(null) is true and 154 US relays carry null coords */
+      var ML = window.__anyoneMapLibre;
+      if (ML && relays.length) {
+        var minLon = 180, maxLon = -180, minLat = 90, maxLat = -90;
+        relays.forEach(function(r){ if(r.lon<minLon)minLon=r.lon; if(r.lon>maxLon)maxLon=r.lon; if(r.lat<minLat)minLat=r.lat; if(r.lat>maxLat)maxLat=r.lat; });
+        try { ML.stop(); } catch(_) {}
+        if (relays.length === 1 || (maxLon - minLon < 0.05 && maxLat - minLat < 0.05)) ML.flyTo({ center:[minLon, minLat], zoom: 6, duration: 900, essential: true });
+        else ML.fitBounds([[minLon, minLat], [maxLon, maxLat]], { padding: 80, maxZoom: 6, duration: 900, essential: true });
+      }
+      if (typeof worldTopo !== 'undefined' && worldTopo && typeof featToIso === 'function' && typeof selectCountry === 'function') {
+        var feats = topojson.feature(worldTopo, worldTopo.objects.countries).features;
+        for (var i = 0; i < feats.length; i++) { if (featToIso(feats[i]) === cc) { selectCountry(+feats[i].id, feats[i], !!ML); break; } }
+      }
+    } catch(e) { console.warn('jumpToCountry', e); }
+  }
+
   function fuzzyMatch(query, text) {
     if (!query) return { score: 0, match: true };
     query = query.toLowerCase();
@@ -701,10 +722,24 @@ setTimeout(function() {
       var nonCountries = all.filter(function(c){ return c.group !== 'Countries'; });
       return recentCmds.concat(nonCountries);
     }
+    /* v641: field-aware ranking. One flat "title subtitle keywords" string ranked
+     * by substring position, so "us" put Austria, Australia, Russia and Cyprus
+     * above United States, "de" put Denmark and Sweden above Germany, and
+     * "relays" put "Jump to Japan" (subtitle "… relays · JP") above the Relay
+     * Browser. Now: an exact keyword token (country code) wins, then a match at
+     * the start of a title word, then a title substring, then keywords, then
+     * subtitle, and character-order fuzzy last. */
+    var q = query.toLowerCase().trim();
     var scored = all.map(function(c){
-      var searchText = c.title + ' ' + (c.subtitle || '') + ' ' + (c.keywords || '');
-      var m = fuzzyMatch(query, searchText);
-      return { cmd: c, score: m.score, match: m.match };
+      var title = (c.title || '').toLowerCase(), sub = (c.subtitle || '').toLowerCase(), kw = (c.keywords || '').toLowerCase();
+      var score = 0;
+      if (kw.split(/\s+/).indexOf(q) > -1) score = 5000;
+      else if (new RegExp('(^|\\s)' + q.replace(/[.*+?^${}()|[\]\\]/g, function(ch){ return '\\' + ch; })).test(title)) score = 4000 - title.indexOf(q);
+      else if (title.indexOf(q) > -1) score = 3000 - title.indexOf(q);
+      else if (kw.indexOf(q) > -1) score = 2000 - kw.indexOf(q);
+      else if (sub.indexOf(q) > -1) score = 1000 - sub.indexOf(q);
+      else { var m = fuzzyMatch(q, title + ' ' + kw); score = m.match ? m.score : 0; }
+      return { cmd: c, score: score, match: score > 0 };
     }).filter(function(x){ return x.match; });
     scored.sort(function(a, b){ return b.score - a.score; });
     return scored.slice(0, 50).map(function(x){ return x.cmd; });
