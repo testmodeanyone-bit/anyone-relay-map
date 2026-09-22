@@ -12925,7 +12925,17 @@ Issued: ${(/* @__PURE__ */ new Date()).toISOString()}
         } else {
           console.log("[cron] cache empty \u2014 warming from cold");
         }
-        await buildAndStoreUptimes(env);
+        /* v616: same blind spot as v615's fp-index. The degraded guard keeps the
+         * previous uptimes cache when >2% of wallets are lost — right for the
+         * data, but it returns instead of throwing and this task recorded a
+         * success for a build that produced nothing new. A kept-previous result
+         * from this run is a failure for the health record. */
+        const _t0 = Date.now();
+        const res = await buildAndStoreUptimes(env);
+        if (res && res.lastDegradedAttempt && res.lastDegradedAttempt.ts >= _t0) {
+          const d = res.lastDegradedAttempt;
+          throw new Error(`rebuild degraded (dropRate ${d.dropRate}, ${d.walletTimeouts} wallets lost, partial ${d.partialCount} relays); serving cache built ${res.builtAt ? new Date(res.builtAt).toISOString() : "unknown"}`);
+        }
         console.log("[cron] warm complete");
         ctx.waitUntil(recordCronOutcome(env, "uptimes", true));
       } catch (e) {
