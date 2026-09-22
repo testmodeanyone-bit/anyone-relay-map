@@ -7004,13 +7004,22 @@ var worker_source_default = {
           const raw = await env.FP_INDEX.get(KV_UPTIME_KEY);
           const _kvDt = Date.now() - _kvT0;
           if (raw) {
-            const cached = JSON.parse(raw);
-            if (cached && cached.relays && Object.keys(cached.relays).length > 0) {
-              const age = Date.now() - (cached.builtAt || 0);
+            /* v628: the 1 MB body was JSON.parse'd on every request only to read
+             * builtAt and count; the response was the raw string anyway. Both
+             * fields sit in the trailing metadata buildAndStoreUptimes writes
+             * (…"count":N,…"builtAt":ms…), so a regex over the tail is enough.
+             * Falls back to a parse if the tail does not match (old shape). */
+            const _tail = raw.slice(-600);
+            let _builtAt = 0, _count = 0;
+            const _mb = /"builtAt":(\d{10,})/.exec(_tail), _mc = /"count":(\d+)/.exec(_tail);
+            if (_mb && _mc) { _builtAt = Number(_mb[1]); _count = Number(_mc[1]); }
+            else { try { const c = JSON.parse(raw); _builtAt = c.builtAt || 0; _count = c.relays ? Object.keys(c.relays).length : 0; } catch (_) {} }
+            if (_count > 0) {
+              const age = Date.now() - _builtAt;
               const isStale = age > UPTIME_STALE_MS;
               const ageMin = Math.round(age / 6e4);
               const sizeKb = Math.round(raw.length / 1024);
-              console.log(`[all-uptimes] CACHE ${isStale ? "STALE" : "HIT"} \u2014 age=${ageMin}min size=${sizeKb}KB relays=${Object.keys(cached.relays).length} kv_read_ms=${_kvDt}`);
+              console.log(`[all-uptimes] CACHE ${isStale ? "STALE" : "HIT"} \u2014 age=${ageMin}min size=${sizeKb}KB relays=${_count} kv_read_ms=${_kvDt}`);
               if (isStale) ctx.waitUntil(buildAndStoreUptimes(env).catch((e) => console.error("[all-uptimes] bg rebuild failed:", e.message)));
               return new Response(raw, {
                 headers: jsonHeaders({
@@ -7211,12 +7220,14 @@ var worker_source_default = {
       }
       if (!bust && env.FP_INDEX) {
         try {
-          const cached = await env.FP_INDEX.get(KV_KEY, { type: "json" });
-          if (cached && cached.index) {
-            const age = Date.now() - (cached.builtAt || 0);
+          /* v628: text pass-through instead of parse + stringify per request. */
+          const _rawIdx = await env.FP_INDEX.get(KV_KEY, { type: "text" });
+          const _mba = _rawIdx ? /"builtAt":(\d{10,})/.exec(_rawIdx) : null;
+          if (_rawIdx && _rawIdx.indexOf('"index":') !== -1 && _mba) {
+            const age = Date.now() - Number(_mba[1]);
             const isStale = age > STALE_MS;
             if (isStale) ctx.waitUntil(buildAndStoreIndex(env).catch((e) => console.warn("[fp-index] bg rebuild failed:", e && e.message)));
-            return new Response(JSON.stringify(cached), {
+            return new Response(_rawIdx, {
               headers: jsonHeaders({
                 "X-Cache": isStale ? "STALE" : "HIT",
                 "X-Age": (age / 1e3).toFixed(0) + "s",
