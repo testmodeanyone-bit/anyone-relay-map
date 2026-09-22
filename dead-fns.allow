@@ -1,0 +1,17 @@
+# dead-fns.allow — functions check-dead-fns.js may skip, with the reason.
+# Generated 2026-09-22 from the first run. Each is declared and never called;
+# delete the function and its line here together when you next touch the area.
+acJoinOpen                 # Lounge join dialog opener — dialog markup removed
+acStopPolling              # poll loop stop — polling now stops via visibilitychange
+acHandleWSMessage          # websocket handler — AC.ws is always null (no WS transport)
+acRepGetRateLimit          # reputation rate-limit helper — reputation UI removed
+acSetTheme                 # theme setter — acToggleTheme() is the live path
+acGetRotationInfo          # key-rotation info — E2E rotation UI removed
+acParseSIWEMessage         # SIWE parser — sign-in flow moved server-side
+acDBClear                  # IndexedDB clear — debug helper, no caller
+acClearDOMCache            # debug helper, no caller
+acDmSendTyping             # DM typing indicator — DMs removed
+acGetThreadCount           # thread count — threads UI removed
+opRenderContactsDebounced  # operator contacts debounce — contacts panel removed
+toggleGeoBoost             # v27: intentional no-op stub (geo badge auto-shows)
+toggleStableOverlay        # v486: fail-soft stub kept for old shortcuts/macros
