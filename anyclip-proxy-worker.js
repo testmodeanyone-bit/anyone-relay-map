@@ -5877,6 +5877,15 @@ async function storeSnapshot(env) {
       }
       if (!_publishedValidation.ok) {
         console.error("[v53 kv-schema] [storeSnapshot/fresh] REFUSED invalid write:", JSON.stringify({ errors: _publishedValidation.errors, fields_seen: _publishedValidation.fields_seen }));
+      } else if (snapshot.provisional) {
+        /* v614: a provisional row is kept in the growth series (flagged, and
+         * rebuilt by a later tick) but is NOT the /bitcoin page's headline. On
+         * 2026-09-19 the 00:00 UTC tick counted 2,754 relays off a lost page and
+         * this branch published it: exit-relays:latest — the source of every
+         * figure on /bitcoin — carried a half-size network until the next good
+         * build. The last good copy keeps serving instead; the growth row is
+         * unaffected. */
+        console.warn("[Growth] SNAPSHOT_KV publish skipped — provisional row: " + snapshot.provisionalReason);
       } else {
         /* M4 NOTE: 7-day TTL intentional; see cached-path note above and
          * worker-shell.js. Deliberately differs from bitnodes (no TTL). */
