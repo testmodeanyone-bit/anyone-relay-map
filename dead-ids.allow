@@ -1,0 +1,24 @@
+# dead-ids.allow — ids that check-dead-ids.js may skip, with the reason.
+# Generated 2026-09-22 from the first run of the gate. Every entry below is a
+# lookup guarded by `if(!el)` whose element was removed in an earlier version;
+# the code path is dead but harmless. Delete the code and the line together.
+ac-e2e-dl-cancel        # E2E download prompt buttons — dialog markup removed
+ac-e2e-dl-send          # E2E download prompt buttons — dialog markup removed
+ac-gif-picker           # GIF picker panel removed; toggle still referenced
+ac-notif-badge-nav      # nav notification badge — mobile nav redesigned
+anychat-online-list     # replaced by acRenderOnline()'s own container
+bottom-bar              # legacy layout bar
+btn-anychat             # legacy AnyChat button; panel toggled from the beacon now
+btn-btc                 # legacy id; live button is sb-btc (fallback lookup)
+lc-delta                # v-old live counter — animateCounter() returns at the first guard
+lc-number               # v-old live counter — animateCounter() returns at the first guard
+lc-pulse                # v-old live counter
+legend-stable           # v486 removed the STABLE legend chip; toggleStableOverlay fails soft
+map-relay-hero          # hero counter removed; toggleSidebar guards it
+mrh-delta               # hero counter removed
+mrh-number              # hero counter removed
+op-dm-typing            # DM typing indicator removed with DMs
+ov-stable               # v486 removed the checkbox; toggleStableOverlay fails soft
+relay-browser-toggle    # legacy toggle id
+signals-panel           # legacy signals panel; sig-counts is the live one
+top-bar                 # legacy layout bar

@@ -8193,6 +8193,8 @@ input:focus-visible, textarea:focus-visible, select:focus-visible{
         <button class="alert-filter" data-filter="zone" onclick="filterAlerts('zone')" data-i18n="alertFilterZones">ZONES</button>
         <!-- v248 (Bug A8): added MILESTONES filter so milestone alerts have their own bucket -->
         <button class="alert-filter" data-filter="milestone" onclick="filterAlerts('milestone')" data-i18n="alertFilterMilestones">MILESTONES</button>
+        <!-- v638: updateAlertBadge() has written "{n} alerts" here since v248; the element never existed (found by check-dead-ids). -->
+        <span id="alert-count-label" style="margin-left:auto;font-size:9px;color:rgba(180,220,235,.5);align-self:center;white-space:nowrap"></span>
       </div>
       <div id="alert-list">
         <div class="alert-empty" data-i18n="alertMonitoring">Monitoring network…</div>
