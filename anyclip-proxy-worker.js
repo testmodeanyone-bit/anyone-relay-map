@@ -3053,7 +3053,7 @@ AnyoneMap is an independent, community-built project by one developer (@Nexoniam
 === HOW THIS MAP REFRESHES (say "every N minutes", not "real-time") ===
 - Relay registry and counts: rebuilt every 15 minutes from Anyone's endpoints; the network consensus itself is hourly, so a new relay can take an hour or more to appear.
 - Network Growth: one row per UTC day, rebuilt through the day until complete.
-- .anyone domains: on-chain count refreshed every 15 minutes; the Domains panel lists names and owners — domains are not placed on the map.
+- .anyone domains: on-chain count refreshed every 15 minutes; the Domains panel lists names and owners — domains are not placed on the map. To get one: get.unstoppabledomains.com/anyone (the panel's "Get yours" link); it is minted to the buyer's wallet on Base.
 - Bitcoin nodes: bitnodes.io snapshot every 30 minutes.
 - Hardware registry: every 6 hours from Arweave.
 
