@@ -867,6 +867,22 @@ setTimeout(function() {
   setTimeout(function(){
     var input = document.getElementById('cmdk-input');
     var overlay = document.getElementById('cmdk-overlay');
+    /* v642: the "⌘K — Command Palette" strip at the foot of the sidebar was a
+     * CSS ::after with cursor:pointer, pointer-events:none (inherited from the
+     * scroll-fade rule on the same pseudo-element) and no handler — it looked
+     * clickable and did nothing, and said ⌘K to Windows/Linux operators. Now a
+     * real button: focusable, labelled, works on touch, key named by platform. */
+    var sidebar = document.getElementById('sidebar');
+    if (sidebar && !document.getElementById('cmdk-hint')) {
+      var isMacHint = false; try { isMacHint = navigator.platform.toUpperCase().indexOf('MAC') >= 0; } catch(_) {}
+      var keyLabel = isMacHint ? '⌘K' : 'Ctrl+K';
+      var hint = document.createElement('button');
+      hint.id = 'cmdk-hint'; hint.type = 'button';
+      hint.setAttribute('aria-label', 'Open command palette (' + keyLabel + ')');
+      hint.innerHTML = '<span class="ch-full">' + keyLabel + ' — Command Palette</span><span class="ch-short">' + keyLabel + '</span>';
+      hint.addEventListener('click', function(e){ e.preventDefault(); openCmdK(); });
+      sidebar.appendChild(hint);
+    }
     if (input) {
       input.addEventListener('input', function(e){
         cmdkFilter = e.target.value;
@@ -949,10 +965,10 @@ function updateExploreCard(){
     exBw.textContent = bwEl.textContent.trim();
   }
   // Countries
-  var countryEl = pick('rs-countries');
   var exCountries = document.getElementById('ex-countries');
-  if(countryEl && exCountries && countryEl.textContent.trim() !== '—'){
-    exCountries.textContent = countryEl.textContent.trim();
+  var _nc = (typeof window.networkCounts === 'function') ? window.networkCounts() : null;   /* v642: network total, not the filtered list */
+  if(exCountries && _nc && _nc.countries > 0){
+    exCountries.textContent = String(_nc.countries);
   }
 }
 // Update explore card every 30s
@@ -13671,8 +13687,13 @@ function updateHealthRing(score){
   const ring = document.getElementById('health-ring');
   if(ring) ring.setAttribute('stroke-dashoffset', Math.round((1-score/100)*HC));
 
-  const grade = score>=90?'A+':score>=80?'A':score>=70?'B+':score>=60?'B':score>=50?'C':'D';
-  const color = score>=85?'#00f5a0':score>=65?'#2dd4bf':score>=55?'#00f5ff':score>=40?'#fbbf24':'#ef4444';
+  /* v642: this ring had its OWN grade scale (A+ 90 / A 80 / B+ 70 / B 60 / C 50)
+   * while computeHealthScore uses A+ 88 / A 78 / B+ 68 / B 55 / C 40. A score
+   * of 79 read "A" in the HEALTH panel and AnyClip but "B+" on the donut and
+   * the welcome card (which copies #donut-grade). One scale now — healthGradeFor(). */
+  const _g = healthGradeFor(score);
+  const grade = _g.grade;
+  const color = _g.color;
   const gradeEl = document.getElementById('donut-grade');
   const gradeLbl = document.getElementById('donut-grade-label');
   if(gradeEl){ gradeEl.textContent = grade; gradeEl.style.color = color; }
@@ -14072,7 +14093,8 @@ function _p1RenderStats(strip){
   if(!strip) return;
   var sR  = _p1ReadStat('sR', _p1ReadStat('sb-sR', '…'));
   var sBW = _p1ReadStat('sBW', _p1ReadStat('sb-sBW', '…'));
-  var sC  = _p1ReadStat('ex-countries', _p1ReadStat('rs-countries', '…'));
+  var _nc = (typeof window.networkCounts === 'function') ? window.networkCounts() : null;   /* v642 */
+  var sC  = (_nc && _nc.countries > 0) ? String(_nc.countries) : _p1ReadStat('ex-countries', '…');
   var health = _p1ComposeHealth();
   // Bug #41 (v144): during Phase 3 counter animation, preserve BOTH the live
   // cell (Active Relays) and the Health cell since both animate. Update only
@@ -21457,7 +21479,7 @@ var DUEL_TOPICS = [
   { id:'bandwidth',   label:'Network Bandwidth', unit:'GB/s',      icon:'📡', getter: function(){ return parseFloat(document.getElementById('sBW')?.textContent) || 0; } },
   { id:'health',      label:'Health Score',      unit:'/100',      icon:'💊', getter: function(){ return parseInt(document.getElementById('btn-health-score')?.textContent) || 0; } },
   { id:'hw_relays',   label:'Hardware Relays',   unit:'relays',    icon:'🔧', getter: function(){ return parseInt((document.getElementById('sHW')?.textContent||'').replace(/,/g,'')) || 0; } },
-  { id:'countries',   label:'Countries',         unit:'countries', icon:'🌍', getter: function(){ return parseInt((document.getElementById('rs-countries')?.textContent||'').replace(/,/g,'')) || 0; } }
+  { id:'countries',   label:'Countries',         unit:'countries', icon:'🌍', getter: function(){ return (typeof networkCounts === 'function' ? networkCounts().countries : 0) || 0; } }   /* v642 */
 ];
 
 /* v572: acStartDuel() removed with the duel feature — see note at the /predict dispatch branch. */
@@ -24568,6 +24590,22 @@ function computeFallbackStats(raw){
   syncSidebarStats();
 }
 
+/* v642: NETWORK-WIDE country/ISP counts. #rs-countries / #rs-isps are the Relay
+ * Browser's FILTERED-list stats (updateRelayStats(list)); after "Jump to Germany"
+ * they read 1 / 4, and four consumers were treating them as the network total:
+ * the explore card, the welcome card, AnyClip's acCollectStats (so it would
+ * answer "1 country" while any country was selected) and the Lounge snapshot.
+ * Memoised on allRelays.length; the loop is ~1 ms for 5k relays. */
+var _netCountsMemo = { n: -1, countries: 0, isps: 0 };
+function networkCounts(){
+  var list = (typeof allRelays !== 'undefined' && allRelays) ? allRelays : [];
+  if(_netCountsMemo.n === list.length) return _netCountsMemo;
+  var cc = new Set(), isp = new Set();
+  for(var i = 0; i < list.length; i++){ var r = list[i]; if(r){ if(r.countryCode) cc.add(r.countryCode); if(r.asName) isp.add(r.asName); } }
+  _netCountsMemo = { n: list.length, countries: cc.size, isps: isp.size };
+  return _netCountsMemo;
+}
+window.networkCounts = networkCounts;
 function updateRelayStats(list){
   /* v208: was 2x list.map() + 2x Set() construction = 4 array allocations + 2 Set */
   /* allocations per call. Single pass is ~3x faster on 5000-relay list and avoids */
@@ -25682,6 +25720,16 @@ function _scoreSize(total, zoneCount){
     color: score>=4?'#2dd4bf':score>=3?'#f59e0b':'#ef4444' };
 }
 
+/* v642: the ONE grade scale. Used by computeHealthScore (HEALTH panel, AnyClip,
+ * share text) and updateHealthRing (donut, welcome card). */
+function healthGradeFor(total){
+  if(total >= 88) return { grade:'A+', color:'#34d399', label:_i18t('gradeExcellent','Excellent — highly decentralized') };
+  if(total >= 78) return { grade:'A',  color:'#2dd4bf', label:_i18t('gradeStrong','Strong — well distributed network') };
+  if(total >= 68) return { grade:'B+', color:'#2dd4bf', label:_i18t('gradeGood','Good — minor concentration risks') };
+  if(total >= 55) return { grade:'B',  color:'#fbbf24', label:_i18t('gradeModerate','Moderate — some centralization') };
+  if(total >= 40) return { grade:'C',  color:'#f97316', label:_i18t('gradeFair','Fair — notable concentration risks') };
+  return { grade:'D', color:'#ef4444', label:_i18t('gradeNeedsImprovement','Needs improvement') };
+}
 function computeHealthScore(){
   if(!allRelays.length || !relayData.length) return null;
   const total = allRelays.length;
@@ -25702,13 +25750,7 @@ function computeHealthScore(){
   const scores = { geo, isp, exit, bw, uptime: up, hw, size: sz };
   const total_score = Math.min(100, Object.values(scores).reduce((s,v)=>s+v.score,0));
 
-  let grade, gradeColor, gradeLabel;
-  if(total_score >= 88){ grade='A+'; gradeColor='#34d399'; gradeLabel=_i18t('gradeExcellent','Excellent — highly decentralized'); }
-  else if(total_score >= 78){ grade='A';  gradeColor='#2dd4bf'; gradeLabel=_i18t('gradeStrong','Strong — well distributed network'); }
-  else if(total_score >= 68){ grade='B+'; gradeColor='#2dd4bf'; gradeLabel=_i18t('gradeGood','Good — minor concentration risks'); }
-  else if(total_score >= 55){ grade='B';  gradeColor='#fbbf24'; gradeLabel=_i18t('gradeModerate','Moderate — some centralization'); }
-  else if(total_score >= 40){ grade='C';  gradeColor='#f97316'; gradeLabel=_i18t('gradeFair','Fair — notable concentration risks'); }
-  else { grade='D'; gradeColor='#ef4444'; gradeLabel=_i18t('gradeNeedsImprovement','Needs improvement'); }
+  const { grade, color: gradeColor, label: gradeLabel } = healthGradeFor(total_score);
 
   return { total: total_score, scores, grade, gradeColor, gradeLabel, risks,
            summary: `${total.toLocaleString()} ${_i18t('relays','relays').toLowerCase()} · ${geo._countries} ${_i18t('countries','countries').toLowerCase()} · ${isp._isps} ISPs · ${(bw._totalBW/1024).toFixed(0)} GB/s` };
@@ -28062,6 +28104,30 @@ body.light [tabindex]:focus-visible {
   margin-top: auto;
   cursor: pointer;
 }
+/* v642: the ⌘K strip is now a real <button id="cmdk-hint"> (see the palette
+ * script). #sidebar::after goes back to being ONLY the scroll-fade it was at
+ * line ~6573 — the hint rules below had been layered onto that same
+ * pseudo-element, inheriting its position:sticky and pointer-events:none, so
+ * the strip showed a pointer cursor and could not receive a click. */
+#sidebar::after, body.light #sidebar::after, #sidebar.collapsed::after, body.light #sidebar.collapsed::after,
+#sidebar:hover::after, body.light #sidebar:hover::after {
+  content: '' !important; display: block !important; height: 32px !important; padding: 0 !important;
+  border-top: 0 !important; margin-top: 0 !important; cursor: default !important; pointer-events: none !important;
+  background: linear-gradient(transparent, var(--an-dark, #020b12)) !important;
+}
+body.light #sidebar::after, body.light #sidebar.collapsed::after, body.light #sidebar:hover::after {
+  background: linear-gradient(transparent, rgba(240,244,248,0.98)) !important;
+}
+#cmdk-hint { display: block; width: 100%; margin-top: 8px; padding: 10px 12px; font: 600 11px 'Inter', 'Share Tech Mono', system-ui, sans-serif;
+  letter-spacing: .04em; text-align: center; color: rgba(94, 234, 212, .85); background: rgba(94, 234, 212, .04);
+  border: 0; border-top: 1px solid rgba(94, 234, 212, .18); cursor: pointer; }
+#cmdk-hint:hover, #cmdk-hint:focus-visible { color: #5eead4; background: rgba(94, 234, 212, .08); border-top-color: rgba(94, 234, 212, .35); }
+body.light #cmdk-hint { color: #0E7490; background: rgba(8, 145, 178, .04); border-top-color: rgba(8, 145, 178, .15); }
+body.light #cmdk-hint:hover, body.light #cmdk-hint:focus-visible { background: rgba(8, 145, 178, .08); border-top-color: rgba(8, 145, 178, .28); }
+#cmdk-hint .ch-short { display: none; }
+#sidebar.collapsed #cmdk-hint { font-size: 9px; padding: 6px 4px; }
+#sidebar.collapsed #cmdk-hint .ch-full { display: none; }
+#sidebar.collapsed #cmdk-hint .ch-short { display: inline; }
 #sidebar.collapsed::after {
   content: '⌘K';
   font-size: 9px;
@@ -29920,7 +29986,8 @@ body.light #geo-info-side-panel .hw-tip-section {
       guardFpsCount:(typeof guardFps!=='undefined')?guardFps.size:'?',
       hwActiveInConsensus:hwActive, hwFpsCount:(typeof hwFps!=='undefined')?hwFps.size:'?', hwOfflineRegistered:hwOffline,
       totalBW:raw('sBW'), zones:g('sZ'), topZone:g('sM'), avgPerZone:g('sA'),
-      countries:raw('rs-countries'), isps:raw('rs-isps'),
+      countries:(function(){ var n = (typeof networkCounts === 'function') ? networkCounts() : null; return n && n.countries ? String(n.countries) : raw('rs-countries'); })(),   /* v642 */
+      isps:(function(){ var n = (typeof networkCounts === 'function') ? networkCounts() : null; return n && n.isps ? String(n.isps) : raw('rs-isps'); })(),
       /* v625: #health-grade is only written when the health panel opens — the
        * widget sent "—" for the grade next to a real score. Read the score
        * object instead; fall back to the DOM. */
@@ -29993,7 +30060,7 @@ body.light #geo-info-side-panel .hw-tip-section {
       guards: g('sG'),
       hw: g('sHW'),
       zones: g('sZ'),
-      countries: parseInt(document.getElementById('rs-countries')?.textContent||'0',10)||0,
+      countries: (typeof networkCounts === 'function' ? networkCounts().countries : 0) || 0,   /* v642 */
     };
     if(snap.relays > 0){
       memory.networkSnapshots.push(snap);
