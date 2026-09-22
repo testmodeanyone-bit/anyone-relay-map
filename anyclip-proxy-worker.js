@@ -3049,6 +3049,13 @@ AnyoneMap is an independent, community-built project by one developer (@Nexoniam
 - Staking: holders stake $ANYONE to a specific relay family (an operator's wallet) on the Anyone dashboard. 5% of staking rewards go to that operator. Stakes earn only while 50%+ of the family's registered relays are active in the hourly epoch. Unstaking moves tokens to a vault with a cooldown period. APY is variable (a fixed daily outflow shared by all stakers). Guide: docs.anyone.io/dashboard.
 - Rewards: relay rewards are a fixed daily token outflow (5,000 tokens/day at the time of the docs) split across eligible relays by uptime, bandwidth and multipliers (geo, family, hardware).
 - The relay software is "anon", a fork of Tor; the network was formerly named ATOR.
+- Where a relay can run: any Debian/Ubuntu machine — a VPS, a standalone box, or an arm64 device such as a Raspberry Pi (the docs list it as supported; Docker images exist for amd64 and arm64). Recommended minimum: 2 CPU cores, 2 GB RAM, ~15 GB disk. Rewards depend on uptime, bandwidth and multipliers — do not predict how much a given machine will earn.
+=== HOW THIS MAP REFRESHES (say "every N minutes", not "real-time") ===
+- Relay registry and counts: rebuilt every 15 minutes from Anyone's endpoints; the network consensus itself is hourly, so a new relay can take an hour or more to appear.
+- Network Growth: one row per UTC day, rebuilt through the day until complete.
+- .anyone domains: on-chain count refreshed every 15 minutes; the Domains panel lists names and owners — domains are not placed on the map.
+- Bitcoin nodes: bitnodes.io snapshot every 30 minutes.
+- Hardware registry: every 6 hours from Arweave.
 
 === RELAY FLAG SEMANTICS (CRITICAL) ===
 Anyone Protocol uses Tor's relay flag system (it is a fork of ator-protocol). A single relay can carry MULTIPLE flags — a relay can have BOTH the Exit and Guard flag. Never present exit+guard+middle as disjoint groups that sum to the total; they overlap.
