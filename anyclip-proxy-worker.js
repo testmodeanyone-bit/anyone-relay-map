@@ -12718,6 +12718,19 @@ Issued: ${(/* @__PURE__ */ new Date()).toISOString()}
         
         // Try KV cache first
         if (env.FP_INDEX) {
+          /* v627: pre-serialised body written by buildAndCacheRegistry — pass it
+           * through untouched. Freshness is read from a cheap tail scan of the
+           * string ("cachedAt":<ms>) so the 1.4 MB body is never parsed here.
+           * Falls back to the old parse/stringify path if the key is absent
+           * (first tick after deploy). */
+          const body = await env.FP_INDEX.get(REGISTRY_RESPONSE_KEY, { type: "text", cacheTtl: 60 }).catch(() => null);
+          if (body) {
+            const m = /"cachedAt":(\d{10,})/.exec(body.slice(-400));
+            const ts = m ? Number(m[1]) : 0;
+            if (ts && (Date.now() - ts) < CACHE_TTL * 1000) {
+              return cors(body, 200, { "Cache-Control": "public, max-age=60", "X-Cache": "HIT" });
+            }
+          }
           const cached = await env.FP_INDEX.get(CACHE_KEY, { type: "json" }).catch(() => null);
           if (cached && cached.data && cached.ts && (Date.now() - cached.ts) < CACHE_TTL * 1000) {
             return cors(JSON.stringify({
@@ -12727,7 +12740,7 @@ Issued: ${(/* @__PURE__ */ new Date()).toISOString()}
               cachedAt: cached.ts,
               mac: cached.mac,
               integrity: "verified"
-            }), 200);
+            }), 200, { "Cache-Control": "public, max-age=60" });
           }
         }
         
@@ -13149,6 +13162,13 @@ async function buildAndCacheRegistry(env, ctx) {
   }
   const enrichStart = Date.now();
   const enrichResult = await enrichFromCache(data, env);
+  /* v627: sanitise upstream strings ONCE, at ingestion. nickname/asName/city
+   * names reach innerHTML in several places on the map; the map escapes most
+   * of them, but the safe place to guarantee it is here, before the MAC is
+   * computed, so the cached copy can never carry markup or control characters.
+   * Angle brackets are dropped (no legitimate ISP or city name has them), C0
+   * controls removed, length capped. Runs on the cron, not per request. */
+  _sanitizeRegistryStrings(data);
   let mac = null;
   if (env.HMAC_SECRET) {
     const canonical = JSON.stringify(data); // deterministic since keys are hex fingerprints
@@ -13160,14 +13180,39 @@ async function buildAndCacheRegistry(env, ctx) {
     mac = Array.from(new Uint8Array(sig)).map(b => b.toString(16).padStart(2, "0")).join("").slice(0, 32);
   }
   if (env.FP_INDEX) {
+    const _ts = Date.now();
     const put = env.FP_INDEX.put(
       REGISTRY_CACHE_KEY,
-      JSON.stringify({ data, ts: Date.now(), mac, derived }),
+      JSON.stringify({ data, ts: _ts, mac, derived }),
       { expirationTtl: REGISTRY_PERSIST_TTL }
     ).catch(() => {});
-    if (ctx && typeof ctx.waitUntil === "function") ctx.waitUntil(put); else await put;
+    /* v627: also store the exact HTTP body the route serves on a cache hit, so
+     * the hot path is one KV text read passed straight through — no 1.4 MB
+     * JSON.parse + JSON.stringify per visitor (~20-40 ms CPU each, and over
+     * the 10 ms free-plan CPU limit). Built once per cron tick. */
+    const putBody = env.FP_INDEX.put(
+      REGISTRY_RESPONSE_KEY,
+      JSON.stringify({ relays: data, relayCount, source: "anyone-proxy-cache", cachedAt: _ts, mac, integrity: "verified" }),
+      { expirationTtl: REGISTRY_PERSIST_TTL }
+    ).catch(() => {});
+    if (ctx && typeof ctx.waitUntil === "function") { ctx.waitUntil(put); ctx.waitUntil(putBody); } else { await put; await putBody; }
   }
   return { data, relayCount, mac, enrichResult, enrichStart, derived };
+}
+/* v627 */
+var REGISTRY_RESPONSE_KEY = "relay-registry-response";
+var _REG_STR_FIELDS = ["asName", "cityName", "regionName", "countryName", "countryCode", "asNumber", "n", "nickname"];
+function _sanitizeRegistryStrings(data) {
+  if (!data || typeof data !== "object") return;
+  for (const fp in data) {
+    const r = data[fp]; if (!r || typeof r !== "object") continue;
+    for (const f of _REG_STR_FIELDS) {
+      const v = r[f];
+      if (typeof v !== "string") continue;
+      const c = v.replace(/[<>]/g, "").replace(/[\u0000-\u001F\u007F]/g, "").trim().slice(0, 120);
+      if (c !== v) r[f] = c;
+    }
+  }
 }
 async function buildAndStoreIndex(env) {
   const t0 = Date.now();
