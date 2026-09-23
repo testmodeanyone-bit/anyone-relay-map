@@ -6058,6 +6058,24 @@ async function storeSnapshot(env) {
   }
   return snapshot;
 }
+/* v632: /api/growth used to do 30 parallel KV gets + 30 JSON.parse + one
+ * JSON.stringify PER REQUEST, and fired storeSnapshot() in the background on
+ * every hit (2 more KV reads, a schema validation and a SNAPSHOT_KV compare).
+ * Same shape as the registry fix (v627): the cron builds the exact HTTP body
+ * once per tick under GROWTH_RESPONSE_KEY; the route passes it through as
+ * text. The tail carries "generated":"<iso>" so freshness is a regex over the
+ * last 120 bytes, never a parse. Fallback to the live build when the key is
+ * missing or older than GROWTH_RESPONSE_MAX_AGE_MS. */
+var GROWTH_RESPONSE_KEY = "growth-response";
+var GROWTH_RESPONSE_MAX_AGE_MS = 20 * 60 * 1000;   /* cron is every 15 min */
+async function buildGrowthResponseBody(env) {
+  const history = await getGrowthHistory(env, GROWTH_DAYS);
+  const body = JSON.stringify({ history, days: history.length, generated: new Date().toISOString() });
+  if (env.FP_INDEX && history.length >= 3) {
+    await env.FP_INDEX.put(GROWTH_RESPONSE_KEY, body, { expirationTtl: 24 * 3600 }).catch(() => {});
+  }
+  return { body, history };
+}
 async function getGrowthHistory(env, days = GROWTH_DAYS) {
   if (!env.FP_INDEX) return [];
   const history = [];
@@ -8384,11 +8402,24 @@ var worker_source_default = {
           const authFail = await _checkGrowthAdminAuth(request, env);
           if (authFail) return authFail;
         }
+        /* v632: pass-through of the cron-built body. No parse, no snapshot
+         * rebuild, no KV fan-out on the request path. storeSnapshot runs on
+         * the cron (every 15 min), not on reads. */
+        if (!bust && env.FP_INDEX) {
+          const pre = await env.FP_INDEX.get(GROWTH_RESPONSE_KEY, { type: "text", cacheTtl: 60 }).catch(() => null);
+          if (pre) {
+            const m = /"generated":"(\d{4}-\d{2}-\d{2}T[^"]+)"/.exec(pre.slice(-120));
+            const ts = m ? Date.parse(m[1]) : 0;
+            if (ts && (Date.now() - ts) < GROWTH_RESPONSE_MAX_AGE_MS) {
+              return new Response(pre, { headers: jsonHeaders({ "Cache-Control": "public, max-age=300", "X-Cache": "HIT" }) });
+            }
+          }
+        }
         let history = [];
         if (env.FP_INDEX) {
-          ctx.waitUntil(storeSnapshot(env));
           if (bust) await storeSnapshot(env);
-          history = await getGrowthHistory(env, GROWTH_DAYS);
+          const built = await buildGrowthResponseBody(env);   /* fallback / bust: live build, stored for the next reader */
+          history = built.history;
         }
         if (history.length < 3) {
           try {
@@ -8415,7 +8446,7 @@ var worker_source_default = {
           history,
           days: history.length,
           generated: (/* @__PURE__ */ new Date()).toISOString()
-        }), { headers: jsonHeaders({ "Cache-Control": "max-age=300" }) });
+        }), { headers: jsonHeaders({ "Cache-Control": "public, max-age=300", "X-Cache": "MISS" }) });
       }
       if (request.method === "POST") {
         /* v49 SECURITY FIX: POST writes a snapshot to KV. Same threat
@@ -13081,7 +13112,8 @@ Issued: ${(/* @__PURE__ */ new Date()).toISOString()}
       ctx.waitUntil(env.FP_INDEX.put(lockKey, String(Date.now()), { expirationTtl: 60 }).catch(() => {}));
     }
     /* v612: the growth snapshot was the one cron task that never reported. */
-    ctx.waitUntil(storeSnapshot(env).then(() => recordCronOutcome(env, "snapshot", true)).catch(e => { console.warn("[cron] snapshot failed:", e.message); return recordCronOutcome(env, "snapshot", false, e.message); }));
+    ctx.waitUntil(storeSnapshot(env).then(() => recordCronOutcome(env, "snapshot", true)).catch(e => { console.warn("[cron] snapshot failed:", e.message); return recordCronOutcome(env, "snapshot", false, e.message); })
+      .then(() => buildGrowthResponseBody(env)).catch(e => { try { console.warn("[cron] growth body failed:", e.message); } catch (_) {} }));   /* v632: pre-serialised /api/growth body */
     /* v56: warm relay-registry-cache on the cron so the key never depends on
      * organic /api/relay-registry traffic landing within the eviction window.
      * Shares buildAndCacheRegistry with the route, so both write the same shape
