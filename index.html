@@ -15986,8 +15986,11 @@ async function acSendMessage(){
     }
   }
 
+  /* v650: Anyone's own hosts are not links — quoting docs.anyone.io/relay used
+   * to be blocked here (and struck server-side). Mirrors proxy v633. */
   const linkPattern = /https?:\/\/|www\.|\.com|\.net|\.org|\.io|t\.me|discord\.|telegram\./i;
-  if(linkPattern.test(text)){
+  const _textNoOfficial = text.replace(/(?:https?:\/\/)?(?:[a-z0-9-]+\.)*(?:anyone\.io|anyone\.tech|anyonerelaysmap\.workers\.dev)(?![a-z0-9.-])(?:\/[^\s]*)?/gi, ' ');
+  if(linkPattern.test(_textNoOfficial)){
     acAddWarning('AnyClip', 'Links are not allowed in the Operators Lounge. Message blocked.');
     acStrike(_acUser.wallet, 'link');
     input.value = '';
