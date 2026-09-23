@@ -3772,6 +3772,8 @@ async function hashWallet(wallet) {
 const MOD_EXEMPT_WALLETS = ["0x43c49c96b9e4c32c4ae27f5adb218f560a4d32c2"];   /* the map operator (client: ADMIN_WALLETS) */
 const MOD_STRIKE_WINDOW_S = 30 * 24 * 3600;
 const MOD_BAN_AT = 3, MOD_PERM_AT = 5;
+/* hosts that may be mentioned (with or without scheme/path) without counting as a link */
+const MOD_LINK_ALLOW_RE = /(?:https?:\/\/)?(?:[a-z0-9-]+\.)*(?:anyone\.io|anyone\.tech|anyonerelaysmap\.workers\.dev)(?![a-z0-9.-])(?:\/[^\s]*)?/gi;   /* the host must END there: anyone.io.evil.example is not ours */
 const MOD_SYSTEM_PROMPT = "You are AnyClip, moderator of AnyChat — an operators lounge for relay node operators. Default to ALLOW. Only block messages that clearly violate the rules.\n\nALLOWED (do NOT flag):\n- Any short message: 'hi', 'testing', 'ok', 'lol', 'gm', 'sup'\n- Casual conversation, greetings, jokes, technical questions\n- Mild profanity ('damn', 'shit', 'wtf', 'fuck' as emphasis)\n- Typos, abbreviations, slang, emoji\n- Crypto/relay/node technical jargon\n- Questions and confusion (\"what?\", \"huh?\", \"why?\")\n- Negative feedback or complaints\n\nBLOCK ONLY (allow:false, warn:true):\n- Direct threats of violence against a person\n- Slurs targeting protected groups (race, religion, sexuality, gender)\n- Sexual content or solicitation\n- Promotion of terrorism or extremist ideology\n- URLs/links to external sites\n- Posting another person's real-world identity (doxxing)\n\nWhen uncertain, ALLOW. False positives degrade the lounge worse than the rare slip-through.\n\nRespond with ONLY a single JSON object, no preface, no explanation:\n{\"allow\":true,\"warn\":false,\"ban\":false,\"permanent\":false,\"category\":\"ok\",\"reason\":\"\"}\n\nIf and only if you flag, set allow:false, warn:true, and pick category from: threat|hate|nsfw|terrorism|link|doxx. Always provide a non-empty reason.";
 
 /* One verdict. Fails OPEN on classifier errors (an outage must not silence the
@@ -3780,7 +3782,10 @@ async function _classifyLoungeMessage(env, nick, text) {
   const allow = { allow: true, warn: false, ban: false, permanent: false, category: "ok", reason: "" };
   const safeMessage = cleanText(String(text || ""), { max: 1e3 });
   if (!safeMessage) return allow;
-  if (/https?:\/\/|www\.|\.(com|net|org|io|xyz|me|co)\b|t\.me\/|discord\.|telegram\./i.test(safeMessage)) {
+  /* v633: Anyone's own hosts are not "links" — an operator quoting
+   * docs.anyone.io/relay (which AnyClip itself hands out) was a strike. */
+  const _noOfficial = safeMessage.replace(MOD_LINK_ALLOW_RE, " ");
+  if (/https?:\/\/|www\.|\.(com|net|org|io|xyz|me|co)\b|t\.me\/|discord\.|telegram\./i.test(_noOfficial)) {
     return { allow: false, warn: true, ban: false, permanent: false, category: "link", reason: "Links are not allowed in the lounge" };
   }
   if (!env.ANTHROPIC_KEY) return allow;
@@ -9511,6 +9516,21 @@ I confirm I control this wallet.`;
       try {
         const body = await request.json();
         const { nick, tier, wallet, text, time, ct, iv, encV, epoch, room } = body;
+        /* v633: admin dry run — the moderation verdict for a message WITHOUT
+         * publishing it, striking anyone, or touching the rate limits. For
+         * testing the classifier against real phrasing (operators' slang,
+         * relay names that look like URLs, other languages) without filling
+         * the room with test posts. Token purpose "mod-test":
+         *   HMAC-SHA256(ADMIN_SECRET, "mod-test:<floor(now/86400)>") hex. */
+        if (body.dryRun === true) {
+          const adminToken = request.headers.get("x-admin-token") || "";
+          if (!env.ADMIN_SECRET && !env.HMAC_SECRET) return cors(JSON.stringify({ ok: false, error: "Auth not configured" }), 503);
+          if (!(await verifyAdminToken(env, "mod-test", adminToken))) return cors(JSON.stringify({ ok: false, error: "Unauthorized" }), 401);
+          if (typeof text !== "string" || !text.trim()) return cors(JSON.stringify({ ok: false, error: "text required" }), 400);
+          const t0 = Date.now();
+          const verdict = await _classifyLoungeMessage(env, cleanText(String(nick || "tester"), { max: 32, allowNewlines: false }) || "tester", cleanText(text, { max: 400 }) || "");
+          return cors(JSON.stringify({ ok: true, dryRun: true, verdict, ms: Date.now() - t0 }), 200);
+        }
         const isEncrypted = typeof ct === "string" && typeof iv === "string";
         if (!nick || !wallet || !isEncrypted && !text) {
           return cors(JSON.stringify({ ok: false, error: "missing fields" }), 400);
