@@ -1524,6 +1524,8 @@ function mobTabSwitch(btn, tab){
   if(health && health.style.display === 'flex' && typeof openHealthPanel === 'function') openHealthPanel();   /* close */
   if(typeof _bsOpen !== 'undefined' && _bsOpen && typeof mobileToggleRelays === 'function') mobileToggleRelays();   /* close sheet */
   if(AC && AC.open && typeof toggleAnyChat === 'function' && tab !== 'chat') toggleAnyChat();
+  /* v651: the Lounge LOGIN screen keeps #anychat-panel open without AC.open — it stayed under the palette / health panel */
+  try { const _ap = document.getElementById('anychat-panel'); if(tab !== 'chat' && _ap && _ap.classList.contains('open') && !(AC && AC.open)) _ap.classList.remove('open'); } catch(_){}
   var domains = document.getElementById('domain-panel');
   if(domains && domains.classList.contains('open')){ var _db2 = document.getElementById('btn-domains'); if(_db2) _db2.click(); }
   switch(tab){
@@ -2555,10 +2557,6 @@ body.light #bottom-sheet-header { color: #0E7490 !important; }
 body.light #bottom-sheet-close { color: rgba(14, 116, 144, 0.7) !important; }
 
 /* (3) iOS safe-area: lift mobile-nav above home indicator */
-#mobile-nav {
-  padding-bottom: env(safe-area-inset-bottom);
-  height: calc(56px + env(safe-area-inset-bottom));
-}
 #bottom-sheet { bottom: calc(56px + env(safe-area-inset-bottom)); }
 @media (max-width: 768px) {
   #map-wrap { bottom: calc(56px + env(safe-area-inset-bottom)) !important; }
@@ -6076,14 +6074,6 @@ body.light #fb-relay-note{ color:rgba(0,100,160,.45); }
 ═══════════════════════════════════════════════════════ */
 
 /* ── Bottom Nav Bar (mobile only) ── */
-#mobile-nav{
-  display:none;
-  position:fixed;bottom:0;left:0;right:0;height:56px;z-index:600;
-  background:rgba(1,6,18,.97);border-top:1px solid rgba(0,245,255,.15);
-  flex-direction:row;align-items:center;justify-content:space-around;
-  padding:0 8px;
-  backdrop-filter:blur(12px);
-}
 .mob-btn{
   display:flex;flex-direction:column;align-items:center;gap:3px;
   background:none;border:none;color:rgba(180,220,235,.55);
@@ -6131,7 +6121,6 @@ body.light #fb-relay-note{ color:rgba(0,100,160,.45); }
   #sb-toggle{ display:none !important; }
   #map-wrap{ top:70px !important;left:0 !important;right:0 !important;bottom:56px !important; }
   #ticker{ display:none !important; }
-  #mobile-nav{ display:none !important; }   /* v645: sat underneath #mob-tab-bar (z 600 vs 9000), same 56px strip, unreachable; its five actions live in the tab bar and the command palette (More) */
   #relay-legend{ bottom:64px !important;left:50% !important;transform:translateX(-50%) !important; }
   #bottom-sheet{ display:flex; }
   #relay-panel{ display:none !important; }
@@ -6146,7 +6135,6 @@ body.light #fb-relay-note{ color:rgba(0,100,160,.45); }
   #bottom-sheet{ max-height:82vh; }
   .logo-name{ font-size:10px; }
 }
-body.light #mobile-nav{ background:rgba(240,248,255,.97);border-top-color:rgba(0,100,160,.2); }
 body.light .mob-btn{ color:rgba(0,80,130,.5); }
 body.light .mob-btn.active{ color:#0060a0;background:rgba(0,100,160,.08); }
 body.light #bottom-sheet{ background:rgba(240,248,255,.98);border-top-color:rgba(0,100,160,.25); }
@@ -13537,10 +13525,9 @@ let _bsOpen = false;
 function mobileToggleRelays(){
   if(!isMobile()) { openRelayBrowser(); return; }
   const bs = document.getElementById('bottom-sheet');
-  const btn = document.getElementById('mob-btn-relays');
   _bsOpen = !_bsOpen;
   bs.classList.toggle('open', _bsOpen);
-  btn.classList.toggle('active', _bsOpen);
+  try { const _tb = [...document.querySelectorAll('#mob-tab-bar .mt-tab')].find(t => /relays/i.test(t.getAttribute('aria-label')||'')); if(_tb) _tb.classList.toggle('active', _bsOpen); } catch(_){}   /* v651: highlight the real tab; #mob-btn-relays is gone */
   if(_bsOpen) mobileSyncRelayContent();
 }
 
@@ -13665,12 +13652,7 @@ function mobileSelectRelay(fp, lat, lon){
   selectRelay(fp, lat, lon);
 }
 
-function updateMobileNav(){
-  const score = document.getElementById('btn-health-score')?.textContent;
-  const mobH = document.getElementById('mob-health-score');
-  if(mobH && score && score !== '—') mobH.textContent = score;
-  else if(mobH) mobH.textContent = 'HEALTH';
-}
+/* v651: updateMobileNav() removed with #mobile-nav (its only target, #mob-health-score, is gone) */
 
 window.addEventListener('resize', ()=>{
   positionSigCounts();
@@ -13678,7 +13660,6 @@ window.addEventListener('resize', ()=>{
     document.getElementById('bottom-sheet')?.classList.remove('open');
     _bsOpen = false;
   }
-  updateMobileNav();
 });
 
 const _origUpdateHealthBtn = updateHealthButton;
@@ -26156,7 +26137,6 @@ function updateHealthButton(){
   const sbH = document.getElementById('sb-health');
   if(sbH){ sbH.textContent = h.total; sbH.style.color = scoreColor; }
   if(document.getElementById('health-panel')?.style.display && document.getElementById('health-panel').style.display !== 'none') renderHealthPanel();
-  if(typeof updateMobileNav === 'function') updateMobileNav();
 }
 async function init(){
   setStatus('Loading…');
@@ -33080,7 +33060,7 @@ body.aclive-on #anyclip-avatar{display:none !important;}
   function roamObstacles(){
     var out = [];
     var hdr = document.getElementById('hdr'); if (hdr) out.push(hdr.getBoundingClientRect());
-    document.querySelectorAll('#sidebar,#relay-panel,#health-panel,#domain-panel,#alert-panel,#anychat-panel,#ovc-cluster,#mobile-nav,#bottom-sheet,#ticker,#explore-card,#ob-tour-overlay .ob-tooltip').forEach(function(n){
+    document.querySelectorAll('#sidebar,#relay-panel,#health-panel,#domain-panel,#alert-panel,#anychat-panel,#ovc-cluster,#bottom-sheet,#ticker,#explore-card,#ob-tour-overlay .ob-tooltip').forEach(function(n){
       var cs = getComputedStyle(n);
       if (cs.display === 'none' || cs.visibility === 'hidden' || cs.opacity === '0') return;
       var r = n.getBoundingClientRect();
@@ -33755,40 +33735,7 @@ body.aclive-on #anyclip-avatar{display:none !important;}
 
 </body>
 </html><!-- ══ MOBILE BOTTOM NAV ══ -->
-<div id="mobile-nav">
-  <button class="mob-btn" id="mob-btn-relays" onclick="mobileToggleRelays()">
-    <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round">
-      <circle cx="12" cy="12" r="3"/><circle cx="12" cy="12" r="7" stroke-opacity=".4"/>
-      <line x1="12" y1="2" x2="12" y2="5"/><line x1="12" y1="19" x2="12" y2="22"/>
-      <line x1="2" y1="12" x2="5" y2="12"/><line x1="19" y1="12" x2="22" y2="12"/>
-    </svg>RELAYS
-  </button>
-  <button class="mob-btn" id="mob-btn-signals" onclick="toggleSignals();document.getElementById('mob-btn-signals').classList.toggle('active',signalsOn)">
-    <svg aria-hidden="true" viewBox="0 0 24 14" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">
-      <line x1="1" y1="7" x2="3" y2="7" stroke-width="1.5"/>
-      <polyline points="3,7 5,3 7,11 9,5 11,9 13,7" stroke-width="1.6"/>
-      <line x1="13" y1="7" x2="17" y2="7" stroke-width="1.5"/>
-      <circle cx="21" cy="7" r="2.8" stroke-width="1.5"/>
-    </svg>SIGNALS
-  </button>
-  <button class="mob-btn" id="mob-btn-health" onclick="openHealthPanel()">
-    <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round">
-      <path d="M22 12h-4l-3 9L9 3l-3 9H2"/>
-    </svg><span id="mob-health-score">HEALTH</span>
-  </button>
-  <button class="mob-btn" id="mob-btn-mode" onclick="toggleMode()">
-    <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round">
-      <circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/>
-      <line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/>
-      <line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/>
-    </svg>MODE
-  </button>
-  <button class="mob-btn" id="mob-btn-chat" onclick="document.getElementById('anyclip-avatar').click(); if(typeof acClearMinimizedUnread==='function') acClearMinimizedUnread()">
-    <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round">
-      <path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/>
-    </svg>ASK AI
-  </button>
-</div>
+<!-- v651: #mobile-nav removed — it sat under #mob-tab-bar and could never be tapped (hidden v645); its actions live in the tab bar and the command palette -->
 
 <!-- ══ MOBILE BOTTOM SHEET (relay browser) ══ -->
 <div id="bottom-sheet">
