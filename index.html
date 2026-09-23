@@ -32,6 +32,64 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
+<script id="h-dispatch">
+/* v649: inline event handlers are gone (CSP without 'unsafe-inline' for scripts).
+ * Elements carry data-h-<event>="name"; the body lives in window.__H (named
+ * handlers below, plus a build-generated table for the static ones). Same
+ * semantics as the attribute: `this` is the element, `event` is in scope,
+ * returning false cancels the default action. Bubbling events are delegated
+ * from document; target-only events (mouseenter/leave, focus, error) are
+ * observed at capture and matched on the target alone. */
+window.__H = window.__H || {};
+(function(){
+  var BUBBLE = ['click','mousedown','mouseup','keydown','keyup','input','change','submit','touchstart','touchend','mouseover','mouseout','dblclick','contextmenu'];
+  var TARGET = ['mouseenter','mouseleave','focus','blur','error','load'];
+  function run(el, name, ev){
+    var fn = window.__H[name];
+    if (typeof fn !== 'function') { try { console.warn('[h] no handler', name); } catch(_){} return; }
+    var r;
+    try { r = fn.call(el, ev); } catch(e){ try { console.error('[h] ' + name, e); } catch(_){} }
+    if (r === false) ev.preventDefault();
+  }
+  BUBBLE.forEach(function(type){
+    document.addEventListener(type, function(ev){
+      var attr = 'hClick'.replace('Click', type.charAt(0).toUpperCase() + type.slice(1));
+      var el = ev.target && ev.target.nodeType === 1 ? ev.target : (ev.target && ev.target.parentElement);
+      while (el && el !== document) {
+        if (el.dataset && el.dataset[attr]) { run(el, el.dataset[attr], ev); if (ev.cancelBubble) return; }
+        el = el.parentElement;
+      }
+    }, false);
+  });
+  TARGET.forEach(function(type){
+    document.addEventListener(type, function(ev){
+      var el = ev.target; if (!el || el.nodeType !== 1 || !el.dataset) return;
+      var name = el.dataset['h' + type.charAt(0).toUpperCase() + type.slice(1)];
+      if (name) run(el, name, ev);
+    }, true);
+  });
+})();
+/* named handlers for markup whose arguments vary per element */
+__H.obNext = function(){ obShowStep(parseInt(this.dataset.step, 10)); };
+__H.mobSelRelay = function(){ mobileSelectRelay(this.dataset.fp, +this.dataset.lat || 0, +this.dataset.lon || 0); };
+__H.selRelay = function(){ selectRelay(this.dataset.fp, +this.dataset.lat, +this.dataset.lon); };
+__H.selRelayKey = function(event){ if(event.key==='Enter'||event.key===' '){ event.preventDefault(); selectRelay(this.dataset.fp, +this.dataset.lat, +this.dataset.lon); } };
+__H.copyLinkStop = function(event){ event.stopPropagation(); copyRelayLink(this.dataset.fp, this); };
+__H.copyLink = function(){ copyRelayLink(this.dataset.fp, this); };
+__H.copyFp = function(){ copyFingerprint(this.dataset.fp, this); };
+__H.toggleCompareStop = function(event){ event.stopPropagation(); toggleCompare(this.dataset.fp); };
+__H.addReaction = function(){ acAddReaction(this, this.dataset.emoji); };
+__H.pickAvatar = function(){ acPickAvatar(this.dataset.av); };
+__H.hoverBgOn = function(){ this.style.background = this.dataset.hoverBg; };
+__H.hoverBgOff = function(){ this.style.background = this.dataset.restBg; };
+__H.fillCmd = function(){ var i = document.getElementById('anychat-input'); if(i){ i.value = this.dataset.cmd; i.focus(); } };
+__H.emojiCat = function(){ acSwitchEmojiCat(this.dataset.cat); };
+__H.sendSticker = function(){ acSendSticker(this.dataset.sid); };
+__H.insertEmoji = function(){ acInsertEmoji(this.dataset.emoji); };
+__H.showAvatarPicker = function(){ acShowAvatarPicker(); };
+__H.alertRead = function(){ markAlertRead(parseInt(this.dataset.id, 10)); };
+</script>
+
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>AnyoneMap Ver 1.3 — Global Relay Network</title>
@@ -346,7 +404,7 @@ function obShowStep(idx){
     + '<div class="ob-desc">' + step.desc + '</div>'
     + '<div class="ob-actions">'
     + '<button class="ob-skip" onclick="obEnd()">Skip</button>'
-    + '<button class="ob-next" onclick="obShowStep(' + (idx+1) + ')">' + (idx < _obSteps.length - 1 ? 'NEXT' : 'GOT IT') + '</button>'
+    + '<button class="ob-next" data-h-click="obNext" data-step="' + (idx+1) + '">' + (idx < _obSteps.length - 1 ? 'NEXT' : 'GOT IT') + '</button>'
     + '</div>';
   overlay.appendChild(tip);
   // Sequenced reveal: spotlight settles, then card fades in
@@ -13588,7 +13646,7 @@ function mobileRenderRelayList(list){
     const bwMB = bwKB > 0 ? bwKB / 1024 : (r.bwMibs || 0);
     const bwStr = bwMB>0?(bwMB>=1024?(bwMB/1024).toFixed(1)+' GB/s':bwMB<1?bwMB.toFixed(1)+' MB/s':Math.round(bwMB)+' MB/s'):'';
     return `<button type="button" style="padding:8px 4px;border-bottom:1px solid rgba(0,245,255,.05);display:flex;align-items:center;gap:8px;cursor:pointer;width:100%;background:none;border-left:none;border-right:none;border-top:none;font:inherit;color:inherit;text-align:inherit;"
-      onclick="mobileSelectRelay('${r.fp}',${r.lat||0},${r.lon||0})">
+      data-h-click="mobSelRelay" data-fp="${r.fp}" data-lat="${r.lat||0}" data-lon="${r.lon||0}">
       <span style="font-size:16px;flex-shrink:0">${flag}</span>
       <div style="flex:1;min-width:0;">
         <div style="font-size:10px;color:#e0f4ff;font-weight:600;">${loc}</div>
@@ -13597,7 +13655,7 @@ function mobileRenderRelayList(list){
       ${bwStr?`<span style="font-size:8px;color:var(--an-teal,#2dd4bf);font-family:Orbitron,sans-serif;">${bwStr}</span>`:''}
       <span style="font-size:8px;color:${typeColor};font-family:Share Tech Mono,monospace;letter-spacing:.5px;flex-shrink:0">${isHW?'🔧 ':''}${typeLabel}</span>
       <button style="background:none;border:1px solid rgba(0,245,255,.2);border-radius:3px;color:rgba(0,245,255,.5);font-size:8px;padding:2px 5px;cursor:pointer;font-family:Share Tech Mono,monospace;flex-shrink:0;"
-        onclick="event.stopPropagation();copyRelayLink('${r.fp}',this)">⬡</button>
+        data-h-click="copyLinkStop" data-fp="${r.fp}">⬡</button>
     </button>`;
   }).join('') + (list.length > 60 ? `<div style="text-align:center;padding:10px;font-size:9px;color:rgba(138,188,196,.4)">Showing 60 of ${list.length.toLocaleString()} — use search to filter</div>` : '');
 }
@@ -18791,7 +18849,7 @@ function acReactToMsg(btn){
   if(picker){ picker.classList.toggle('open'); return; }
   picker = document.createElement('div');
   picker.className = 'ac-react-picker open';
-  picker.innerHTML = AC_REACT_EMOJIS.map(e => `<span class="ac-react-opt" onclick="acAddReaction(this,'${e}')">${e}</span>`).join('');
+  picker.innerHTML = AC_REACT_EMOJIS.map(e => `<span class="ac-react-opt" data-h-click="addReaction" data-emoji="${e}">${e}</span>`).join('');
   bubble.appendChild(picker);
   setTimeout(()=>{ document.addEventListener('click', function cl(ev){ if(!picker.contains(ev.target)){ picker.remove(); document.removeEventListener('click',cl); }}, true); },10);
 }
@@ -19167,7 +19225,7 @@ function acShowAvatarPicker(){
   html += '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;">';
   for(const av of AC_AVATARS){
     const selected = av.id === currentId ? 'border:2px solid ' + selectedBorder + ';background:' + (isLight ? 'rgba(13,148,136,.06)' : 'rgba(45,212,191,.06)') + ';' : 'border:2px solid transparent;';
-    html += `<button type="button" onclick="acPickAvatar('${av.id}')" style="width:100%;background:none;border:none;color:inherit;font:inherit;text-align:inherit;cursor:pointer;border-radius:12px;padding:6px;display:flex;flex-direction:column;align-items:center;gap:4px;${selected}transition:all .12s;" onmouseenter="this.style.background='${hoverBg}'" onmouseleave="this.style.background='${av.id === currentId ? (isLight ? 'rgba(13,148,136,.06)' : 'rgba(45,212,191,.06)') : 'transparent'}'">
+    html += `<button type="button" data-h-click="pickAvatar" data-av="${av.id}" style="width:100%;background:none;border:none;color:inherit;font:inherit;text-align:inherit;cursor:pointer;border-radius:12px;padding:6px;display:flex;flex-direction:column;align-items:center;gap:4px;${selected}transition:all .12s;" data-h-mouseenter="hoverBgOn" data-h-mouseleave="hoverBgOff" data-hover-bg="${hoverBg}" data-rest-bg="${av.id === currentId ? (isLight ? 'rgba(13,148,136,.06)' : 'rgba(45,212,191,.06)') : 'transparent'}">
       <div style="width:52px;height:52px;">${av.svg}</div>
       <div style="font-size:10px;color:${nameColor};text-align:center;font-weight:700;line-height:1.2;letter-spacing:.2px;">${av.name}</div>
     </button>`;
@@ -19277,7 +19335,7 @@ function acRichCard(icon, title, stats, buttons){
   if(buttons && buttons.length){
     html += '<div class="ac-rich-footer">';
     for(const [label, cmd, cls] of buttons){
-      html += `<button class="ac-rich-btn ${cls||'primary'}" onclick="document.getElementById('anychat-input').value='${cmd}';document.getElementById('anychat-input').focus();">${label}</button>`;
+      html += `<button class="ac-rich-btn ${cls||'primary'}" data-h-click="fillCmd" data-cmd="${cmd}">${label}</button>`;
     }
     html += '</div>';
   }
@@ -19304,7 +19362,7 @@ function acShowWelcome(){
     ['/help', 'All commands'],
   ];
   const cmdHTML = cmds.map(([cmd,desc]) =>
-    `<span class="ac-cmd-hint" onclick="document.getElementById('anychat-input').value='${cmd}';document.getElementById('anychat-input').focus();"><kbd>${cmd}</kbd> ${desc}</span>`
+    `<span class="ac-cmd-hint" data-h-click="fillCmd" data-cmd="${cmd}"><kbd>${cmd}</kbd> ${desc}</span>`
   ).join('');
   const welcome = document.createElement('div');
   welcome.className = 'ac-welcome';
@@ -19483,7 +19541,7 @@ function acToggleEmojiPicker(){
   picker.id = 'ac-emoji-picker';
 
   const tabs = Object.keys(AC_EMOJI).map(cat =>
-    `<button class="ac-emoji-tab${cat===_acEmojiCat?' active':''}" data-cat="${cat}" onclick="acSwitchEmojiCat('${cat}')">${AC_EMOJI_CAT_ICONS[cat]||'📁'}</button>`
+    `<button class="ac-emoji-tab${cat===_acEmojiCat?' active':''}" data-cat="${cat}" data-h-click="emojiCat">${AC_EMOJI_CAT_ICONS[cat]||'📁'}</button>`
   ).join('') + '<button class="ac-emoji-tab" data-cat="gif" onclick="acSwitchToGifTab(event)" style="font-size:12px;font-weight:800;padding:2px 6px;border:1.5px solid currentColor;border-radius:4px;line-height:1">GIF</button>';
 
   picker.innerHTML = `
@@ -19548,7 +19606,7 @@ function acRenderEmojiGrid(filter){
     grid.style.gridTemplateColumns = 'repeat(4, 1fr)';
     grid.style.gap = '6px';
     html = AC_STICKERS.map(s =>
-      `<button type="button" class="ac-emoji-item ac-sticker-thumb" onclick="acSendSticker('${s.id}')" title="${s.name}"><img src="${s.url}" alt="${s.name}" loading="lazy" style="width:100%;height:auto;max-height:64px;object-fit:contain;border-radius:6px;"/></button>`
+      `<button type="button" class="ac-emoji-item ac-sticker-thumb" data-h-click="sendSticker" data-sid="${s.id}" title="${s.name}"><img src="${s.url}" alt="${s.name}" loading="lazy" style="width:100%;height:auto;max-height:64px;object-fit:contain;border-radius:6px;"/></button>`
     ).join('');
     grid.innerHTML = html;
     return;
@@ -19564,14 +19622,14 @@ function acRenderEmojiGrid(filter){
       const matches = emojis.filter(e => e.includes(filter));
       if(matches.length > 0){
         html += `<div class="ac-emoji-cat-label">${cat}</div>`;
-        html += matches.map(e => `<button type="button" class="ac-emoji-item" onclick="acInsertEmoji('${e}')">${e}</button>`).join('');
+        html += matches.map(e => `<button type="button" class="ac-emoji-item" data-h-click="insertEmoji" data-emoji="${e}">${e}</button>`).join('');
       }
     }
     if(!html) html = '<div class="ac-emoji-cat-label" style="text-align:center;padding:20px">No matches</div>';
   } else {
     const emojis = AC_EMOJI[_acEmojiCat] || [];
     if(Array.isArray(emojis)){
-      html = emojis.map(e => `<button type="button" class="ac-emoji-item" onclick="acInsertEmoji('${e}')">${e}</button>`).join('');
+      html = emojis.map(e => `<button type="button" class="ac-emoji-item" data-h-click="insertEmoji" data-emoji="${e}">${e}</button>`).join('');
     }
   }
   grid.innerHTML = html;
@@ -20949,7 +21007,7 @@ function showOperatorProfile(op, contactEl){
 
   card.innerHTML = `
     <div class="opc-header">
-      <div class="opc-avatar ${tier}" onclick="${(_acUser && _acUser.nick === nick) ? 'acShowAvatarPicker()' : ''}" style="cursor:${op.nick === _acUser?.nick ? 'pointer' : 'default'}">${acAvatarFor(nick, 42, isHW ? '#d4a853' : '#2dd4bf', op.avatar)}</div>
+      <div class="opc-avatar ${tier}" ${(_acUser && _acUser.nick === nick) ? 'data-h-click="showAvatarPicker"' : ''} style="cursor:${op.nick === _acUser?.nick ? 'pointer' : 'default'}">${acAvatarFor(nick, 42, isHW ? '#d4a853' : '#2dd4bf', op.avatar)}</div>
       <div>
         <div class="opc-nick ${tier}">${isHW ? '🔧 ' : '⬡ '}${acSanitize(nick)}</div>
         <span class="opc-tier-badge ${tier}">${isHW ? 'HARDWARE OPERATOR' : 'RELAY OPERATOR'}</span>
@@ -24297,7 +24355,7 @@ function renderAlerts(){
   list.innerHTML = filtered.map(a => {
     const ago = formatTimeAgo(a.time);
     const iconClass = a.type === 'health' ? 'health' : a.type === 'relay-down' ? 'relay-down' : a.type === 'relay-up' ? 'relay-up' : a.type === 'zone' ? 'zone' : a.type === 'milestone' ? 'milestone' : 'isp';
-    return `<button type="button" class="alert-item ${a.read ? '' : 'unread'}" onclick="markAlertRead(${a.id})">
+    return `<button type="button" class="alert-item ${a.read ? '' : 'unread'}" data-h-click="alertRead" data-id="${a.id}">
       <div class="alert-icon ${iconClass}">${a.icon}</div>
       <div class="alert-body">
         <div class="alert-msg">${a.msg}</div>
@@ -24751,9 +24809,9 @@ function renderRelayList(list){
      * text just was not where the row was.
      * A div with role=button, tabindex and Enter/Space handling keeps the
      * semantics and lets real buttons live inside it. */
-    return `<div role="button" tabindex="0" class="rl-item ${tierClass}" onclick="selectRelay('${r.fp}',${r.lat},${r.lon})" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();selectRelay('${r.fp}',${r.lat},${r.lon});}">
-      <button class="rl-share" title="Copy shareable link" data-i18n-title="rbCopyShareLink" onclick="event.stopPropagation();copyRelayLink('${r.fp}',this)">⬡ ${_i18t('rdShare','SHARE')}</button>
-      <button class="rl-compare-btn ${inCompare?'added':''}" title="${inCompare?_i18t('rbRemoveCompare','Remove from compare'):_i18t('rbAddCompare','Add to compare')}" onclick="event.stopPropagation();toggleCompare('${r.fp}')">${inCompare?'✓':'⬡+'}</button>
+    return `<div role="button" tabindex="0" class="rl-item ${tierClass}" data-h-click="selRelay" data-h-keydown="selRelayKey" data-fp="${r.fp}" data-lat="${r.lat}" data-lon="${r.lon}">
+      <button class="rl-share" title="Copy shareable link" data-i18n-title="rbCopyShareLink" data-h-click="copyLinkStop" data-fp="${r.fp}">⬡ ${_i18t('rdShare','SHARE')}</button>
+      <button class="rl-compare-btn ${inCompare?'added':''}" title="${inCompare?_i18t('rbRemoveCompare','Remove from compare'):_i18t('rbAddCompare','Add to compare')}" data-h-click="toggleCompareStop" data-fp="${r.fp}">${inCompare?'✓':'⬡+'}</button>
       <div class="rl-loc">${flag} ${_aoEscHtml(loc)}</div>
       <div class="rl-isp">${nick ? `<span style="color:rgba(0,245,255,.7);margin-right:4px;">${acSanitize(nick)}</span>` : ""}${_aoEscHtml(isp)}</div>
       <div class="rl-badges">${badges}<span style="font-size:8px;color:rgba(138,188,196,.55);margin-left:3px;font-family:'Share Tech Mono',monospace">${r.fp.slice(0,8)}&hellip;</span>${bwStr ? `<span style="font-size:8px;font-weight:700;color:var(--an-teal,#2dd4bf);margin-left:auto;font-family:var(--ac-font,Outfit,system-ui);letter-spacing:.5px;">${bwStr}</span>` : ''}</div>
@@ -24870,7 +24928,7 @@ function renderComparison(){
         .map(f => `<span class="rd-flag ${FLAG_CLASS[f]||''}">${f}</span>`).join('');
 
       return `<div class="rc-card">
-        <button class="rc-card-remove" onclick="event.stopPropagation();toggleCompare('${c.fp}')" title="${_i18t('rcRemove','Remove')}">✕</button>
+        <button class="rc-card-remove" data-h-click="toggleCompareStop" data-fp="${c.fp}" title="${_i18t('rcRemove','Remove')}">✕</button>
         <div class="rc-card-name">${flag} ${_aoEscHtml(c.nickname || c.fp.slice(0,8))}</div>
         <div class="rc-row"><span class="rc-k">${_i18t('rdType','Type')}</span><span class="rc-v" style="color:${typeColor}">${typeName}</span></div>
         <div class="rc-row"><span class="rc-k">${_i18t('rdLocation','Location')}</span><span class="rc-v">${c.country}</span></div>
@@ -25197,11 +25255,11 @@ async function fetchRelayDetail(fp){
     </div>
     <div class="rd-flags">${badgesHtml}</div>
     <div class="rd-actions">
-      <button class="rd-btn copy" onclick="copyFingerprint('${fp}',this)">
+      <button class="rd-btn copy" data-h-click="copyFp" data-fp="${fp}">
         <svg aria-hidden="true" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>
         ${_i18t('rdCopyFp','COPY FP')}
       </button>
-      <button class="rd-btn copy" onclick="copyRelayLink('${fp}',this)">
+      <button class="rd-btn copy" data-h-click="copyLink" data-fp="${fp}">
         <svg aria-hidden="true" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M10 13a5 5 0 007.54.54l3-3a5 5 0 00-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 00-7.54-.54l-3 3a5 5 0 007.07 7.07l1.71-1.71"/></svg>
         ${_i18t('rdShare','SHARE')}
       </button>

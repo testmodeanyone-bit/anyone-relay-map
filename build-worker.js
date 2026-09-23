@@ -184,6 +184,33 @@ async function minifyIndex(html) {
 (async () => {
 index = await minifyIndex(index);
 
+/* v3: CSP without 'unsafe-inline' for scripts. Inline handler attributes →
+ * data-h-* + a generated handler table; then hash every inline <script>
+ * body and put the hashes into the shell's script-src. See csp-inline.js. */
+{
+  const cspInline = require(path.join(__dirname, 'csp-inline.js'));
+  let t;
+  try { t = cspInline.transform(index); }
+  catch (e) { console.error('\x1b[31mFATAL: ' + e.message + '\x1b[0m'); process.exit(14); }
+  index = t.html;
+  const tmp2 = path.join(require('os').tmpdir(), 'anyonemap-index.csp.html');
+  fs.writeFileSync(tmp2, index);
+  const syntaxGate2 = path.join(__dirname, 'check-scripts.mjs');
+  if (fs.existsSync(syntaxGate2)) {
+    try { execFileSync(process.execPath, [syntaxGate2, tmp2], { stdio: 'inherit' }); }
+    catch (_) { console.error('\x1b[31mFATAL: generated handler table does not parse — build aborted.\x1b[0m'); process.exit(15); }
+  }
+  const hashes = cspInline.scriptHashes(index);
+  /* Only the SPA's header — the one that lists the CDN hosts. /bitcoin has its
+   * own two CSP headers (script-src 'self' 'unsafe-inline';) for its own
+   * inline scripts; those are untouched. */
+  const SPA_SCRIPT_SRC = "script-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com https://cdn.jsdelivr.net;";
+  const n = shell.split(SPA_SCRIPT_SRC).length - 1;
+  if (n !== 1) { console.error('\x1b[31mFATAL: expected exactly one SPA script-src directive in the shell, found ' + n + ' — CSP step cannot apply\x1b[0m'); process.exit(16); }
+  shell = shell.replace(SPA_SCRIPT_SRC, "script-src 'self' " + hashes.join(' ') + " https://cdnjs.cloudflare.com https://cdn.jsdelivr.net;");
+  console.log(`csp-inline: ${t.count} handler attributes → ${t.unique} tabled bodies; ${hashes.length} script hashes into ${n} CSP header(s); 'unsafe-inline' removed from script-src`);
+}
+
 // 1) HTML: replace the quoted token with a properly-escaped JS string literal.
 const HTML_TOKEN = '"__INDEX_HTML_PLACEHOLDER__"';
 if (shell.indexOf(HTML_TOKEN) === -1) {
