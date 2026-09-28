@@ -12873,6 +12873,7 @@ Issued: ${(/* @__PURE__ */ new Date()).toISOString()}
           relayCount,
           source: built.derived ? "consensus-derived" : "anyone-proxy",
           fetchedAt: Date.now(),
+          cachedAt: Date.now(),   /* v635: the fresh-build branch was the only one without cachedAt — the map's DATA age and AnyClip's freshness block fell back to "time since asked" for the seconds after a cache miss */
           mac,
           integrity: mac ? "signed" : "unsigned"
         }), 200, built.derived ? { "X-Registry-Source": "consensus-derived" } : {});
