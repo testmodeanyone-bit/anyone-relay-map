@@ -3585,7 +3585,7 @@ body.light #status{color:#7ecfdf;}
 #anychat-panel.ac-light .ac-pinned-bar{background:rgba(161,98,7,.04);border-color:rgba(161,98,7,.12);color:var(--ac-gold)}
 /* Auth screen */
 #anychat-panel.ac-light #anychat-auth{background:var(--ac-void)}
-#anychat-panel.ac-light #anychat-auth-sub{color:#334155;opacity:.8}
+#anychat-panel.ac-light #anychat-auth-sub{color:#334155;opacity:1}   /* v662: .8 opacity put it at 3.1:1 */
 #anychat-panel.ac-light .ac-auth-btn{background:var(--ac-surface);border-color:var(--ac-border);color:var(--ac-teal)}
 #anychat-panel.ac-light .ac-auth-btn:hover{background:rgba(13,148,136,.04);border-color:rgba(13,148,136,.2)}
 #anychat-panel.ac-light .ac-auth-input{background:var(--ac-surface);border-color:var(--ac-border);color:var(--ac-text)}
@@ -5626,7 +5626,15 @@ body.light .rs-btn.active{background:rgba(0,180,255,.1);border-color:rgba(0,180,
 .rd-status-pill{display:inline-flex;align-items:center;gap:4px;font-size:9px;font-weight:700;letter-spacing:.5px;border-radius:999px;padding:2px 8px;line-height:1.3;flex-shrink:0;}
 .rd-status-pill.live{color:var(--an-green,#34d399);background:rgba(52,211,153,.12);border:1px solid rgba(52,211,153,.35);}
 .rd-status-pill.off{color:#ff7a5c;background:rgba(255,107,53,.12);border:1px solid rgba(255,107,53,.35);}
-body.light #relay-detail.rd-floating{ background:rgba(255,255,255,.82); border-color:rgba(0,100,160,.3); }
+/* v662: the generic `body.light #relay-detail { background … !important }` rule
+ * (v-light pass) beat this one, so the floating card in DAY mode was a
+ * near-transparent panel over the dark map with dark text on it — every
+ * value invisible. Explicit, !important, and the title span too (its dark-mode
+ * colour #eaf8ff is set on the span itself). */
+body.light #relay-detail.rd-floating{ background:rgba(255,255,255,.96) !important; border:1px solid rgba(8,145,178,.28) !important; border-top:2px solid var(--rd-accent,#0E7490) !important; box-shadow:0 16px 48px rgba(0,0,0,.18), 0 0 0 1px rgba(8,145,178,.06) !important; }
+body.light #relay-detail.rd-floating .rd-title>span:first-child{ color:#1C1F26 !important; }
+body.light #relay-detail.rd-floating .rd-row{ border-bottom-color:rgba(0,0,0,.06) !important; }
+body.light #relay-detail.rd-floating .rd-row:hover{ background:rgba(8,145,178,.06) !important; }
 .rd-title{font-family:'Orbitron',sans-serif;font-size:11px;color:var(--cyan);margin-bottom:8px;display:flex;align-items:center;justify-content:space-between;}
 .rd-row{display:flex;justify-content:space-between;align-items:center;padding:3px 0;border-bottom:1px solid rgba(0,245,255,.05);}
 .rd-row:last-child{border-bottom:none;}
@@ -8343,7 +8351,7 @@ input:focus-visible, textarea:focus-visible, select:focus-visible{
     <button id="sb-btc" class="sb-btn sb-btn-btc" onclick="toggleBtcNodes()" title="Toggle Bitcoin nodes overlay (B)" data-i18n-title="btcBtnTitle" aria-label="Toggle Bitcoin nodes" data-i18n-aria="btcBtnAria"><svg aria-hidden="true" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="14" height="14" fill="currentColor" style="flex-shrink:0"><path d="M11.385 16.93h2.475c1.155 0 2.04-.42 2.04-1.395 0-.99-.69-1.32-1.83-1.485l-2.685-.45zm.39-4.965h2.13c.96 0 1.74-.36 1.74-1.305 0-.93-.66-1.215-1.71-1.365l-2.16-.345zM12 0a12 12 0 100 24 12 12 0 000-24zm4.485 9.27c-.135 1.5-.96 2.235-2.265 2.49v.06c1.785.225 2.685 1.155 2.685 2.61 0 1.815-1.395 2.97-3.96 2.97h-1.005V20H10.05v-2.595h-1.32V20H7.155v-2.595H4.5v-1.71h.81c.555 0 .795-.225.795-.69V8.625c0-.45-.225-.66-.78-.66H4.5V6.255h2.655V3.66H8.73v2.595h1.32V3.66h1.89v2.595h.555c2.43 0 3.93.96 3.99 3.015z"/></svg> BTC NODES</button>
 <!-- BITCOIN NETWORK WIDGET -->
     <div id="btc-stats-widget">
-      <h4>₿ <span data-i18n="btcCardTitle">Bitcoin Network</span></h4>
+      <h3 class="btc-h">₿ <span data-i18n="btcCardTitle">Bitcoin Network</span></h3>
       <div id="btc-stale-warning" style="display:none;background:rgba(251,191,36,.12);border:1px solid rgba(251,191,36,.35);border-radius:6px;padding:6px 8px;margin:0 0 8px;font-size:10px;line-height:1.4;color:#fbbf24"><b>&#9888; Stale data</b> &mdash; live Bitcoin node feed unavailable. Showing a 2024 reference snapshot. <a href="https://bitnodes.io" target="_blank" rel="noopener" style="color:#fcd34d;text-decoration:underline">bitnodes.io</a></div>
       <div class="btc-stat-row"><span data-i18n="btcRowTotal">Total nodes</span><b id="btc-total">—</b></div>
       <div class="btc-stat-row"><span data-i18n="btcRowAsOf">Snapshot age</span><b id="btc-asof" title="">—</b></div>
@@ -8592,7 +8600,7 @@ input:focus-visible, textarea:focus-visible, select:focus-visible{
     <div id="rc-body"></div>
   </div>
 
-  <div id="relay-detail">
+  <div id="relay-detail" role="region" aria-label="Relay details">
     <div class="rd-title" style="display:flex;align-items:center;gap:6px;">
       <span id="rd-nickname" style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">—</span>
       <span id="rd-status" style="font-size:9px;flex-shrink:0;"></span>
@@ -14477,6 +14485,7 @@ function showShortcutHint(text){
   if(!hint){
     hint = document.createElement('div');
     hint.id = 'shortcut-hint';
+    hint.setAttribute('role','status'); hint.setAttribute('aria-live','polite');   /* v662 */
     hint.style.cssText = 'position:fixed;bottom:36px;left:50%;transform:translateX(-50%);z-index:7000;pointer-events:none;background:rgba(2,10,22,.92);border:1px solid rgba(0,245,255,.2);border-radius:20px;padding:5px 16px;font-family:var(--ac-font,Outfit,system-ui);font-size:9px;font-weight:700;letter-spacing:1.5px;color:rgba(0,245,255,.8);opacity:0;transition:opacity .2s;white-space:nowrap;';
     document.body.appendChild(hint);
   }
@@ -19284,6 +19293,11 @@ function acToggleTheme(){
 function acApplyTheme(){
   const panel = document.getElementById('anychat-panel');
   const btn = document.getElementById('ac-theme-toggle');
+  /* v662: the Lounge follows the map's DAY/NIGHT unless the operator picked a
+   * Lounge theme explicitly (ac_theme). Before, DAY mode + Lounge dark left the
+   * panel's outer chrome light and its inner surfaces (--ac-void) dark, with
+   * the light palette's dark text on them — "OPERATORS LOUNGE" was invisible. */
+  try { const explicit = localStorage.getItem('ac_theme'); AC.lightMode = explicit ? explicit === 'light' : document.body.classList.contains('light'); } catch(_) {}
   if(panel){
     if(AC.lightMode){
       panel.classList.add('ac-light');
@@ -22985,6 +22999,7 @@ let darkMode = true;
 function _doThemeFlip(){
   darkMode = !darkMode;
   document.body.classList.toggle('light', !darkMode);
+  if(typeof acApplyTheme === 'function') acApplyTheme();   /* v662: Lounge follows unless set explicitly */
   // Bug #7: update only the icon character, preserving the .btn-icon wrapper.
   // Overwriting textContent would destroy the span and the emoji-font rule.
   var btn = document.getElementById('btn-theme');
@@ -26938,7 +26953,7 @@ body.light #ac-send{background:rgba(0,100,150,.12);border-color:rgba(0,100,150,.
 }
 .btc-setup-cta:focus-visible { outline: 2px solid #f7931a; outline-offset: 2px; }
 .btc-setup-cta .btc-cta-arrow { font-size: 14px; line-height: 1; }
-#btc-stats-widget h4 {
+#btc-stats-widget h3.btc-h {
     color: #f7931a; font-size: 9px; font-weight: 700;
     text-transform: uppercase; letter-spacing: 2.5px;
     font-family: 'Orbitron', sans-serif;
@@ -31896,7 +31911,7 @@ body.light #geo-info-side-panel .hw-tip-section {
   </div>
 </div>
 
-<!-- Anyone Protocol · AnyoneMap v1.3 · Unauthorized reproduction prohibited · Build: 2026-04-10 · Operator: Anyone Foundation · Contact: legal@anyone.io --><div data-ap="v1.3" data-build="20260604" style="display:none"></div><div id="ac-dimension"><button id="ac-dim-skip" onclick="acSkipDimension()">Skip ▶</button>
+<!-- Anyone Protocol · AnyoneMap v1.3 · Unauthorized reproduction prohibited · Build: 2026-04-10 · Operator: Anyone Foundation · Contact: legal@anyone.io --><div data-ap="v1.3" data-build="20260604" style="display:none"></div><div id="ac-dimension" role="region" aria-label="Entering the Lounge"><button id="ac-dim-skip" onclick="acSkipDimension()">Skip ▶</button>
     <canvas id="ac-dim-canvas"></canvas><div class="ac-dim-text" id="ac-dim-text"><div class="ac-dim-title">ENTERING THE NETWORK</div><div class="ac-dim-sub">Routing through Anyone Protocol relay nodes</div></div><div class="ac-dim-stats" id="ac-dim-stats"><div class="ac-dim-stat"><div class="ac-dim-stat-val" id="ac-dim-relays">—</div><div class="ac-dim-stat-lbl">Active Relays</div></div><div class="ac-dim-stat"><div class="ac-dim-stat-val" id="ac-dim-countries">—</div><div class="ac-dim-stat-lbl">Countries</div></div><div class="ac-dim-stat"><div class="ac-dim-stat-val" id="ac-dim-bw">—</div><div class="ac-dim-stat-lbl">Bandwidth</div></div><div class="ac-dim-stat"><div class="ac-dim-stat-val" id="ac-dim-hw">—</div><div class="ac-dim-stat-lbl">Hardware</div></div></div></div><div id="mob-tab-bar">
   <div class="mt-tabs">
     <button class="mt-tab active" onclick="mobTabSwitch(this,'map')" aria-label="Map"><span class="mt-icon">🗺</span><span>Map</span></button>
@@ -32718,7 +32733,7 @@ body.light #tz-strip line[stroke-dasharray] { stroke: rgba(8, 145, 178, 0.18) !i
   flex-shrink: 0;
 }
 @keyframes acBrandPulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
-#anychat-panel.ac-on-auth.ac-light #ac-auth-brand { color: #0d9488; }
+#anychat-panel.ac-on-auth.ac-light #ac-auth-brand { color: #0f766e; }   /* v662: #0d9488 was 3.3:1 on the light auth surface */
 #anychat-panel.ac-on-auth #anychat-auth-sub { color: var(--ac-text-hint, rgba(228,228,233,.55)) !important; }
 #anychat-panel.ac-on-auth.ac-light #anychat-auth-sub { color: #64748b !important; }
 </style>
@@ -33694,7 +33709,7 @@ body.aclive-on #anyclip-avatar{display:none !important;}
     var M=window.__anyoneMapLibre; if(!M) return false;
     if(document.getElementById('radar-panel')) return true;
     var open=true; try{ open = localStorage.getItem('radar_open')!=='0'; }catch(_){}
-    var p=document.createElement('div'); p.id='radar-panel'; if(!open) p.className='collapsed';
+    var p=document.createElement('div'); p.id='radar-panel'; p.setAttribute('role','region'); p.setAttribute('aria-label','Nearby relays'); if(!open) p.className='collapsed';   /* v662 */
     p.innerHTML='<div id="radar-head"><span class="radar-ico">◎</span><span class="radar-ttl">NEARBY RELAYS</span><span class="radar-sub">to center</span><span class="radar-chev">▾</span></div><div id="radar-body"><div class="radar-empty">scanning…</div></div>';
     document.body.appendChild(p);
     if(!document.getElementById('radar-style')){ var st=document.createElement('style'); st.id='radar-style'; st.textContent=
