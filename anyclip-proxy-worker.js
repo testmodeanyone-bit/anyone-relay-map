@@ -3002,10 +3002,10 @@ ${s.selectedCountry}
 
 === DATA FRESHNESS (measured by the server, not by the visitor) ===
 - Server time now (UTC): ${s._serverTimeUtc}
-- Relay registry snapshot: taken ${s._registryAgeMin} min ago (rebuilt every 15 min)
+- Relay registry snapshot: taken ${s._registryAgeMin} min ago (rebuilt every 15 min by schedule, and refreshed in the background whenever a visitor finds it older than 5 min — with steady traffic it is usually under 5 min old)
 - The map's stats above were last refreshed ${s.statsAgeMin} min ago (the map refreshes every 3 min)
 - CURRENT staleness of this answer: ${s._maxLagMin} min (registry age + map age)
-- WORST-CASE lag for a change on the network to reach an answer: up to 18 min (15 min registry cycle + 3 min map cycle); typically about half that
+- WORST-CASE lag for a change on the network to reach an answer: up to 18 min (15 min registry cycle + 3 min map cycle, when nobody has visited); with steady traffic up to about 8 min (5 + 3); typically less
 - These are the only cadences known. Do NOT speculate about how or how often the upstream registry itself syncs with consensus — that is not in this data.
 
 === NETWORK GROWTH (last 30 days) ===
@@ -12860,6 +12860,21 @@ Issued: ${(/* @__PURE__ */ new Date()).toISOString()}
               if (notModified(request, hdr.ETag)) return cors("", 304, hdr);   /* v638: the map polls every 3 min, the snapshot changes every 15 */
               return cors(body, 200, hdr);
             }
+            /* v639: STALE-WHILE-REVALIDATE. Past the 5-minute window the route used
+             * to rebuild inline — measured live: the visitor who crossed the
+             * boundary waited 7.8 s for the registry (an empty map for 8 s, every
+             * 5 minutes, for someone). Now the copy is served at once (up to the
+             * cron cadence) and the rebuild runs in the background, single-flight
+             * so a burst of visitors triggers one build, not one each. Snapshot
+             * age with traffic stays ~5 min, as before; nobody waits for it. */
+            if (ts && (Date.now() - ts) < REGISTRY_SWR_MAX_MS) {
+              if (ctx && typeof ctx.waitUntil === "function") {
+                ctx.waitUntil(withSingleFlight(env, REGISTRY_RESPONSE_KEY + ":swr", 120, () => buildAndCacheRegistry(env, ctx)).catch((e) => console.warn("[registry] background rebuild failed:", e && e.message)));
+              }
+              const hdr = { "Cache-Control": "public, max-age=60", "X-Cache": "REVALIDATING", "ETag": etagOf(ts), "X-Age": ((Date.now() - ts) / 1e3).toFixed(0) + "s" };
+              if (notModified(request, hdr.ETag)) return cors("", 304, hdr);
+              return cors(body, 200, hdr);
+            }
           }
           const cached = await env.FP_INDEX.get(CACHE_KEY, { type: "json" }).catch(() => null);
           if (cached && cached.data && cached.ts && (Date.now() - cached.ts) < CACHE_TTL * 1000) {
@@ -13182,6 +13197,7 @@ Issued: ${(/* @__PURE__ */ new Date()).toISOString()}
  * event log and response framing. */
 const REGISTRY_CACHE_KEY = "relay-registry-cache";
 const REGISTRY_CACHE_TTL = 300;            // serve-fresh window (route)
+const REGISTRY_SWR_MAX_MS = 20 * 60 * 1000;   // v639: past the fresh window, serve up to this age while rebuilding in the background (cron is 15 min)
 /* v587: was 30 minutes — the last-good copy was evicted half an hour after
  * the last successful build, so any upstream outage longer than that left
  * NOTHING to fall back on. Every other cached key on this proxy persists 7
