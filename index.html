@@ -2941,7 +2941,7 @@ body.light #sidebar.collapsed #sb-toggle:hover{ background:rgba(0,100,160,.2) !i
 body.light #sidebar.collapsed #sb-toggle svg{ stroke:rgba(0,100,160,.8) !important; }
 
 #sb-toggle{
-  position:absolute;right:-13px;top:50%;transform:translateY(-50%);
+  position:absolute;right:-22px;top:50%;transform:translateY(-50%);   /* v661: was -13px — half the circle sat inside the sidebar and hid whichever stat value landed at mid-height (AVG / ZONE at 900px tall) */
   width:26px;height:26px;border-radius:50%;z-index:10;cursor:pointer;
   background:rgba(1,6,16,0.97);border:1px solid var(--border);
   display:flex;align-items:center;justify-content:center;
@@ -8026,6 +8026,13 @@ input:focus-visible, textarea:focus-visible, select:focus-visible{
   body.light #ovc-cluster{background:rgba(240,248,250,.9);border-color:rgba(20,100,140,.18);}
   body.light .ovc-head,body.light .ovc-cap{color:#527a86;}
   body.light .ovc-chip{color:#0b2a33;}
+  /* v661: the segmented control had no light-mode rules — dark track, dim
+   * teal-on-grey text, the active tab barely readable. */
+  body.light .ovc-seg{background:rgba(20,100,140,.06);border-color:rgba(20,100,140,.22);}
+  body.light .ovc-seg button{color:#3d6570;}
+  body.light .ovc-seg button:hover{color:#0b2a33;}
+  body.light .ovc-seg button.ovc-on{background:#ffffff;color:#0E7490;box-shadow:inset 0 0 0 1px rgba(14,116,144,.45),0 1px 2px rgba(0,0,0,.08);}
+  body.light .ovc-seg button:focus-visible{outline-color:#0E7490;}
 </style>
 <div id="ovc-cluster" role="region" aria-label="Map overlay controls">
     <div class="ovc-head"><span class="ovc-tick"></span><span data-i18n="mapMode">Map mode</span></div>
@@ -28294,22 +28301,7 @@ body.light #cmdk-hint:hover, body.light #cmdk-hint:focus-visible { background: r
   padding: 6px 4px;
   text-align: center;
 }
-body.light #sidebar::after {
-  /* v190: same contrast boost for daylight mode */
-  content: '⌘K — Command Palette' !important;
-  display: block !important;
-  padding: 10px 12px !important;
-  font-family: 'Inter', system-ui, sans-serif !important;
-  font-size: 11px !important;
-  font-weight: 600 !important;
-  color: #0E7490 !important;                          /* deep brand teal */
-  letter-spacing: 0.04em !important;
-  text-align: center !important;
-  border-top: 1px solid rgba(8, 145, 178, .15) !important;
-  background: rgba(8, 145, 178, .04) !important;       /* warm teal tint */
-  margin-top: auto !important;
-  cursor: pointer !important;
-}
+/* v661: the v190 light-mode ⌘K ::after block that lived here came AFTER the v642 reset in the cascade, so light mode showed two hints (this pseudo-element and the real #cmdk-hint button). Removed. */
 /* v190: hover state to suggest interactivity (real shortcut still works) */
 #sidebar:hover::after {
   color: rgba(94, 234, 212, 1);
@@ -31976,6 +31968,10 @@ body.light #geo-info-side-panel .hw-tip-section {
       if (tag === 'A' || tag === 'BUTTON' || tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') continue;
       if (el.hasAttribute('tabindex')) continue;
       if (el.hasAttribute('data-a11y-promoted')) continue;
+      /* v661: a container whose keyboard access is already provided by a control
+       * inside it (relay rows: the row is clickable, the name inside is the
+       * button) must not become a second, nested control. */
+      if (el.querySelector('a[href],button,input,select,textarea,[tabindex],[role="button"]')) continue;
       el.setAttribute('tabindex', '0');
       if (!el.getAttribute('role')) el.setAttribute('role', 'button');
       el.setAttribute('data-a11y-promoted', '1');
