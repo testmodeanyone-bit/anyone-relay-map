@@ -6952,6 +6952,47 @@ var worker_source_default = {
       }
     }
 
+    if (url.pathname === "/api/domains-list" && request.method === "GET") {
+      /* v636: the .anyone domain list. The map used to poll api.ec.anyone.tech
+       * directly every 60 s — 315 KB, uncompressed, from every open tab, panel
+       * open or not. Now it comes through here: one upstream fetch per 5 minutes
+       * for everyone, stored in KV, served compressed by the edge, with an ETag
+       * so an unchanged list costs a 304 and zero bytes. Upstream down → the
+       * last good copy is served with X-Cache: STALE. Shape is unchanged. */
+      const DL_KEY = "domains:list";
+      const DL_FRESH_MS = 5 * 60 * 1e3;
+      let snap = null;
+      try { snap = env.FP_INDEX ? await env.FP_INDEX.get(DL_KEY, { type: "json" }) : null; } catch (_) {}
+      const fresh = snap && typeof snap.ts === "number" && (Date.now() - snap.ts) < DL_FRESH_MS;
+      let xcache = fresh ? "HIT" : "MISS";
+      if (!fresh) {
+        try {
+          const r = await fetch("https://api.ec.anyone.tech/anyone-domains", { signal: AbortSignal.timeout(10000), headers: { "Accept": "application/json" } });
+          if (!r.ok) throw new Error("upstream HTTP " + r.status);
+          const text = await r.text();
+          const arr = JSON.parse(text);
+          if (!Array.isArray(arr) || arr.length < 100) throw new Error("upstream shape: not a list (" + (Array.isArray(arr) ? arr.length : typeof arr) + ")");
+          const body = JSON.stringify(arr);
+          const dig = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(body));
+          const etag = '"' + [...new Uint8Array(dig)].slice(0, 12).map((b) => b.toString(16).padStart(2, "0")).join("") + '"';
+          snap = { ts: Date.now(), count: arr.length, etag, body };
+          try { if (env.FP_INDEX) await env.FP_INDEX.put(DL_KEY, JSON.stringify(snap), { expirationTtl: 7 * 86400 }); } catch (_) {}
+        } catch (e) {
+          if (!snap) return cors(JSON.stringify({ error: "domains list unavailable", detail: String(e.message || e) }), 503, { "Cache-Control": "no-store" });
+          xcache = "STALE";
+        }
+      }
+      const hdr = {
+        "Cache-Control": "public, max-age=60",
+        "ETag": snap.etag,
+        "X-Cache": xcache,
+        "X-Age": ((Date.now() - snap.ts) / 1e3).toFixed(0) + "s",
+        "X-Count": String(snap.count),
+        "Vary": "Accept-Encoding"
+      };
+      if (request.headers.get("If-None-Match") === snap.etag) return cors("", 304, hdr);
+      return cors(snap.body, 200, hdr);
+    }
     if (url.pathname === "/api/domains-chain" && request.method === "GET") {
       /* v599: on-chain .anyone total. Served straight from KV — the cron owns the
        * scan, a visitor never triggers RPC calls. ?names=1 adds the name -> mint
