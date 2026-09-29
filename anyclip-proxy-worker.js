@@ -6953,7 +6953,7 @@ var worker_source_default = {
     }
 
     if (url.pathname === "/api/domains-list" && request.method === "GET") {
-      /* v636: the .anyone domain list. The map used to poll api.ec.anyone.tech
+      /* v636/v637: the .anyone domain list. The map used to poll api.ec.anyone.tech
        * directly every 60 s — 315 KB, uncompressed, from every open tab, panel
        * open or not. Now it comes through here: one upstream fetch per 5 minutes
        * for everyone, stored in KV, served compressed by the edge, with an ETag
@@ -6990,7 +6990,11 @@ var worker_source_default = {
         "X-Count": String(snap.count),
         "Vary": "Accept-Encoding"
       };
-      if (request.headers.get("If-None-Match") === snap.etag) return cors("", 304, hdr);
+      /* v637: the edge re-compresses the body and marks the ETag weak (W/"…"), and
+       * that is what the browser echoes back — compare ignoring the W/ prefix. */
+      const weak = (t) => String(t || "").trim().replace(/^W\//, "");
+      const inm = (request.headers.get("If-None-Match") || "").split(",").map(weak);
+      if (inm.includes(weak(snap.etag))) return cors("", 304, hdr);
       return cors(snap.body, 200, hdr);
     }
     if (url.pathname === "/api/domains-chain" && request.method === "GET") {
@@ -7487,8 +7491,10 @@ var worker_source_default = {
       if (cached) {
         const age = Date.now() - (cached.builtAt || 0);
         if (age >= 0 && age < HW_FRESH_MS) {
+          const hwEt = etagOf(cached.builtAt);   /* v638: the map polls this every 60 s; the set rebuilds hourly */
+          if (notModified(request, hwEt)) return new Response(null, { status: 304, headers: jsonHeaders({ "ETag": hwEt, "X-Cache": "HIT" }) });
           return new Response(JSON.stringify(cached), {
-            headers: jsonHeaders({ "X-Cache": "HIT", "X-Age": (age / 1e3).toFixed(0) + "s", "Cache-Control": "max-age=300" })
+            headers: jsonHeaders({ "X-Cache": "HIT", "ETag": hwEt, "X-Age": (age / 1e3).toFixed(0) + "s", "Cache-Control": "max-age=300" })
           });
         }
         /* Cooldown: /api/hw-relays is polled by every open map every 60s. Without
@@ -7733,9 +7739,12 @@ var worker_source_default = {
       /* v575: stale-while-revalidate. See computeExitRelays. */
       let cached = null;
       if (env.FP_INDEX) { try { cached = await env.FP_INDEX.get(EXIT_RELAYS_KEY, { type: "json" }); } catch (_) {} }
-      const respond = (payload, cacheState, ageMs) => new Response(JSON.stringify(payload), {
-        headers: jsonHeaders({ "Cache-Control": "max-age=120", "X-Cache": cacheState, "X-Age": String(Math.round((ageMs || 0) / 1000)), "X-Count-Source": payload.count_source || "" })
-      });
+      const respond = (payload, cacheState, ageMs) => {
+        const et = etagOf(payload && payload.ts);   /* v638 */
+        if (notModified(request, et)) return new Response(null, { status: 304, headers: jsonHeaders({ "ETag": et, "X-Cache": cacheState }) });
+        return new Response(JSON.stringify(payload), {
+        headers: jsonHeaders({ "Cache-Control": "max-age=120", "ETag": et, "X-Cache": cacheState, "X-Age": String(Math.round((ageMs || 0) / 1000)), "X-Count-Source": payload.count_source || "" })
+      }); };
       const refresh = () => ctx.waitUntil((async () => {
         try {
           const fresh = await computeExitRelays(env, ctx);
@@ -12847,7 +12856,9 @@ Issued: ${(/* @__PURE__ */ new Date()).toISOString()}
             const m = /"cachedAt":(\d{10,})/.exec(body.slice(-400));
             const ts = m ? Number(m[1]) : 0;
             if (ts && (Date.now() - ts) < CACHE_TTL * 1000) {
-              return cors(body, 200, { "Cache-Control": "public, max-age=60", "X-Cache": "HIT" });
+              const hdr = { "Cache-Control": "public, max-age=60", "X-Cache": "HIT", "ETag": etagOf(ts), "X-Age": ((Date.now() - ts) / 1e3).toFixed(0) + "s" };
+              if (notModified(request, hdr.ETag)) return cors("", 304, hdr);   /* v638: the map polls every 3 min, the snapshot changes every 15 */
+              return cors(body, 200, hdr);
             }
           }
           const cached = await env.FP_INDEX.get(CACHE_KEY, { type: "json" }).catch(() => null);
@@ -13979,8 +13990,18 @@ function corsHeaders() {
     /* v20: include every custom header an authenticated v20 client may send.
      * Without these, browser preflight rejects every POST that carries an
      * auth header — i.e., every authenticated endpoint after the migration. */
-    "Access-Control-Allow-Headers": "Content-Type, x-token, x-chat-token, x-session-seal, x-admin-token"
+    "Access-Control-Allow-Headers": "Content-Type, x-token, x-chat-token, x-session-seal, x-admin-token, If-None-Match",   /* v638: conditional GETs */
+    "Access-Control-Expose-Headers": "ETag, X-Cache, X-Age, X-Count"
   } });
+}
+/* v638: conditional GET helpers. etagOf(ts) derives a weak ETag from a snapshot
+ * timestamp (cheap — no hashing of MB-sized bodies); notModified() compares the
+ * client's If-None-Match ignoring the W/ prefix the edge adds when it compresses. */
+function etagOf(ts) { return ts ? 'W/"' + Number(ts).toString(36) + '"' : null; }
+function notModified(request, etag) {
+  if (!etag) return false;
+  const weak = (t) => String(t || "").trim().replace(/^W\//, "");
+  return (request.headers.get("If-None-Match") || "").split(",").map(weak).includes(weak(etag));
 }
 function cors(body, status = 200, extra = {}) {   /* v584: optional extra headers */
   return new Response(body, { status, headers: { ...extra,
@@ -13988,11 +14009,12 @@ function cors(body, status = 200, extra = {}) {   /* v584: optional extra header
     "Content-Type": typeof body === "string" && body[0] === "{" ? "application/json" : "text/plain",
     "Access-Control-Allow-Origin": ALLOWED_ORIGIN,
     "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-    "Access-Control-Allow-Headers": "Content-Type, x-token, x-chat-token, x-session-seal, x-admin-token"
+    "Access-Control-Allow-Headers": "Content-Type, x-token, x-chat-token, x-session-seal, x-admin-token, If-None-Match",   /* v638: conditional GETs */
+    "Access-Control-Expose-Headers": "ETag, X-Cache, X-Age, X-Count"
   } });
 }
 function jsonHeaders(extra = {}) {
-  return { "Content-Type": "application/json", "Access-Control-Allow-Origin": ALLOWED_ORIGIN, "Strict-Transport-Security": "max-age=31536000; includeSubDomains", ...extra };   /* v586: HSTS was only on cors() responses */
+  return { "Content-Type": "application/json", "Access-Control-Allow-Origin": ALLOWED_ORIGIN, "Access-Control-Expose-Headers": "ETag, X-Cache, X-Age, X-Count", "Strict-Transport-Security": "max-age=31536000; includeSubDomains", ...extra };   /* v586: HSTS was only on cors() responses */
 }
 var ChatRoom = class {
   constructor(state, env) {
