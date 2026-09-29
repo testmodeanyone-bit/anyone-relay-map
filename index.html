@@ -2596,6 +2596,10 @@ body.light #bottom-sheet-inner [style*="rgba(0, 245, 255, .45)"] { color: rgba(1
 body.light #bottom-sheet-inner [style*="#2dd4bf"] { color: #0E7490 !important; }
 body.light #bottom-sheet-inner [style*="#cce8ee"] { color: #0E7490 !important; }
 body.light #bottom-sheet-inner [style*="#8bbfc9"] { color: rgba(74, 81, 89, 0.85) !important; }
+/* v664: the v659 phone rows use these two inline colours; the filter chips get a class */
+body.light #bottom-sheet-inner [style*="#e0f4ff"] { color: #0b2a33 !important; }
+body.light #bottom-sheet-inner [style*="rgba(138,188,196,.6)"] { color: #4A5159 !important; }
+body.light #bottom-sheet-inner .bs-filter { color: #0E7490 !important; border-color: rgba(14,116,144,.35) !important; }
 body.light #status    { color:#7ecfdf; }
 body.light #btn-refresh { color:#00d4e8; }
 body.light .hdr-clock { border-color:rgba(0,100,160,.15); }
@@ -6292,6 +6296,12 @@ h1, h2, .panel-title, .ac-title {
 #mob-tab-bar .mt-tab:active{opacity:.7}
 #mob-tab-bar .mt-icon{font-size:20px;line-height:1}
 #mob-tab-bar .mt-tab.active .mt-icon{filter:drop-shadow(0 0 4px rgba(94,234,212,.4))}
+/* v664: the phone tab bar had no DAY rules — a dark bar with dim grey labels
+ * (3:1) under a light page. */
+body.light #mob-tab-bar{background:rgba(248,250,252,.96);border-top-color:rgba(20,100,140,.18)}
+body.light #mob-tab-bar .mt-tab{color:#4A5159}
+body.light #mob-tab-bar .mt-tab.active{color:#0E7490}
+body.light #mob-tab-bar .mt-tab.active .mt-icon{filter:drop-shadow(0 0 4px rgba(14,116,144,.35))}
 @media(max-width:768px){
   #mob-tab-bar{display:block}
   body{padding-bottom:56px}
@@ -7685,14 +7695,14 @@ body.light .ex-stat-val {
 body.light .ex-stat-label { color: var(--an-text-dim, #4A5159) !important; }
 body.light .ex-subtitle { color: var(--an-text-dim, #4A5159) !important; }
 body.light .ex-cta {
-  background: var(--anyone-cyan, #0891B2) !important;
+  background: var(--anyone-cyan-deep, #0E7490) !important;   /* v664: #0891B2 + white was 3.6:1 */
   color: #FFFFFF !important;
   border-radius: var(--an-radius-md, 10px) !important;
   font-family: 'Inter Tight', 'Inter', system-ui, sans-serif !important;
   font-weight: 600 !important;
 }
 body.light .ex-cta:hover {
-  background: var(--anyone-cyan-deep, #0E7490) !important;
+  background: #155e75 !important;
 }
 body.light .ex-hint { color: var(--ink-disabled, #8B919A) !important; }
 body.light .ex-count {
@@ -13577,7 +13587,7 @@ function mobileSyncRelayContent(){
   filterDiv.style.cssText = 'display:flex;gap:6px;margin-bottom:10px;flex-wrap:wrap;';
   ['all','exit','guard','middle','hw'].forEach(type => {
     const btn = document.createElement('button');
-    btn.textContent = type.toUpperCase();
+    btn.textContent = type.toUpperCase(); btn.className = 'bs-filter'; btn.type = 'button';
     btn.style.cssText = 'background:rgba(0,245,255,.06);border:1px solid rgba(0,245,255,.2);color:rgba(180,220,235,.7);font-size:9px;padding:4px 10px;border-radius:4px;cursor:pointer;font-family:Share Tech Mono,monospace;letter-spacing:.5px;';
     btn.onclick = () => {
       filterDiv.querySelectorAll('button').forEach(b => b.style.background='rgba(0,245,255,.06)');
@@ -27429,7 +27439,7 @@ body.light .ex-subtitle {
   font-size: 14px !important;
 }
 body.light .ex-cta {
-  background: var(--anyone-cyan, #0891B2) !important;
+  background: var(--anyone-cyan-deep, #0E7490) !important;   /* v664: #0891B2 + white was 3.6:1 */
   color: #FFFFFF !important;
   border: none !important;
   border-radius: var(--an-radius-md, 10px) !important;
@@ -27440,7 +27450,7 @@ body.light .ex-cta {
   transition: all 200ms cubic-bezier(0.16, 1, 0.3, 1) !important;
 }
 body.light .ex-cta:hover {
-  background: var(--anyone-cyan-deep, #0E7490) !important;
+  background: #155e75 !important;
   box-shadow: 0 4px 16px rgba(8, 145, 178, 0.3) !important;
   transform: translateY(-1px) !important;
 }
@@ -31798,7 +31808,7 @@ body.light #geo-info-side-panel .hw-tip-section {
 <!-- ══════════════════════════════════════════
      FEEDBACK BUTTON + PANEL
 ══════════════════════════════════════════ -->
-<div id="feedback-panel">
+<div id="feedback-panel" role="region" aria-label="Relay feedback">
   <!-- Header -->
   <div id="fb-header">
     <span class="fb-title">⬡ RELAY FEEDBACK</span>
