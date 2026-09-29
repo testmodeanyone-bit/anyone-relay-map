@@ -209,6 +209,28 @@ index = await minifyIndex(index);
   if (n !== 1) { console.error('\x1b[31mFATAL: expected exactly one SPA script-src directive in the shell, found ' + n + ' — CSP step cannot apply\x1b[0m'); process.exit(16); }
   shell = shell.replace(SPA_SCRIPT_SRC, "script-src 'self' " + hashes.join(' ') + " https://cdnjs.cloudflare.com https://cdn.jsdelivr.net;");
   console.log(`csp-inline: ${t.count} handler attributes → ${t.unique} tabled bodies; ${hashes.length} script hashes into ${n} CSP header(s); 'unsafe-inline' removed from script-src`);
+
+  /* v4: /bitcoin gets the same treatment. Its HTML is embedded in the shell as
+   * `const bpHtml = "…"`; its inline <script> bodies are static (the live
+   * placeholders sit in the HTML text, not in the scripts), so their hashes go
+   * into the __BP_SCRIPT_HASHES__ token of the /bitcoin CSP. Any edit to those
+   * scripts changes the hashes at the next build; a script that gets a
+   * placeholder inside it would break the hash at request time, so refuse. */
+  {
+    const bpStart = shell.indexOf('const bpHtml = "');
+    const tok = '__BP_SCRIPT_HASHES__';
+    if (bpStart === -1 || shell.indexOf(tok) === -1) { console.error('\x1b[31mFATAL: /bitcoin HTML or its CSP token not found in the shell\x1b[0m'); process.exit(17); }
+    let j = bpStart + 'const bpHtml = '.length, q = j + 1;
+    while (q < shell.length) { if (shell[q] === '\\') { q += 2; continue; } if (shell[q] === '"') break; q++; }
+    const bpHtml = JSON.parse(shell.slice(j, q + 1));
+    const bodies = []; const re = /<script\b([^>]*)>([\s\S]*?)<\/script>/gi; let m;
+    while ((m = re.exec(bpHtml)) !== null) { if (!/\bsrc\s*=/.test(m[1] || '')) bodies.push(m[2]); }
+    if (!bodies.length) { console.error('\x1b[31mFATAL: no inline scripts found in /bitcoin HTML\x1b[0m'); process.exit(17); }
+    if (bodies.some((b) => b.indexOf('{{') !== -1)) { console.error('\x1b[31mFATAL: a /bitcoin inline script contains a {{placeholder}} — its hash would not match at request time\x1b[0m'); process.exit(17); }
+    const bpHashes = bodies.map((b) => "'sha256-" + require('crypto').createHash('sha256').update(b, 'utf8').digest('base64') + "'");
+    shell = shell.replace(tok, bpHashes.join(' '));
+    console.log(`csp-bitcoin: ${bpHashes.length} inline script hash(es) into the /bitcoin CSP; 'unsafe-inline' removed from its script-src`);
+  }
 }
 
 // 1) HTML: replace the quoted token with a properly-escaped JS string literal.
