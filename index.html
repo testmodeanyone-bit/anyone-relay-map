@@ -3364,7 +3364,7 @@ body.light #status{color:#7ecfdf;}
 #anychat-panel.ac-light{
   --ac-void:#f8f9fb;--ac-surface:#ffffff;--ac-elevated:#f1f3f7;--ac-border:rgba(0,20,40,.07);
   --ac-teal:#0d9488;--ac-gold:#a16207;--ac-violet:#6d28d9;
-  --ac-text:#0f172a;--ac-text-secondary:#334155;--ac-text-hint:#64748b;--ac-text-disabled:#94a3b8;--ac-muted:#64748b;--ac-dim:rgba(0,20,40,.025);
+  --ac-text:#0f172a;--ac-text-secondary:#334155;--ac-text-hint:#64748b;--ac-text-disabled:#94a3b8;--ac-muted:#475569;--ac-dim:rgba(0,20,40,.025);
   background:var(--ac-void);color:var(--ac-text);
   border:1px solid rgba(0,20,40,.1);
   box-shadow:0 20px 60px rgba(0,20,40,.12),0 0 0 1px rgba(0,20,40,.04);
@@ -3391,7 +3391,8 @@ body.light #status{color:#7ecfdf;}
 #anychat-panel.ac-light .op-contact-name{color:var(--ac-text)}
 #anychat-panel.ac-light .op-contact-name.hw{color:var(--ac-gold)}
 #anychat-panel.ac-light .op-contact-status{color:var(--ac-muted)}
-#anychat-panel.ac-light .op-contact-badge.hw{background:rgba(161,98,7,.08);color:var(--ac-gold)}
+#anychat-panel.ac-light .op-contact-badge.hw{background:rgba(161,98,7,.08);color:#854d0e}
+#anychat-panel.ac-light .op-contact-name.hw{color:#854d0e}
 #anychat-panel.ac-light .op-contact-badge.op{background:rgba(13,148,136,.06);color:var(--ac-teal)}
 #anychat-panel.ac-light .op-contact-badge.ai{background:rgba(109,40,217,.06);color:var(--ac-violet)}
 /* Chat feed area */
@@ -3696,6 +3697,9 @@ body.light #status{color:#7ecfdf;}
 }
 @media(max-width:520px){
   #anychat-panel{width:100vw;height:100vh;height:100dvh;border-radius:0;top:0;left:0;transform:none;animation:none}
+  /* v670: the phone tab bar (56 px, fixed) covered the bottom of the full-height panel — the
+   * rules note and the DM send button sat underneath it */
+  body:not(.explore-mode) #anychat-panel{height:calc(100vh - 56px);height:calc(100dvh - 56px)}
   #op-sidebar{display:none!important}
   .ac-bubble-mine,.ac-bubble-theirs,.ac-bubble-ai{max-width:82vw}
   .ac-rich-card{max-width:85vw}
@@ -15811,11 +15815,21 @@ function acConnectAbly(){
          * semantic of the v317 code at attempt 0. */
         var _v317_url = AC_PROXY + '/api/ably-token';
         var _v317_delays = [500, 1000];
+        var _v670_anonRetried = false;
         function _v317_attempt(i){
           var _v320_tok = (typeof acGetChatToken === 'function') ? acGetChatToken() : null;
           var _v320_headers = {};
           if(_v320_tok) _v320_headers['x-chat-token'] = _v320_tok;
           fetch(_v317_url, { headers: _v320_headers }).then(function(r){
+            /* v670: a 401 means the server no longer honours this token (session gone, edge lag).
+             * Drop it and retry once anonymously — the lobby channel still works — instead of
+             * handing the dead token to Ably's reconnect loop, which re-sent it every few seconds. */
+            if(r.status === 401 && _v320_tok && !_v670_anonRetried){
+              window._acChatToken = null; try { sessionStorage.removeItem('ac_chat_token'); } catch(_){}
+              _v670_anonRetried = true;
+              setTimeout(function(){ _v317_attempt(i); }, 0);
+              return null;
+            }
             if(r.status === 429 && i < _v317_delays.length){
               /* ±25% jitter around the base delay */
               var d = Math.floor(_v317_delays[i] * (0.75 + Math.random() * 0.5));
@@ -16177,6 +16191,9 @@ async function acSendMessage(){
         return;
       }
       _sendOk = true;
+      /* v670: proxy v640 returns { msgId, time } — thread them onto the optimistic bubble so
+       * the context menu's Edit/Delete reach the server (before: local-only, nobody else saw it). */
+      if(_d && _d.msgId){ window._acLastSendId = { msgId: _d.msgId, time: _d.time || msgData.time }; }
     } else if(resp.status === 429){
       const d = await resp.json().catch(()=>({}));
       _sendErrMsg = d.error || 'Slow down — sending too fast. Your message is still in the box; press send again in a moment.';
@@ -16205,7 +16222,10 @@ async function acSendMessage(){
       setTimeout(() => acAddSystemMessage(`⬡ ${_remaining} guest message${_remaining>1?'s':''} remaining. Connect your wallet for unlimited messaging.`), 500);
     }
   }
-  acAddMessage(_acUser.nick, _acUser.tier, text, Date.now());
+  {
+    const _sid = window._acLastSendId; window._acLastSendId = null;
+    acAddMessage(_acUser.nick, _acUser.tier, text, (_sid && _sid.time) || msgData.time, undefined, false, _sid ? { msgId: _sid.msgId } : undefined);
+  }
   const sentViaWS = acSendViaWS({ type: 'message', text, nick: _acUser.nick, tier: _acUser.tier });
   if(!sentViaWS && typeof acGetChatToken === 'function' && acGetChatToken()){
     /* v669: /api/ipfs-route requires x-chat-token; guests and expired sessions were getting a 401 on every send */
@@ -17953,6 +17973,7 @@ function acLoadPushSDK(){
 }
 
 // Initialize Push Protocol user (requires wallet signer)
+var AC_PUSH_ENABLED = false;
 async function acPushInit(){
   if(_pushReady && _pushUser) return _pushUser;
   if(!window.ethereum || !_acUser?.wallet){
@@ -18495,6 +18516,12 @@ function acAddMessage(nick, tier, text, time, avatar, isHistory, opts){
 
   div.querySelectorAll('.ac-bubble-meta').forEach(m => m.dataset.ts = (time||Date.now()));
   if(isMuted) div.classList.add('ac-muted-msg');
+  /* v670: a '/poll:<id>' message renders as the live poll widget (it used to show as literal text) */
+  var _pollRef = /^\/poll:([a-f0-9]{16})$/.exec((text || '').trim());
+  if(_pollRef && typeof acRenderPollWidget === 'function'){
+    var _pollHost = div.querySelector('.ac-bubble-text');
+    if(_pollHost){ _pollHost.textContent = '\ud83d\udcca Loading poll\u2026'; acRenderPollWidget(_pollRef[1], _pollHost); }
+  }
 
   var gifMatch = div.querySelector('.ac-bubble-text');
   if(gifMatch && gifMatch.textContent.startsWith('[gif:')){
@@ -19089,13 +19116,27 @@ function acEditMsg(btn){
 function acDeleteMsg(btn){
   const msg = btn.closest('.ac-msg-mine');
   if(!msg) return;
-  msg.style.transition = 'opacity .2s, transform .2s';
-  msg.style.opacity = '0';
-  msg.style.transform = 'translateX(20px)';
-  setTimeout(() => {
-    msg.remove();
-    acAddSystemMessage('Message deleted.');
-  }, 200);
+  /* v670: this used to remove the bubble locally and announce "Message deleted." while
+   * everyone else kept seeing it — /api/chat-delete was never called from the lounge. */
+  const _msgId = msg.dataset.msgid; const _msgTime = parseInt(msg.dataset.time || '0', 10);
+  const _finish = (note) => {
+    msg.style.transition = 'opacity .2s, transform .2s';
+    msg.style.opacity = '0';
+    msg.style.transform = 'translateX(20px)';
+    setTimeout(() => { msg.remove(); acAddSystemMessage(note); }, 200);
+  };
+  if(!_msgId || !/^[a-f0-9]{16}$/.test(_msgId) || !_msgTime){ _finish('Removed from your view only — this message has no server id (sent before v670 or still unconfirmed).'); return; }
+  var _h = { 'Content-Type': 'application/json' };
+  var _t = (typeof acGetChatToken === 'function') ? acGetChatToken() : null;
+  if(_t) _h['x-chat-token'] = _t;
+  fetch(AC_PROXY + '/api/chat-delete', { method:'POST', headers:_h, body: JSON.stringify({ msgId: _msgId, msgTime: _msgTime }) })
+    .then(r => r.json().catch(()=>({})).then(d => ({ st:r.status, d })))
+    .then(({st, d}) => {
+      if(d && d.ok) _finish('Message deleted for everyone.');
+      else if(st === 401) acAddSystemMessage('Delete failed — your session expired. Reconnect your wallet (guests cannot delete server-side).');
+      else acAddSystemMessage('Delete failed: ' + ((d && d.error) || ('server returned ' + st)));
+    })
+    .catch(() => acAddSystemMessage('Delete failed — network error. The message is still in the lounge.'));
 }
 
 /* v556 (audit fix #22, A5): perform a REAL server-side edit via /api/chat-edit
@@ -19113,7 +19154,8 @@ function acBroadcastEdit(bubbleEl, oldText, newText){
   var msgId = (row && row.dataset) ? row.dataset.msgid : null;
   var msgTime = (row && row.dataset && row.dataset.time) ? parseInt(row.dataset.time, 10) : NaN;
   if(!msgId || !/^[a-f0-9]{16}$/.test(msgId) || !Number.isInteger(msgTime) || msgTime <= 0){
-    /* No server-tracked id yet (optimistic local bubble) \u2014 local edit only. */
+    /* No server-tracked id (sent before v670, or unconfirmed) — local edit only; say so. */
+    acAddSystemMessage('Edited in your view only — this message has no server id, others still see the original.');
     return;
   }
   var _headers = { 'Content-Type': 'application/json' };
@@ -20197,6 +20239,7 @@ function acShowImagePreview(file){
     if(inputRow && inputWrap) inputWrap.insertBefore(preview, inputRow);
     const send = document.getElementById('anychat-send');
     if(send) send.disabled = false;
+    const textarea = document.getElementById('anychat-input');
     if(textarea) textarea.focus();
   };
   reader.readAsDataURL(file);
@@ -21133,7 +21176,7 @@ function showOperatorProfile(op, contactEl){
       </div>`;
     })()}
     <div class="opc-footer">
-      <button type="button" class="opc-btn chat" onclick="hideOperatorProfile(); opOpenChat(_profileCardOp);">💬 CHAT</button>
+      <button type="button" class="opc-btn chat" onclick="opProfileChat()">💬 CHAT</button>
       <button type="button" class="opc-btn nudge" onclick="hideOperatorProfile(); opNudgeLounge();">📳 NUDGE</button>
     </div>
   `;
@@ -21160,6 +21203,13 @@ function hideOperatorProfile(){
   const card = document.getElementById('op-profile-card');
   if(card) card.classList.remove('visible');
   _profileCardOp = null;
+}
+/* v670: the CHAT button ran hideOperatorProfile() first, which nulls _profileCardOp, then
+ * opOpenChat(null) → TypeError. Nobody could open a DM from the profile card. */
+function opProfileChat(){
+  const op = _profileCardOp;
+  hideOperatorProfile();
+  if(op) opOpenChat(op);
 }
 
 function opShowQuests(){
@@ -21970,7 +22020,8 @@ function opRenderContacts(){
 
 function opOpenChat(peer){
   // Init Push Protocol on first DM open (lazy)
-  if(!_pushReady && peer?.wallet && !peer.wallet.startsWith('V-') && window.ethereum) acPushInit().catch(function(){});
+  /* v670: Push SDK comes from cdn.jsdelivr, which the integrity guard + CSP block — never loads; off until self-hosted */
+  if(AC_PUSH_ENABLED && !_pushReady && peer?.wallet && !peer.wallet.startsWith('V-') && window.ethereum) acPushInit().catch(function(){});
   if(peer && peer.wallet && !_acE2E.peerKeys[peer.wallet]){
     /* v556 (audit fix #28): fetch the peer's P-256 key from the proxy directory
      * (was AC_CHAT_API='' \u2014 dead route \u2014 so peerKeys never populated and DMs
@@ -21978,8 +22029,11 @@ function opOpenChat(peer){
      * match the publisher's stored wh, and returns { pubkey }. */
     fetch(AC_PROXY + '/api/chat-e2e-key?wallet=' + encodeURIComponent(peer.wallet))
       .then(function(r){ return r.json(); })
-      .then(function(d){ if(d && d.pubkey) acE2EImportPeerKey(peer.wallet, d.pubkey); })
-      .catch(function(){});
+      .then(function(d){ if(d && d.pubkey) return acE2EImportPeerKey(peer.wallet, d.pubkey); })
+      .then(function(k){ if(OP.activePeer === peer.wallet && typeof acE2EUpdateBadge === 'function') acE2EUpdateBadge(k && _acE2E.myKeyPair ? 'encrypted' : 'pending'); })
+      .catch(function(){ if(OP.activePeer === peer.wallet && typeof acE2EUpdateBadge === 'function') acE2EUpdateBadge('pending'); });
+  } else if(peer && peer.wallet && typeof acE2EUpdateBadge === 'function'){
+    setTimeout(function(){ if(OP.activePeer === peer.wallet) acE2EUpdateBadge(_acE2E.peerKeys[peer.wallet] && _acE2E.myKeyPair ? 'encrypted' : 'pending'); }, 0);
   }
   if(!acCanDM(peer.nick) && _acUser?.nick !== peer.nick){
     const privacy = acGetDMPrivacy();
@@ -22108,7 +22162,7 @@ function opRenderChatHistory(wallet){
   hist.innerHTML = '';
   const msgs = OP.privateChats[wallet] || [];
   if(msgs.length === 0){
-    hist.innerHTML = '<div class="op-sys-divider" style="text-align:center;padding:40px 20px;color:var(--ac-muted);font-size:13px;">🔒 End-to-end encrypted conversation<br><span style="font-size:11px;opacity:.6;">Messages are stored on Pinata IPFS</span></div>';
+    hist.innerHTML = '<div class="op-sys-divider" style="text-align:center;padding:40px 20px;color:var(--ac-muted);font-size:13px;">🔒 Private conversation<br><span style="font-size:11px;opacity:.85;">End-to-end encrypted once both sides have shared a key — the badge above shows the current state.</span></div>';
     return;
   }
   msgs.forEach(function(m){
@@ -22245,12 +22299,30 @@ async function opSendPrivate(){
     var _dmH = { 'Content-Type': 'application/json' };
     var _dmTok = (typeof acGetChatToken === 'function') ? acGetChatToken() : null;
     if(_dmTok) _dmH['x-chat-token'] = _dmTok;
-    if(!_dmTok){ acAddWarning('AnyClip', 'Your session expired \u2014 reconnect your wallet to send direct messages.'); return; }
-    await fetch(AC_PROXY + '/api/chat-dm-send', {
+    if(!_dmTok){ acAddWarning('AnyClip', 'Your session expired \u2014 reconnect your wallet to send direct messages.'); opDMSendFailed(msg, text, input); return; }
+    var _dmResp = await fetch(AC_PROXY + '/api/chat-dm-send', {
       method:'POST', headers:_dmH,
       body: JSON.stringify({ to:OP.activePeer, text: _dmText, time:msg.time, avatar:msg.avatar })
     });
-  } catch(e){}
+    var _dmData = await _dmResp.json().catch(function(){ return {}; });
+    if(!_dmResp.ok || !_dmData || _dmData.ok === false){
+      /* v670: a 4xx/5xx used to leave a "sent" bubble that never reached the peer */
+      var _why = (_dmData && _dmData.error) || ('server returned ' + _dmResp.status);
+      opDMSendFailed(msg, text, input, _why);
+    }
+  } catch(e){ opDMSendFailed(msg, text, input, 'network error'); }
+}
+/* v670: roll back an optimistic DM bubble, put the text back in the box, explain */
+function opDMSendFailed(msg, text, input, why){
+  try {
+    var _hist = OP.privateChats[OP.activePeer] || [];
+    var _ix = _hist.indexOf(msg); if(_ix > -1) _hist.splice(_ix, 1);
+    _hist.push({ nick:'\ud83e\udd16 AnyClip', tier:'ai', text:'Not delivered' + (why ? ' (' + why + ')' : '') + ' \u2014 your message is back in the box, try again.', time:Date.now(), isWarn:true, wallet:'anyclip' });
+    opRenderChatHistory(OP.activePeer);
+    if(input && !input.value) input.value = text;
+    var _cc = document.getElementById('op-chat-char-count') || document.getElementById('ac-char-count2');
+    if(_cc && input) _cc.textContent = input.value.length + ' / 400';
+  } catch(_){}
 }
 /* ═══ Threema-style message actions ═══ */
 var AC_REACT_EMOJI = ['\ud83d\udc4d','\u2764\ufe0f','\ud83d\ude02','\ud83c\udf89','\ud83d\udd25','\u26a0\ufe0f'];
@@ -22370,9 +22442,11 @@ function acCreatePoll(question, options){
     method: 'POST', headers: _h,
     body: JSON.stringify({ question: question, options: options })
   }).then(function(r){ return r.json(); }).then(function(d){
-    if(d.ok){
-      acAddSystemMessage('\ud83d\udcca Poll created: ' + d.poll.question);
-      acSendMessage('/poll:' + d.pollId);
+    if(d.ok && d.pollId){
+      acAddSystemMessage('\ud83d\udcca Poll created: ' + ((d.poll && d.poll.question) || question));
+      /* v670: acSendMessage() reads the composer — put the poll reference there and send it */
+      var _pi = document.getElementById('anychat-input');
+      if(_pi){ _pi.value = '/poll:' + d.pollId; acSendMessage(); }
     } else { acAddSystemMessage('Poll failed: ' + (d.error || 'unknown')); }
   }).catch(function(){ acAddSystemMessage('Poll creation failed.'); });
 }
@@ -22398,7 +22472,7 @@ function acRenderPollWidget(pollId, container){
       row.appendChild(bar);
       var label = document.createElement('div'); label.style.cssText = 'position:relative;padding:8px 12px;display:flex;justify-content:space-between;align-items:center;font-size:13px;color:var(--ac-text,#e0e0e0)';
       var optText = document.createElement('span'); optText.textContent = opt;
-      var countText = document.createElement('span'); countText.textContent = count + ' (' + pct + '%)'; countText.style.cssText = 'font-size:11px;color:var(--ac-muted,#888)';
+      var countText = document.createElement('span'); countText.textContent = count + ' (' + pct + '%)'; countText.style.cssText = 'font-size:11px;color:var(--ac-text-secondary,rgba(228,228,233,.7))';
       label.appendChild(optText); label.appendChild(countText);
       row.appendChild(label);
       row.onmouseover = function(){ this.style.background = 'rgba(45,212,191,.08)'; };
@@ -22406,7 +22480,7 @@ function acRenderPollWidget(pollId, container){
       container.appendChild(row);
     });
     var footer = document.createElement('div'); footer.textContent = poll.totalVotes + ' vote' + (poll.totalVotes !== 1 ? 's' : '') + ' \u00b7 Tap to vote';
-    footer.style.cssText = 'font-size:10px;color:var(--ac-muted,#666);margin-top:6px;text-align:center';
+    footer.style.cssText = 'font-size:10px;color:var(--ac-text-secondary,rgba(228,228,233,.7));margin-top:6px;text-align:center';
     container.appendChild(footer);
   }).catch(function(){});
 }
@@ -31752,7 +31826,7 @@ body.light #geo-info-side-panel .hw-tip-section {
             <span class="op-char-count" id="op-chat-char-count">0 / 400</span>
             <button id="op-chat-send" onclick="opSendPrivate()" style="background:var(--ac-teal,#2dd4bf);border:none;border-radius:8px;padding:7px 18px;cursor:pointer;font-family:var(--ac-font,Outfit,system-ui);font-size:12px;font-weight:600;color:#111318;">Send</button>
           </div>
-          <div class="op-rules-note">🤖 AnyClip moderates · No links allowed</div>
+          <div class="op-rules-note">🔒 Private thread · No links · Report abuse from the operator card</div>
         </div>
       </div>
 

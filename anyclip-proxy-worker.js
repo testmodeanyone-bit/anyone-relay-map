@@ -10035,7 +10035,10 @@ I confirm I control this wallet.`;
          * prompt re-verify on the FIRST demoted send rather than waiting for the
          * guest rate-limit to bite at request 10. Only attached when a demotion
          * actually happened — normal sends see no extra fields. */
-        const _resp = { ok: true, cid, storage };
+        /* v640: return the stored id + time so the sender's own bubble can be edited/deleted
+         * (map v670). Before this the optimistic bubble had no msgId, so Edit was local-only
+         * and Delete never reached the server. */
+        const _resp = { ok: true, cid, storage, msgId: _msgId, time: msgTime };
         if (_demoteReason) {
           _resp.tierDemoted = true;
           _resp.demoteReason = _demoteReason;
