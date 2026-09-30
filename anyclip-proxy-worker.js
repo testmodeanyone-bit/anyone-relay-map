@@ -6786,6 +6786,15 @@ var worker_source_default = {
           return cors(JSON.stringify({ ok: false, error: "Payload too large" }), 413);
         }
       }
+      /* v642: a body that claims to be JSON but is not parseable used to reach the
+       * handler's `await request.json()`, throw, and come back as a 500 "Internal
+       * error" (8 routes, measured 2026-09-30). It is the caller's mistake: 400. The
+       * clone is what gets parsed, so the handler's own read is untouched. */
+      const _ct = (request.headers.get("content-type") || "").toLowerCase();
+      if (request.method === "POST" && _ct.indexOf("application/json") !== -1 && url.pathname !== "/api/chat-image") {
+        try { const _raw = await request.clone().text(); if (_raw.trim()) JSON.parse(_raw); }
+        catch (_) { return cors(JSON.stringify({ ok: false, error: "invalid JSON body" }), 400); }
+      }
     }
     const _ROOM_IDS = /* @__PURE__ */ new Set(["operators-lounge"]);
 
@@ -7772,6 +7781,7 @@ var worker_source_default = {
     if (url.pathname === "/api/wallet-ips" && request.method === "GET") {
       const wallet = url.searchParams.get("wallet") || "";
       if (!wallet) return cors(JSON.stringify({ error: "wallet param required" }), 400);
+      if (!/^0x[0-9a-fA-F]{40}$/.test(wallet)) return cors(JSON.stringify({ error: "wallet must be a 0x-prefixed 40-hex address" }), 400);   /* v642: junk went upstream and came back as a 502 */
       /* v536: KV cache + timeout + stale-on-error.
        *
        * Measured 2026-09-10: the fp-index build failed 127 of 510 wallets, every
@@ -10751,14 +10761,18 @@ I confirm I control this wallet.`;
     if (url.pathname === "/api/chat-e2e-key" && request.method === "GET") {
       try {
         if (!env.FP_INDEX) return cors(JSON.stringify({ error: "KV not bound" }), 503);
-        const cleanedWallet = cleanWallet(url.searchParams.get("wallet"));
-        if (!cleanedWallet) return cors(JSON.stringify({ error: "wallet required" }), 400);
-        const wh = await hashWallet(cleanedWallet);
+        /* v641: presence (/api/chat-online) exposes only the wallet HASH, so a DM opened from
+         * the contacts list can look the key up by ?wh= as well. A wh is not secret — it is
+         * already the DM routing id — and the key directory holds public keys only. */
+        const whParam = cleanHex(url.searchParams.get("wh"), 64);
+        const cleanedWallet = whParam ? null : cleanWallet(url.searchParams.get("wallet"));
+        if (!cleanedWallet && !whParam) return cors(JSON.stringify({ error: "wallet or wh required" }), 400);
+        const wh = whParam || await hashWallet(cleanedWallet);
         const record = await env.FP_INDEX.get(`e2e-p256-pubkey:${wh}`, { type: "json" });
         if (!record || !record.pubkey) {
           return cors(JSON.stringify({ error: "No E2E key published for this wallet" }), 404);
         }
-        return cors(JSON.stringify({ wallet: cleanedWallet, pubkey: record.pubkey, ts: record.ts }), 200);
+        return cors(JSON.stringify({ wallet: cleanedWallet || undefined, wh, pubkey: record.pubkey, ts: record.ts }), 200);
       } catch (e) {
         return cors(JSON.stringify({ error: "Internal error" }), 500);
       }
@@ -11146,7 +11160,7 @@ I confirm I control this wallet.`;
          * queried wallet's hash. */
         const wallet = url.searchParams.get("wallet");
         const since = parseInt(url.searchParams.get("since") || "0");
-        if (!wallet) return cors(JSON.stringify({ messages: [] }), 400);
+        if (!wallet) return cors(JSON.stringify({ messages: [], error: "wallet param required" }), 400);
         const tokVerify = await verifyChatToken(env, request.headers.get("x-chat-token"));
         if (!tokVerify.ok) return cors(JSON.stringify({ messages: [], error: tokVerify.error, banned: tokVerify.banned }), tokVerify.status);
         const myWh = await hashWallet(wallet);
@@ -14025,7 +14039,7 @@ function notModified(request, etag) {
 function cors(body, status = 200, extra = {}) {   /* v584: optional extra headers */
   return new Response(body, { status, headers: { ...extra,
     "Strict-Transport-Security": "max-age=31536000; includeSubDomains",   /* v584 */
-    "Content-Type": typeof body === "string" && body[0] === "{" ? "application/json" : "text/plain",
+    "Content-Type": typeof body === "string" && (body[0] === "{" || body[0] === "[") ? "application/json" : "text/plain",   /* v642: arrays (domains-list) were text/plain */
     "Access-Control-Allow-Origin": ALLOWED_ORIGIN,
     "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
     "Access-Control-Allow-Headers": "Content-Type, x-token, x-chat-token, x-session-seal, x-admin-token, If-None-Match",   /* v638: conditional GETs */
