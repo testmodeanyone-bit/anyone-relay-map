@@ -692,7 +692,7 @@ setTimeout(function() {
         cmds.push({
           id: 'country_' + info.cc, _en: enName,
           title: (typeof _i18tFmt === 'function') ? _i18tFmt('cmdJumpTo', 'Jump to {name}', { name: name }) : 'Jump to ' + name,   /* v644: i18n */
-          subtitle: info.count + ' ' + _i18t('relays','relays').toLowerCase() + ' · ' + info.cc,
+          subtitle: info.count + ' ' + _i18tl('relays','relays') + ' · ' + info.cc,
           group: _i18t('cmdGroupCountries','Countries'),
           icon: '⚑',
           keywords: name + ' ' + info.cc + ' country jump',
@@ -5905,7 +5905,7 @@ body.light #dp-search{ background:rgba(0,100,160,.04);color:#0a2540; }
 }
 #alert-panel.open{display:block;}
 #alert-filters{display:flex;gap:3px;padding:6px 8px;border-bottom:1px solid rgba(0,245,255,.06);flex-wrap:wrap;}
-.alert-filter{font-size:7px;font-family:'Orbitron',sans-serif;letter-spacing:.5px;padding:2px 6px;border-radius:3px;border:1px solid rgba(0,245,255,.12);background:transparent;color:rgba(0,245,255,.5);cursor:pointer;transition:all .2s;}
+.alert-filter{font-size:7px;font-family:'Orbitron',sans-serif;letter-spacing:.5px;padding:2px 6px;border-radius:3px;border:1px solid rgba(0,245,255,.2);background:transparent;color:#5eead4;cursor:pointer;transition:all .2s;}
 .alert-filter:hover{border-color:rgba(0,245,255,.4);color:rgba(0,245,255,.8);}
 .alert-filter.active{border-color:#00f5ff;color:#00f5ff;background:rgba(0,245,255,.1);}
 #alert-list{max-height:200px;overflow-y:auto;padding:2px 0;}
@@ -5943,7 +5943,7 @@ body.light #alert-panel .alert-item:not(.unread)::before{background:#0a6e9a;box-
 .alert-body{flex:1;min-width:0;}
 .alert-msg{font-size:9px;color:#e0f4ff;line-height:1.3;}
 .alert-msg b{color:#00f5ff;font-weight:700;}
-.alert-time{font-size:7px;color:rgba(138,188,196,.35);margin-top:1px;font-family:'Share Tech Mono',monospace;}
+.alert-time{font-size:8px;color:rgba(160,205,215,.85);margin-top:1px;font-family:'Share Tech Mono',monospace;}
 .alert-empty{text-align:center;padding:12px 8px;color:rgba(138,188,196,.55);font-size:9px;}
 body.light #alert-panel{background:rgba(0,100,160,.03);border-color:rgba(0,100,160,.15);}
 body.light .alert-msg{color:#0a2540;}
@@ -6189,6 +6189,8 @@ body.light #fb-relay-note{ color:rgba(0,100,160,.45); }
   #sig-counts{ left:8px !important; right:8px !important; width:auto !important; max-width:none !important; }
   #alert-sheet{ display:none; position:fixed; left:0; right:0; bottom:calc(56px + env(safe-area-inset-bottom)); max-height:60vh; overflow:auto; z-index:9500; background:#020b12; border-top:1px solid rgba(94,234,212,.15); padding:6px 12px 12px; }
   #alert-sheet.open{ display:block; }
+  body:not(.light) #alert-sheet .alert-filter.active{ color:#021017; background:#5eead4; }
+  body.light #alert-sheet .alert-filter.active{ color:#fff; background:#0e7490; }
   #alert-sheet .as-head{ display:flex; align-items:center; justify-content:space-between; font-family:'Orbitron',sans-serif; font-size:11px; letter-spacing:2px; color:var(--an-teal-text,#5eead4); padding:6px 0 4px; }
   #alert-sheet .as-close{ background:none; border:1px solid rgba(94,234,212,.25); color:inherit; border-radius:8px; width:36px; height:36px; font-size:14px; cursor:pointer; }
   #alert-sheet #alert-panel{ margin:0; }
@@ -8415,7 +8417,7 @@ input:focus-visible, textarea:focus-visible, select:focus-visible{
         <!-- v248 (Bug A8): added MILESTONES filter so milestone alerts have their own bucket -->
         <button class="alert-filter" data-filter="milestone" onclick="filterAlerts('milestone')" data-i18n="alertFilterMilestones">MILESTONES</button>
         <!-- v638: updateAlertBadge() has written "{n} alerts" here since v248; the element never existed (found by check-dead-ids). -->
-        <span id="alert-count-label" style="margin-left:auto;font-size:9px;color:rgba(180,220,235,.5);align-self:center;white-space:nowrap"></span>
+        <span id="alert-count-label" style="margin-left:auto;font-size:9px;color:rgba(180,220,235,.8);align-self:center;white-space:nowrap"></span>
       </div>
       <div id="alert-list">
         <div class="alert-empty" data-i18n="alertMonitoring">Monitoring network…</div>
@@ -13742,7 +13744,7 @@ function mobileRenderRelayList(list){
   const el = document.getElementById('bs-relay-list');
   if(!el) return;
   const rc = document.getElementById('bs-relay-count');
-  if(rc) rc.textContent = list.length.toLocaleString() + ' ' + _i18t('relays','relays').toLowerCase();
+  if(rc) rc.textContent = list.length.toLocaleString() + ' ' + _i18tl('relays','relays');
   const show = list.slice(0, MOB_RB_PAGE);
   if(!show.length){
     el.innerHTML = '<div style="color:rgba(138,188,196,.7);font-size:11px;padding:12px 0">' + _i18t('noResults','No results') + '</div>';
@@ -24684,6 +24686,8 @@ function toggleAlertPanel(){
   const btn = document.getElementById('sb-alerts');
   if(btn) btn.classList.toggle('active', !isOpen);
   if(!isOpen){
+    /* v673: on desktop the panel sits low in the scrolling sidebar — it opened below the fold */
+    try { if(!(typeof isMobile === 'function' && isMobile())) setTimeout(function(){ let sc = panel.parentElement; while(sc && sc !== document.body && !/auto|scroll/.test(getComputedStyle(sc).overflowY)) sc = sc.parentElement; if(!sc || sc === document.body) return; const top = panel.getBoundingClientRect().top - sc.getBoundingClientRect().top + sc.scrollTop - 110; sc.scrollTo({ top: Math.max(0, top), behavior: 'smooth' }); }, 350); } catch(_){}
     _alerts.forEach(a => a.read = true);
     updateAlertBadge();
     renderAlerts();
@@ -26041,8 +26045,8 @@ function _scoreGeo(allRelays, total){
   const score = Math.min(20, Math.round((countries/60)*12 + Math.max(0,(1-top1C/0.35))*4 + Math.max(0,(1-top3C/0.60))*4));
   return { score, max:20, iconKey:'geo', label:_i18t('geographicSpread','Geographic Spread'), icon:'🌍',
     _top1:top1C, _top1Name:cEntries[0][0], _top3:top3C,   /* v576: for the next-step line */
-    detail:`${countries} ${_i18t('countries','countries').toLowerCase()} · top: ${_aoEscHtml(cEntries[0][0])} ${(top1C*100).toFixed(0)}%`,
-    sub:`${_i18t('top3','Top 3')} ${_i18t('countries','countries').toLowerCase()} ${_i18t('hold','hold')} ${(top3C*100).toFixed(0)}% ${_i18t('ofAllRelays','of all relays')}`,
+    detail:`${countries} ${_i18tl('countries','countries')} · top: ${_aoEscHtml(cEntries[0][0])} ${(top1C*100).toFixed(0)}%`,
+    sub:`${_i18t('top3','Top 3')} ${_i18tl('countries','countries')} ${_i18t('hold','hold')} ${(top3C*100).toFixed(0)}% ${_i18t('ofAllRelays','of all relays')}`,
     color: score>=16?'#2dd4bf':score>=11?'#f59e0b':'#ef4444',
     _risk: top1C>0.30 ? `${_aoEscHtml(cEntries[0][0])} ${_i18t('hold','holds')} ${(top1C*100).toFixed(0)}% ${_i18t('ofAllRelays','of all relays')}` : null,
     _countries: countries, _top3C: top3C };
@@ -26082,7 +26086,7 @@ function _scoreExit(total){
   const _cov = total>0 ? flagged/total : 1;
   const score = Math.min(15, Math.round(ratio>=0.40&&ratio<=0.65?15:ratio>=0.30&&ratio<=0.75?10:5));
   return { score, max:15, iconKey:'exit', label:_i18t('exitRelayRatio','Exit Relay Ratio'), icon:'🟠',
-    detail:`${(ratio*100).toFixed(0)}% exits · ${exitCount.toLocaleString()} ${_i18t('relays','relays').toLowerCase()}` + (flagged>0 && _cov<0.9 ? ` · ${(_cov*100).toFixed(0)}% ${_i18t('covered','covered')}` : ''),
+    detail:`${(ratio*100).toFixed(0)}% exits · ${exitCount.toLocaleString()} ${_i18tl('relays','relays')}` + (flagged>0 && _cov<0.9 ? ` · ${(_cov*100).toFixed(0)}% ${_i18t('covered','covered')}` : ''),
     sub: (flagged>0 && _cov<0.6) ? _i18t('partialFlagData','Partial flag data — ratio from covered relays') : ratio>=0.40&&ratio<=0.65?_i18t('idealRange','Ideal range (40–65%)'):ratio>=0.30?_i18t('acceptableRange','Acceptable range'):_i18t('outsideRange','Outside ideal range'),
     color: (flagged>0 && _cov<0.6) ? '#f59e0b' : score>=13?'#2dd4bf':score>=9?'#f59e0b':'#ef4444', _coverage:_cov };
 }
@@ -26122,11 +26126,11 @@ function _scoreUptime(allRelays, total){
   /* v246 (Bug #4): _kind tag lets renderHealthPanel detect this metric without */
   /* string-comparing label, which broke for non-English languages. */
   return { score, max:15, _kind:'uptime', iconKey:'uptime', label:_i18t('uptimeHistory','Uptime History'), icon:'⬆',
-    detail:`${(qualityPct*100).toFixed(0)}% ${_i18t('stable','stable')} · ${up30.toLocaleString()} ${_i18t('relays','relays').toLowerCase()} 30d+ · ${up90.toLocaleString()} ${_i18t('relays','relays').toLowerCase()} 90d+` + (cov>0 && cov<0.9 ? ` · ${(cov*100).toFixed(0)}% ${_i18t('covered','covered')}` : ''),
+    detail:`${(qualityPct*100).toFixed(0)}% ${_i18t('stable','stable')} · ${up30.toLocaleString()} ${_i18tl('relays','relays')} 30d+ · ${up90.toLocaleString()} ${_i18tl('relays','relays')} 90d+` + (cov>0 && cov<0.9 ? ` · ${(cov*100).toFixed(0)}% ${_i18t('covered','covered')}` : ''),
     _coverage: cov,
     sub: qualityPct>=0.70?`${_i18t('majorityStable','Majority stable')} · ${_i18t('avgUptime','avg uptime')} ${upAvgDays}d · ${up90.toLocaleString()} ${_i18t('veterans','veterans')} 90d+`
        : qualityPct>=0.50?`${_i18t('mostReliable','Most relays reliable')} · ${up30.toLocaleString()} ${_i18t('running','running')} 30d+ · ${_i18t('avgUptime','avg uptime')} ${upAvgDays}d`
-       : `${stableCount.toLocaleString()} ${_i18t('stable','stable')} ${_i18t('relays','relays').toLowerCase()} · ${up30.toLocaleString()} ${_i18t('running','running')} 30d+ · ${_i18t('growing','growing')}`,
+       : `${stableCount.toLocaleString()} ${_i18t('stable','stable')} ${_i18tl('relays','relays')} · ${up30.toLocaleString()} ${_i18t('running','running')} 30d+ · ${_i18t('growing','growing')}`,
     color: score>=12?'#2dd4bf':score>=8?'#f59e0b':'#ef4444' };
 }
 function _scoreHardware(total){
@@ -26143,15 +26147,15 @@ function _scoreHardware(total){
   const hwPct=hwCount/total;
   const score=Math.min(10,Math.round(Math.min(hwPct/0.18,1)*10));
   return { score, max:10, iconKey:'hw', label:_i18t('hardwareRelayRatio','Hardware Relay Ratio'), icon:'🔧',
-    detail:hwReg>0?`${(hwPct*100).toFixed(1)}% ${_i18t('hardware','hardware').toLowerCase()} · ${hwCount.toLocaleString()} ${_i18t('hwActiveCons','Active in consensus').toLowerCase()} · ${hwReg.toLocaleString()} ${_i18t('hwRegistered','Registered total').toLowerCase()}`:_i18t('loadingHW','Loading hardware data…'),
+    detail:hwReg>0?`${(hwPct*100).toFixed(1)}% ${_i18tl('hardware','hardware')} · ${hwCount.toLocaleString()} ${_i18tl('hwActiveCons','Active in consensus')} · ${hwReg.toLocaleString()} ${_i18tl('hwRegistered','Registered total')}`:_i18t('loadingHW','Loading hardware data…'),
     sub: hwPct>=0.15?_i18t('excellentHardware','Excellent hardware infrastructure'):hwPct>=0.08?_i18t('goodHardware','Good hardware relay presence'):hwPct>0?_i18t('growingHardware','Growing hardware infrastructure'):_i18t('awaitingHW','Awaiting hardware data'),
     color: score>=8?'#2dd4bf':score>=5?'#f59e0b':'#ef4444',
-    _risk: hwPct>0&&hwPct<0.05?`${_i18t('only','Only')} ${(hwPct*100).toFixed(1)}% ${_i18t('hardware','hardware')} ${_i18t('relays','relays').toLowerCase()} — ${_i18t('mostlyVirtual','mostly virtual nodes')}`:null };
+    _risk: hwPct>0&&hwPct<0.05?`${_i18t('only','Only')} ${(hwPct*100).toFixed(1)}% ${_i18t('hardware','hardware')} ${_i18tl('relays','relays')} — ${_i18t('mostlyVirtual','mostly virtual nodes')}`:null };
 }
 function _scoreSize(total, zoneCount){
   const score=Math.min(5,Math.round(Math.min(total/9000,1)*5));
   return { score, max:5, iconKey:'size', label:_i18t('networkSize','Network Size'), icon:'⬡',
-    detail:`${total.toLocaleString()} ${_i18t('relays','relays').toLowerCase()} · ${zoneCount} ${_i18t('zones','zones').toLowerCase()}`,
+    detail:`${total.toLocaleString()} ${_i18tl('relays','relays')} · ${zoneCount} ${_i18tl('zones','zones')}`,
     sub:total>=7000?_i18t('largeNetwork','Large network — good capacity'):total>=4000?_i18t('mediumNetwork','Medium network'):_i18t('growingNetwork','Growing network'),
     color: score>=4?'#2dd4bf':score>=3?'#f59e0b':'#ef4444' };
 }
@@ -26189,7 +26193,7 @@ function computeHealthScore(){
   const { grade, color: gradeColor, label: gradeLabel } = healthGradeFor(total_score);
 
   return { total: total_score, scores, grade, gradeColor, gradeLabel, risks,
-           summary: `${total.toLocaleString()} ${_i18t('relays','relays').toLowerCase()} · ${geo._countries} ${_i18t('countries','countries').toLowerCase()} · ${isp._isps} ISPs · ${(bw._totalBW/1024).toFixed(0)} GB/s` };
+           summary: `${total.toLocaleString()} ${_i18tl('relays','relays')} · ${geo._countries} ${_i18tl('countries','countries')} · ${isp._isps} ISPs · ${(bw._totalBW/1024).toFixed(0)} GB/s` };
 }
 
 /* v576: WHAT WOULD GET THIS TO THE NEXT GRADE.
@@ -26330,7 +26334,9 @@ function renderHealthPanel(){
   const h = computeHealthScore();
   if(!h) return;
 
-  const vividColor = h.total>=85?'#34d399':h.total>=75?'#2dd4bf':h.total>=65?'#2dd4bf':h.total>=55?'#fbbf24':h.total>=40?'#f97316':'#ef4444';
+  /* v673: colour from the one grade scale (healthGradeFor) — the local 85/75/65 cut-offs
+   * disagreed with the 88/78/68 grade thresholds, so an 86 read "A" in A+ green. */
+  const vividColor = h.gradeColor;
 
   document.getElementById('btn-health-score').textContent = h.total;
   document.getElementById('btn-health-score').style.color = vividColor;
@@ -26433,7 +26439,7 @@ function renderHealthPanel(){
   const ftCountEl = document.getElementById('health-footer-counts');
   if(ftCountEl && allRelays.length){
     const cSet = new Set(allRelays.map(r=>r.countryCode).filter(Boolean));
-    ftCountEl.textContent = `${allRelays.length.toLocaleString()} ${_i18t('relays','relays').toLowerCase()} · ${cSet.size} ${_i18t('countries','countries').toLowerCase()}`;
+    ftCountEl.textContent = `${allRelays.length.toLocaleString()} ${_i18tl('relays','relays')} · ${cSet.size} ${_i18tl('countries','countries')}`;
   }
 }
 
@@ -26467,7 +26473,7 @@ function updateHealthButton(){
   const h = computeHealthScore();
   if(!h) return;
   const btn = document.getElementById('btn-health-score');
-  const scoreColor = h.total>=85?'#34d399':h.total>=75?'#2dd4bf':h.total>=65?'#2dd4bf':h.total>=55?'#fbbf24':h.total>=40?'#f97316':'#ef4444';
+  const scoreColor = h.gradeColor;   /* v673: same scale as the grade */
   if(btn){ btn.textContent = h.total; btn.style.color = scoreColor;
     document.getElementById('btn-health').style.borderColor = scoreColor+'88';
   }
@@ -26649,6 +26655,8 @@ const I18N = {
 let _i18nLang = localStorage.getItem('anymap_lang') || 'en';
 
 function _i18t(key, fallback){ const t = I18N[_i18nLang]; return (t && t[key]) || fallback || key; }
+/* v673: lower-case a translated noun only where the language does that mid-sentence (German keeps capitals) */
+function _i18tl(key, fallback){ const v = _i18t(key, fallback); if(_i18nLang !== 'de') return v.toLowerCase(); return (v.length > 1 && v === v.toUpperCase()) ? v.charAt(0) + v.slice(1).toLowerCase() : v; }
 /* v248: format-string helper. Replaces {name} placeholders in a translated template */
 /* with values from `vars`. Used by alert messages where templates have embedded counts. */
 function _i18tFmt(key, fallback, vars){ var t = _i18t(key, fallback); return t.replace(/\{(\w+)\}/g, function(_, k){ /* v628: was /{(w+)}/ — a literal w, so no placeholder was ever replaced; every alert read "{n} new relays joined — network now at {total}" */ return (vars && vars[k] !== undefined) ? vars[k] : '{'+k+'}'; }); }
@@ -28042,9 +28050,11 @@ body.light .alert-msg {
   opacity: 1 !important;
 }
 body.light .alert-time {
-  color: #6B7280 !important;
+  color: #4b5563 !important;
   opacity: 1 !important;
 }
+body.light #alert-count-label { color: #475569 !important; }
+body.light #alert-sheet .alert-filter.active { color: #fff !important; background: #0e7490 !important; }
 body.light .alert-icon {
   opacity: 1 !important;
 }
