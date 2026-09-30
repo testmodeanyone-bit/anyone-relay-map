@@ -182,6 +182,38 @@ async function minifyIndex(html) {
 }
 
 (async () => {
+/* v5: split the I18N table. English stays inline; the other languages become
+ * JSON packs served at /i18n/<lang>.json by the shell (see I18N_PACKS). The
+ * table is parsed as JS (object literal with unquoted keys and single quotes)
+ * in a bare vm context, per language block, and refused if any block does
+ * not parse or if a language ends up with fewer keys than English. */
+{
+  const vm = require('vm');
+  const start = index.indexOf('const I18N = {');
+  const end = index.indexOf('\n};', start);
+  if (start === -1 || end === -1) { console.error('\x1b[31mFATAL: I18N table not found in index.html\x1b[0m'); process.exit(18); }
+  const seg = index.slice(start, end);
+  const blocks = [...seg.matchAll(/\n  ([a-z]{2}):\{/g)];
+  const packs = {}; let enBlock = null; let enKeys = 0;
+  for (let i = 0; i < blocks.length; i++) {
+    const lang = blocks[i][1]; const from = blocks[i].index; const to = i + 1 < blocks.length ? blocks[i + 1].index : seg.length;
+    let body = seg.slice(from + blocks[i][0].length, to).replace(/\s*\},?\s*$/, '');
+    let obj;
+    try { obj = vm.runInNewContext('({' + body + '})'); } catch (e) { console.error('\x1b[31mFATAL: I18N block "' + lang + '" does not parse: ' + e.message + '\x1b[0m'); process.exit(18); }
+    if (lang === 'en') { enBlock = seg.slice(from, to); enKeys = Object.keys(obj).length; continue; }
+    const json = JSON.stringify(obj);
+    packs[lang] = { body: json, etag: require('crypto').createHash('sha256').update(json).digest('hex').slice(0, 16), keys: Object.keys(obj).length };
+  }
+  if (!enBlock) { console.error('\x1b[31mFATAL: no en block in I18N\x1b[0m'); process.exit(18); }
+  for (const [lang, p] of Object.entries(packs)) if (p.keys < enKeys * 0.9) { console.error('\x1b[31mFATAL: I18N pack ' + lang + ' has ' + p.keys + ' keys vs en ' + enKeys + '\x1b[0m'); process.exit(18); }
+  index = index.slice(0, start) + 'const I18N = {' + enBlock.replace(/,?\s*$/, '') + index.slice(end);
+  const tok = '__I18N_PACKS_PLACEHOLDER__';
+  if (shell.indexOf(tok) === -1) { console.error('\x1b[31mFATAL: ' + tok + ' not found in shell\x1b[0m'); process.exit(18); }
+  shell = shell.replace(tok, function(){ return JSON.stringify(packs); });
+  const total = Object.values(packs).reduce((s, p) => s + p.body.length, 0);
+  console.log(`i18n-split: ${Object.keys(packs).length} language packs (${Math.round(total / 1024)} KB) moved out of the page; en (${enKeys} keys) stays inline`);
+}
+
 index = await minifyIndex(index);
 
 /* v3: CSP without 'unsafe-inline' for scripts. Inline handler attributes →

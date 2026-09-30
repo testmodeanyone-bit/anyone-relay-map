@@ -26447,7 +26447,20 @@ function i18nToggle(){
   document.getElementById('i18n-row').classList.toggle('open');
 }
 
+/* v668: the 14 non-English tables are no longer inline. The build leaves only
+ * `en` in I18N and serves the rest at /i18n/<lang>.json (cached an hour, ETag).
+ * A pack is fetched the first time its language is selected — or at startup
+ * when the saved language is not English. Until it lands, _i18t() returns the
+ * English fallbacks it always had; i18nSet re-applies once it is there. */
+const _i18nLoading = {};
+function _i18nLoad(lang){
+  if(lang === 'en' || I18N[lang]) return Promise.resolve(true);
+  if(_i18nLoading[lang]) return _i18nLoading[lang];
+  _i18nLoading[lang] = fetch('/i18n/' + lang + '.json').then(r => r.ok ? r.json() : null).then(j => { if(j && typeof j === 'object'){ I18N[lang] = j; return true; } return false; }).catch(() => false).finally(() => { delete _i18nLoading[lang]; });
+  return _i18nLoading[lang];
+}
 function i18nSet(lang){
+  if(lang !== 'en' && !I18N[lang]){ _i18nLoad(lang).then(ok => { if(ok) i18nSet(lang); else console.warn('[i18n] pack unavailable:', lang); }); return; }
   _i18nLang = lang;
   localStorage.setItem('anymap_lang', lang);
   /* v215: signal AnyClip closure to rebuild chips in the new language. */
@@ -26696,9 +26709,12 @@ function i18nApply(){
   }
 }
 
-if(_i18nLang !== 'en') setTimeout(()=>{ i18nApply(); document.querySelector(`.i18n-flag[data-lang="${_i18nLang}"]`)?.classList.add('active'); }, 500);
-if(_i18nLang !== 'en') setTimeout(i18nApply, 5000);
-if(_i18nLang !== 'en') setTimeout(i18nApply, 15000);
+if(_i18nLang !== 'en') _i18nLoad(_i18nLang).then(ok => {   /* v668: fetch the saved language's pack, then apply as before */
+  if(!ok){ console.warn('[i18n] pack unavailable, staying in English:', _i18nLang); return; }
+  setTimeout(()=>{ i18nApply(); document.querySelector(`.i18n-flag[data-lang="${_i18nLang}"]`)?.classList.add('active'); }, 0);
+  setTimeout(i18nApply, 5000);
+  setTimeout(i18nApply, 15000);
+});
 
 /* v374: i18n flag handlers are now event-delegated. Was 15 spans \u00d7 2 inline
  * handlers (onclick + onkeydown) = 30 inline handlers; now one click and one
