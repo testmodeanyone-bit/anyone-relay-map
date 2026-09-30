@@ -1568,11 +1568,11 @@ function mobTabSwitch(btn, tab){
 // ═══ FORM VALIDATION ═══
 function acValidateNick(input){
   var val = (input.value || '').trim();
-  var msgEl = input.parentNode.querySelector('.ac-validation-msg');
+  var msgEl = input.nextElementSibling && input.nextElementSibling.classList.contains('ac-validation-msg') ? input.nextElementSibling : null;
   if(!msgEl){
     msgEl = document.createElement('div');
     msgEl.className = 'ac-validation-msg';
-    input.parentNode.appendChild(msgEl);
+    input.insertAdjacentElement('afterend', msgEl);
   }
   if(val.length === 0){
     input.classList.remove('ac-input-valid','ac-input-invalid');
@@ -1611,12 +1611,13 @@ function acValidateNick(input){
 function acValidatePassword(input){
   var val = input.value || '';
   // Create or find strength meter
-  var meter = input.parentNode.querySelector('.ac-pw-strength');
+  var meter = input.nextElementSibling && input.nextElementSibling.classList.contains('ac-pw-strength') ? input.nextElementSibling : null;
   if(!meter){
     meter = document.createElement('div');
     meter.className = 'ac-pw-strength';
+    meter.setAttribute('aria-hidden', 'true');
     meter.innerHTML = '<div class="ac-pw-bar"></div><div class="ac-pw-bar"></div><div class="ac-pw-bar"></div><span class="ac-pw-label"></span>';
-    input.parentNode.appendChild(meter);
+    input.insertAdjacentElement('afterend', meter);
   }
   var bars = meter.querySelectorAll('.ac-pw-bar');
   var label = meter.querySelector('.ac-pw-label');
@@ -1637,7 +1638,7 @@ function acValidatePassword(input){
   if(/[^a-zA-Z0-9]/.test(val)) score++;
   var strength = score <= 1 ? 'weak' : score <= 3 ? 'fair' : 'strong';
   // Update UI
-  if(val.length < 6){
+  if(val.length < 4){
     input.classList.add('ac-input-invalid');
     input.classList.remove('ac-input-valid');
     bars[0].className = 'ac-pw-bar weak';
@@ -1655,7 +1656,7 @@ function acValidatePassword(input){
 }
 
 function acCheckWallet(){
-  var walletBtn = document.querySelector('[onclick*="connectWallet"]');
+  var walletBtn = document.getElementById('ac-wallet-btn');
   if(!walletBtn) return;
   var parent = walletBtn.parentNode;
   var warning = parent.querySelector('.ac-no-wallet');
@@ -1673,7 +1674,7 @@ function acCheckWallet(){
 // Auto-attach validation to AnyChat form fields
 function acAttachValidation(){
   // New user nickname field
-  var nickInputs = document.querySelectorAll('#ac-new-nick, #ac-login-nick');
+  var nickInputs = document.querySelectorAll('#ac-op-nick');
   nickInputs.forEach(function(input){
     if(input._acValidated) return;
     input._acValidated = true;
@@ -1681,7 +1682,7 @@ function acAttachValidation(){
     input.addEventListener('blur', function(){ acValidateNick(this); });
   });
   // Password fields
-  var pwInputs = document.querySelectorAll('#ac-new-pass, #ac-login-pass');
+  var pwInputs = document.querySelectorAll('#ac-new-pass, #ac-op-pass, #ac-recover-newpass, #ac-wallet-recover-pass');
   pwInputs.forEach(function(input){
     if(input._acValidated) return;
     input._acValidated = true;
@@ -1690,8 +1691,8 @@ function acAttachValidation(){
   // Check wallet on operator screen
   acCheckWallet();
 }
-// Re-attach whenever panel content might change
-setInterval(acAttachValidation, 1000);
+// v669: attach when the auth screen is (re)shown instead of a 1-s timer for the life of the page
+document.addEventListener('DOMContentLoaded', acAttachValidation);
 // ═══ ACCESSIBILITY: Focus Management ═══
 var _lastFocusTrigger = null;
 
@@ -3346,7 +3347,7 @@ body.light #status{color:#7ecfdf;}
 :root{
   --ac-void:#111318;--ac-surface:#1a1c23;--ac-elevated:#242730;--ac-border:rgba(255,255,255,.06);
   --ac-teal:#2dd4bf;--ac-gold:#d4a853;--ac-violet:#8b5cf6;
-  --ac-text:#e4e4e9;--ac-text-secondary:rgba(228,228,233,.7);--ac-text-hint:rgba(228,228,233,.55);--ac-text-disabled:rgba(228,228,233,.4);--ac-muted:#6b6e7a;--ac-dim:rgba(255,255,255,.04);
+  --ac-text:#e4e4e9;--ac-text-secondary:rgba(228,228,233,.7);--ac-text-hint:rgba(228,228,233,.7);--ac-text-disabled:rgba(228,228,233,.4);--ac-muted:#8e929e;--ac-dim:rgba(255,255,255,.04);
   --ac-font:'Outfit',system-ui,-apple-system,sans-serif;
   --ac-mono:'JetBrains Mono','Share Tech Mono',monospace;
   --ac-radius:12px;
@@ -3440,7 +3441,7 @@ body.light #status{color:#7ecfdf;}
 #anychat-panel.ac-light .ac-rich-label{color:var(--ac-muted)}
 #anychat-panel.ac-light .ac-rich-value{color:var(--ac-text)}
 #anychat-panel.ac-light .ac-rich-row{border-color:rgba(0,20,40,.05)}
-#anychat-panel.ac-light .ac-rich-btn{background:rgba(13,148,136,.06);border-color:rgba(13,148,136,.15);color:var(--ac-teal)}
+#anychat-panel.ac-light .ac-rich-btn{background:rgba(13,148,136,.06);border-color:rgba(13,148,136,.15);color:#0f766e}
 #anychat-panel.ac-light .ac-rich-btn:hover{background:rgba(13,148,136,.1)}
 /* Hover actions */
 #anychat-panel.ac-light .ac-hover-actions{background:var(--ac-surface);border:1px solid var(--ac-border);box-shadow:0 2px 8px rgba(0,20,40,.08)}
@@ -3498,7 +3499,7 @@ body.light #status{color:#7ecfdf;}
 #anychat-panel.ac-light .ac-reply-close{color:#64748b}
 #anychat-panel.ac-light #ac-scroll-btn{background:#fff;border-color:rgba(0,20,40,.1);color:#334155;box-shadow:0 2px 8px rgba(0,0,0,.08)}
 #anychat-panel.ac-light .ac-msg-time{color:var(--an-text-dim,#94a3b8) !important}
-#anychat-panel.ac-light .ac-bubble-meta{color:var(--an-text-dim,#94a3b8) !important}
+#anychat-panel.ac-light .ac-bubble-meta{color:#475569 !important}
 #anychat-panel.ac-light .ac-sticker-picker{background:#fff;border-color:rgba(0,20,40,.08);box-shadow:0 -8px 32px rgba(0,0,0,.08)}
 #anychat-panel.ac-light .ac-sticker-tab{color:#64748b}
 #anychat-panel.ac-light .ac-sticker-tab.active{color:#0d9488;border-color:#0d9488}
@@ -3615,12 +3616,12 @@ body.light #status{color:#7ecfdf;}
 /* Header: Node Chad name, status, wallet */
 #anychat-panel.ac-light #op-my-name{color:#0f172a !important}
 #anychat-panel.ac-light #op-my-personal{color:#475569 !important}
-#anychat-panel.ac-light #op-my-relays{color:#0d9488 !important}
-#anychat-panel.ac-light #op-my-tier-badge{color:#0d9488 !important;background:rgba(13,148,136,.08) !important;border-color:rgba(13,148,136,.2) !important}
+#anychat-panel.ac-light #op-my-relays{color:#0f766e !important}
+#anychat-panel.ac-light #op-my-tier-badge{color:#0f766e !important;background:rgba(13,148,136,.08) !important;border-color:rgba(13,148,136,.2) !important}
 /* Lounge header: "Operators Lounge", stats, Foundation */
 #anychat-panel.ac-light .ac-lounge-title{color:#0f172a !important}
 #anychat-panel.ac-light .ac-lounge-stats{color:#334155 !important}
-#anychat-panel.ac-light .op-rules-note{color:#334155;opacity:.7}
+#anychat-panel.ac-light .op-rules-note{color:#475569}
 /* ── P2: Light mode header text visibility ── */
 #anychat-panel.ac-light .ac-lounge-title,#anychat-panel.ac-light #op-lounge-header span[style]{color:#0f172a !important}
 #anychat-panel.ac-light .ac-net-pill{color:#334155 !important;opacity:1 !important}
@@ -3628,7 +3629,8 @@ body.light #status{color:#7ecfdf;}
 #anychat-panel.ac-light .ac-lounge-foundation{color:#0f766e !important;font-weight:500}
 /* Online operators header */
 #anychat-panel.ac-light .op-section-header{color:#1e293b !important;font-weight:700}
-#anychat-panel.ac-light .op-group-header{color:rgba(15,23,42,.5)}
+#anychat-panel.ac-light .op-group-header{color:rgba(15,23,42,.66)}
+#anychat-panel.ac-light .op-group-header > span:last-child{color:#0e7490 !important}
 #anychat-panel.ac-light .op-section-count{color:#334155 !important;font-weight:600}
 /* Tabs: LOUNGE, QUESTS, GAMES */
 #anychat-panel.ac-light .op-tab{color:#475569 !important}
@@ -3657,7 +3659,7 @@ body.light #status{color:#7ecfdf;}
 /* HW badge in header */
 #anychat-panel.ac-light .opc-tier-badge.hw, #anychat-panel.ac-light span[style*="d4a853"]{color:#92400e !important}
 /* Online dot and "Online" text */
-#anychat-panel.ac-light .op-contact .op-contact-status{color:#475569 !important}
+#anychat-panel.ac-light .op-contact .op-contact-status{color:#475569 !important;opacity:1 !important}
 /* Nick colors in bubbles */
 #anychat-panel.ac-light .ac-bubble-nick{color:#0d9488 !important}
 #anychat-panel.ac-light .ac-msg-ai .ac-bubble-nick{color:#6d28d9 !important}
@@ -3776,7 +3778,7 @@ body.light #status{color:#7ecfdf;}
 /* ── Auth ── */
 #anychat-auth{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:32px;gap:16px;background:var(--ac-void)}
 #anychat-auth-title{font-family:var(--ac-font);font-size:20px;font-weight:600;color:var(--ac-text);text-align:center;letter-spacing:-.3px}
-#anychat-auth-sub{font-size:13px;color:var(--ac-text,#e4e4e9);opacity:.65;text-align:center;line-height:1.6}
+#anychat-auth-sub{font-size:13px;color:var(--ac-text,#e4e4e9);opacity:.75;text-align:center;line-height:1.6}
 .anychat-auth-btn{
   width:100%;padding:14px;border-radius:10px;cursor:pointer;
   font-family:var(--ac-font);font-size:13px;font-weight:600;letter-spacing:.3px;
@@ -3846,7 +3848,7 @@ body.light #status{color:#7ecfdf;}
 .op-contact-badge{font-family:var(--ac-font);font-size:9px;font-weight:600;padding:2px 6px;border-radius:5px;flex-shrink:0;letter-spacing:.3px}
 .op-contact-badge.hw{background:rgba(212,168,83,.12);color:var(--ac-gold)}
 .op-contact-badge.op{background:rgba(45,212,191,.08);color:rgba(45,212,191,.6)}
-.op-contact-badge.ai{background:rgba(139,92,246,.1);color:rgba(139,92,246,.7)}
+.op-contact-badge.ai{background:rgba(139,92,246,.12);color:#b4a1f7}
 .op-unread{width:18px;height:18px;border-radius:50%;background:var(--ac-teal);color:var(--ac-void);font-size:9px;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0}
 
 /* ── Profile card ── */
@@ -4121,7 +4123,7 @@ body.light #status{color:#7ecfdf;}
 #anychat-panel.ac-light .ac-cmd-item:hover{background:rgba(13,148,136,.06)}
 #anychat-panel.ac-light .ac-cmd-name{color:#0d9488}
 #anychat-panel.ac-light .ac-cmd-desc{color:#64748b}
-.op-rules-note{font-size:11px;color:var(--ac-text,#e4e4e9);opacity:.55;text-align:center;margin-top:6px;letter-spacing:.1px}
+.op-rules-note{font-size:11px;color:var(--ac-text-hint,rgba(228,228,233,.7));text-align:center;margin-top:6px;letter-spacing:.1px}
 
 /* ── Chat input ── */
 #anychat-input-wrap{padding:8px 12px;background:var(--ac-surface);border-top:1px solid var(--ac-border)}
@@ -4291,7 +4293,7 @@ body.light #ac-input-row #anychat-send{background:linear-gradient(135deg,#0d9488
   border-radius:6px 16px 16px 16px;padding:10px 14px;max-width:400px;
 }
 .ac-bubble-mine .ac-bubble-text{font-size:14px;color:#d0edea;line-height:1.6;word-break:break-word;white-space:pre-wrap}
-.ac-bubble-mine .ac-bubble-meta{font-size:10px;color:rgba(45,212,191,.4);margin-top:4px;text-align:right;font-family:var(--ac-mono)}
+.ac-bubble-mine .ac-bubble-meta{font-size:10px;color:rgba(45,212,191,.75);margin-top:4px;text-align:right;font-family:var(--ac-mono)}
 
 .ac-msg-theirs{display:flex;flex-direction:row;align-items:flex-start;gap:8px;margin:8px 48px 8px 12px}
 .ac-msg-theirs .ac-avatar{background:rgba(212,168,83,.07);border:1px solid rgba(212,168,83,.1);color:var(--ac-gold)}
@@ -4328,7 +4330,7 @@ body.light #ac-input-row #anychat-send{background:linear-gradient(135deg,#0d9488
 }
 .ac-bubble-ai .ac-bubble-nick{font-family:var(--ac-font);font-size:12px;font-weight:600;color:var(--ac-violet);margin-bottom:3px}
 .ac-bubble-ai .ac-bubble-text{font-size:14px;color:#c8c4e0;line-height:1.6;white-space:pre-wrap}
-.ac-bubble-ai .ac-bubble-meta{font-size:10px;color:rgba(139,92,246,.65);margin-top:4px;font-family:var(--ac-mono)}
+.ac-bubble-ai .ac-bubble-meta{font-size:10px;color:#b4a1f7;margin-top:4px;font-family:var(--ac-mono)}
 
 .ac-system-msg{
   text-align:center;margin:10px 24px;padding:7px 18px;
@@ -4849,7 +4851,7 @@ body.light #ac-input-row #anychat-send{background:linear-gradient(135deg,#0d9488
 
 /* Last seen timestamps */
 .ac-last-seen{
-  font-size:9px;color:var(--ac-muted,#6b6e7a);opacity:.7;
+  font-size:9px;color:var(--ac-muted,#8e929e);opacity:1;
   margin-top:1px;white-space:nowrap;
 }
 .ac-last-seen.ac-seen-online{color:var(--ac-teal,#2dd4bf);opacity:.8}
@@ -6181,7 +6183,7 @@ body.light #fb-relay-note{ color:rgba(0,100,160,.45); }
    * the bar, full width, scrollable. */
   /* v659: the mascot (fixed bottom-right, z 9999) sat on the relay card's SHARE
    * button and on the sheet's last rows. Step aside while either is up. */
-  body:has(#bottom-sheet.open) #anyclip, body:has(#relay-detail.rd-floating.visible) #anyclip, body:has(#alert-sheet.open) #anyclip{ display:none !important; }
+  body:has(#bottom-sheet.open) #anyclip, body:has(#relay-detail.rd-floating.visible) #anyclip, body:has(#alert-sheet.open) #anyclip, body:has(#anychat-panel.open) #anyclip{ display:none !important; }
   /* v667: Signals counter ran off the right edge; alerts get their own sheet */
   #sig-counts{ left:8px !important; right:8px !important; width:auto !important; max-width:none !important; }
   #alert-sheet{ display:none; position:fixed; left:0; right:0; bottom:calc(56px + env(safe-area-inset-bottom)); max-height:60vh; overflow:auto; z-index:9500; background:#020b12; border-top:1px solid rgba(94,234,212,.15); padding:6px 12px 12px; }
@@ -14539,6 +14541,8 @@ AC.ws = null;
 const AC_MAX_CHARS = 400;
 
 function toggleAnyChat(){
+  /* v669: the 158-px phone composer wrapped and clipped "Message the lounge…" */
+  try { var _ta = document.getElementById('anychat-input'); if(_ta && typeof isMobile === 'function' && isMobile() && !_ta.dataset.phPhone){ _ta.dataset.phPhone = '1'; _ta.placeholder = 'Message…'; } } catch(_){}
   /* v293: queue retry instead of silently swallowing click during entry animation */
   if(_acDimAnimating){
     if(!window._acTogglePending){
@@ -14661,6 +14665,8 @@ function acAuthShowMenu(){
   ['ac-auth-new','ac-auth-operator','ac-auth-login','ac-auth-recover','ac-auth-wallet-recover','ac-auth-recovery-show'].forEach(function(id){ var el=document.getElementById(id); if(el) el.style.display='none'; });
   document.getElementById('ac-auth-menu').style.display = 'flex';
   document.getElementById('anychat-auth-err').textContent = '';
+  var _pnl = document.getElementById('anychat-panel'); if(_pnl) _pnl.classList.add('ac-on-auth');
+  if(typeof acAttachValidation === 'function') acAttachValidation();
 }
 /* Bug fix: hide ALL other auth sections */
 function acAuthShowNewUser(){
@@ -14691,6 +14697,7 @@ function acAuthShowOperator(){
   document.getElementById('anychat-auth-err').textContent = '';
   document.getElementById('ac-wallet-status').textContent = '';
   document.getElementById('ac-op-nick-wrap').style.display = 'none';
+  if(typeof acAttachValidation === 'function') acAttachValidation();
 }
 /* Bug fix: hide ALL other auth sections including recover/wallet-recover */
 function acAuthShowLogin(){
@@ -15976,12 +15983,7 @@ async function acSendMessage(){
       acUpdateChar();
       return;
     }
-    AC._guestLastMsg = Date.now();
-    AC._guestMsgCount++;
-    const remaining = 5 - AC._guestMsgCount;
-    if(remaining <= 2 && remaining > 0){
-      setTimeout(() => acAddSystemMessage(`⬡ ${remaining} guest message${remaining>1?'s':''} remaining. Connect your wallet for unlimited messaging.`), 500);
-    }
+    /* v669: quota + cooldown are charged on the success path below, not here. */
   }
   if(_acPendingImage){
     await acSendImage();
@@ -16069,8 +16071,7 @@ async function acSendMessage(){
 
   if(!_isTrusted && _acUser._joinedAt && (Date.now() - _acUser._joinedAt) < 300000 && !_acUser._cooldownPassed && !acIsAdmin(_acUser?.wallet, _acUser?.nick)){
     const remaining = Math.ceil((300000 - (Date.now() - _acUser._joinedAt)) / 60000);
-    acAddWarning('AnyClip', `New operators must wait ${remaining} minute${remaining>1?'s':''} before sending messages. This protects the lounge from spam bots. Read the chat while you wait!`);
-    input.value = '';
+    acAddWarning('AnyClip', `New members must wait ${remaining} minute${remaining>1?'s':''} before sending messages. This protects the lounge from spam bots — your message is still in the box, read the chat while you wait!`);
     acUpdateChar();
     return;
   }
@@ -16157,7 +16158,6 @@ async function acSendMessage(){
        * saw it. Render the warning from the server's numbers. */
       const _d = await resp.clone().json().catch(()=>null);
       if(_d && _d.ok === false && _d.flagged){
-        if(_acUser?.tier === 'guest' && typeof AC._guestMsgCount === 'number' && AC._guestMsgCount > 0){ AC._guestMsgCount--; AC._guestLastMsg = 0; }
         const _why = (typeof acGetModResponse === 'function') ? acGetModResponse(_d.category || 'other') : (_d.reason || 'Message blocked.');
         let _line = `${_why} Strike ${_d.strikes}/3.`;
         if(_d.banned){
@@ -16188,11 +16188,6 @@ async function acSendMessage(){
   }
 
   if(!_sendOk){
-    /* Roll back the guest-counter increment we did optimistically up top. */
-    if(_acUser?.tier === 'guest' && typeof AC._guestMsgCount === 'number' && AC._guestMsgCount > 0){
-      AC._guestMsgCount--;
-      AC._guestLastMsg = 0;
-    }
     acAddWarning('AnyClip', _sendErrMsg);
     /* v267: refresh the X/400 counter — input still has text, but counter would otherwise
      * stay at the stale 0/400 from any prior clear, confusing the user. */
@@ -16201,9 +16196,19 @@ async function acSendMessage(){
   }
 
   /* Success path — now safe to render, broadcast, clear, and increment quest. */
+  if(_acUser?.tier === 'guest'){
+    /* v669: charge the guest quota/cooldown only for a message that was actually published */
+    AC._guestLastMsg = Date.now();
+    AC._guestMsgCount = (AC._guestMsgCount || 0) + 1;
+    const _remaining = 5 - AC._guestMsgCount;
+    if(_remaining <= 2 && _remaining > 0){
+      setTimeout(() => acAddSystemMessage(`⬡ ${_remaining} guest message${_remaining>1?'s':''} remaining. Connect your wallet for unlimited messaging.`), 500);
+    }
+  }
   acAddMessage(_acUser.nick, _acUser.tier, text, Date.now());
   const sentViaWS = acSendViaWS({ type: 'message', text, nick: _acUser.nick, tier: _acUser.tier });
-  if(!sentViaWS){
+  if(!sentViaWS && typeof acGetChatToken === 'function' && acGetChatToken()){
+    /* v669: /api/ipfs-route requires x-chat-token; guests and expired sessions were getting a 401 on every send */
     sendViaIpfsRoute(text, _acUser.wallet, _acUser.nick, _acUser.tier).catch(()=>{});
   }
 
@@ -16471,7 +16476,8 @@ async function acGenerateDeviceFingerprint(){
   var enc = new TextEncoder();
   var key = await crypto.subtle.importKey('raw', enc.encode(nonce), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
   var sig = await crypto.subtle.sign('HMAC', key, enc.encode(raw));
-  return Array.from(new Uint8Array(sig)).map(function(b){ return b.toString(16).padStart(2,'0'); }).join('').slice(0, 32);
+  /* v669: full 64-hex digest — the proxy's cleanHex(fp, 64) rejected the old 32-char prefix */
+  return Array.from(new Uint8Array(sig)).map(function(b){ return b.toString(16).padStart(2,'0'); }).join('');
 }
 
 function acDeviceTrackAccount(nick, wallet, fp){
@@ -16533,7 +16539,8 @@ async function acDeviceRegisterServer(nick, wallet, fp){
 
 async function acDeviceCheckOnJoin(nick, wallet){
   let fp = localStorage.getItem(AC_DEVICE_KEY);
-  if(!fp){
+  if(!fp || !/^[0-9a-f]{64}$/.test(fp)){
+    /* v669: regenerate pre-v669 32-char fingerprints (deterministic — same nonce, same device) */
     fp = await acGenerateDeviceFingerprint();
     localStorage.setItem(AC_DEVICE_KEY, fp);
   }
@@ -18469,7 +18476,7 @@ function acAddMessage(nick, tier, text, time, avatar, isHistory, opts){
       <div class="ac-bubble-mine${acTierBubbleClass(tier)}">
         ${quoteHTML}
         <div class="ac-bubble-text">${contentHTML}</div>
-        <div class="ac-bubble-meta">${ts} · ${tier === 'hw' ? '🔧 HW' : '⬡ OP'}</div>
+        <div class="ac-bubble-meta">${ts} · ${tier === 'hw' ? '🔧 HW' : tier === 'guest' ? '👤 GUEST' : '⬡ OP'}</div>
         ${acHoverActions(div, nick, safeText)}
       </div>`;
     AC.replyTo = null; acCancelReply();
@@ -18659,7 +18666,7 @@ function acAddWarning(from, text){
   div.innerHTML = `
     <div class="ac-avatar">${acHWLogo('#8b5cf6', 20)}</div>
     <div class="ac-bubble-warn">
-      <div class="ac-bubble-nick" style="font-family:var(--ac-font,Outfit,system-ui);font-size:8px;font-weight:700;color:#8b5cf6;margin-bottom:3px;">🤖 AnyClip</div>
+      <div class="ac-bubble-nick" style="font-family:var(--ac-font,Outfit,system-ui);font-size:8px;font-weight:700;color:#a78bfa;margin-bottom:3px;">${/anyclip/i.test(from||'') ? '🤖 AnyClip' : acSanitize(from||'AnyClip')}</div>
       <div class="ac-bubble-text">${acSanitize(text)}</div>
     </div>`;
   feed.appendChild(div);
@@ -20746,8 +20753,11 @@ async function sendViaIpfsRoute(message, walletAddress, nickname, tier){
   const { ct, key } = await aesEncrypt(JSON.stringify(msgData));
   const relay = anyonePickRelay();
   try {
+    var _ipfsH = {'Content-Type':'application/json'};
+    var _ipfsTok = (typeof acGetChatToken === 'function') ? acGetChatToken() : null;
+    if(_ipfsTok) _ipfsH['x-chat-token'] = _ipfsTok;
     const resp = await fetch(AC_PROXY + '/api/ipfs-route', {
-      method: 'POST', headers: {'Content-Type':'application/json'},
+      method: 'POST', headers: _ipfsH,
       body: JSON.stringify({ relay_id: relay.id, encrypted_payload: ct, metadata: { wh: wh.slice(0,8), nick: nickname } }),
     });
     const result = await resp.json();
@@ -31470,13 +31480,13 @@ body.light #geo-info-side-panel .hw-tip-section {
     <div id="ac-auth-new" style="display:none;width:100%;">
       <div style="font-size:12px;color:rgba(180,220,235,.85);text-align:center;margin-bottom:8px;font-weight:500;">Your randomly generated nickname:</div>
       <div id="ac-gen-nick" style="font-family:var(--ac-font,Outfit,system-ui);font-size:18px;font-weight:600;color:var(--an-teal,#2dd4bf);text-align:center;margin-bottom:4px;letter-spacing:.5px;">—</div>
-      <button onclick="acGenerateNickname()" style="background:none;border:none;color:rgba(45,212,191,.85);font-size:11px;cursor:pointer;font-weight:600;margin:0 auto 12px;display:block;font-family:'Share Tech Mono',monospace;">⟳ Generate another</button>
-      <input id="ac-new-pass" type="password" placeholder="Create a password…" maxlength="32"
+      <button class="ac-auth-link" onclick="acGenerateNickname()" style="background:none;border:none;color:rgba(45,212,191,.85);font-size:11px;cursor:pointer;font-weight:600;margin:0 auto 12px;display:block;font-family:'Share Tech Mono',monospace;">⟳ Generate another</button>
+      <input id="ac-new-pass" type="password" placeholder="Create a password…" maxlength="32" autocomplete="new-password" onkeydown="if(event.key==='Enter') acRegisterNewUser()"
         style="width:100%;padding:10px 14px;background:#242730;border:1px solid rgba(255,255,255,.08);border-radius:8px;color:var(--an-text,#e4e4e9);font-family:inherit;font-size:13px;outline:none;box-sizing:border-box;text-align:center;margin-bottom:8px;"/>
       <button id="ac-new-register" class="anychat-auth-btn op" onclick="acRegisterNewUser()" style="width:100%;">
         ⬡ REGISTER & JOIN
       </button>
-      <button onclick="acAuthShowMenu()" style="background:rgba(45,212,191,.08);border:1.5px solid rgba(45,212,191,.3);color:var(--an-teal,#2dd4bf);font-size:13px;font-weight:600;cursor:pointer;margin:16px auto 0;display:block;padding:8px 24px;border-radius:20px;letter-spacing:.5px;transition:all .2s;" onmouseenter="this.style.background='rgba(45,212,191,.15)';this.style.borderColor='rgba(45,212,191,.6)'" onmouseleave="this.style.background='rgba(45,212,191,.08)';this.style.borderColor='rgba(45,212,191,.3)'">← Back</button>
+      <button class="ac-auth-back" onclick="acAuthShowMenu()" style="background:rgba(45,212,191,.08);border:1.5px solid rgba(45,212,191,.3);color:var(--an-teal,#2dd4bf);font-size:13px;font-weight:600;cursor:pointer;margin:16px auto 0;display:block;padding:8px 24px;border-radius:20px;letter-spacing:.5px;transition:all .2s;" onmouseenter="this.style.background='rgba(45,212,191,.15)';this.style.borderColor='rgba(45,212,191,.6)'" onmouseleave="this.style.background='rgba(45,212,191,.08)';this.style.borderColor='rgba(45,212,191,.3)'">← Back</button>
     </div>
 
     <!-- ── OPERATOR FLOW ── -->
@@ -31487,46 +31497,46 @@ body.light #geo-info-side-panel .hw-tip-section {
       </button>
       <div id="ac-wallet-status" style="font-size:10px;color:rgba(180,220,235,.7);text-align:center;min-height:16px;"></div>
       <div id="ac-op-nick-wrap" style="display:none;margin-top:8px;">
-        <input id="ac-op-nick" type="text" placeholder="Choose your operator nickname…" maxlength="24"
+        <input id="ac-op-nick" type="text" placeholder="Choose your operator nickname…" maxlength="24" autocomplete="username"
           style="width:100%;padding:10px 14px;background:#242730;border:1px solid rgba(212,168,83,.15);border-radius:8px;color:var(--an-text,#e4e4e9);font-family:inherit;font-size:13px;outline:none;box-sizing:border-box;text-align:center;margin-bottom:8px;"/>
-        <input id="ac-op-pass" type="password" placeholder="Create a password…" maxlength="32"
+        <input id="ac-op-pass" type="password" placeholder="Create a password…" maxlength="32" autocomplete="new-password" onkeydown="if(event.key==='Enter') acRegisterOperator()"
           style="width:100%;padding:10px 14px;background:#242730;border:1px solid rgba(212,168,83,.15);border-radius:8px;color:var(--an-text,#e4e4e9);font-family:inherit;font-size:13px;outline:none;box-sizing:border-box;text-align:center;margin-bottom:8px;"/>
         <button class="anychat-auth-btn hw" onclick="acRegisterOperator()" style="width:100%;">
           🔧 REGISTER & JOIN
         </button>
       </div>
-      <button onclick="acAuthShowMenu()" style="background:rgba(45,212,191,.08);border:1.5px solid rgba(45,212,191,.3);color:var(--an-teal,#2dd4bf);font-size:13px;font-weight:600;cursor:pointer;margin:16px auto 0;display:block;padding:8px 24px;border-radius:20px;letter-spacing:.5px;transition:all .2s;" onmouseenter="this.style.background='rgba(45,212,191,.15)';this.style.borderColor='rgba(45,212,191,.6)'" onmouseleave="this.style.background='rgba(45,212,191,.08)';this.style.borderColor='rgba(45,212,191,.3)'">← Back</button>
+      <button class="ac-auth-back" onclick="acAuthShowMenu()" style="background:rgba(45,212,191,.08);border:1.5px solid rgba(45,212,191,.3);color:var(--an-teal,#2dd4bf);font-size:13px;font-weight:600;cursor:pointer;margin:16px auto 0;display:block;padding:8px 24px;border-radius:20px;letter-spacing:.5px;transition:all .2s;" onmouseenter="this.style.background='rgba(45,212,191,.15)';this.style.borderColor='rgba(45,212,191,.6)'" onmouseleave="this.style.background='rgba(45,212,191,.08)';this.style.borderColor='rgba(45,212,191,.3)'">← Back</button>
     </div>
 
     <!-- ── RETURNING USER LOGIN ── -->
     <div id="ac-auth-login" style="display:none;width:100%;">
       <div style="font-size:10px;color:rgba(45,212,191,.85);text-align:center;margin-bottom:12px;">Welcome back! Enter your nickname and password.</div>
-      <input id="ac-login-nick" type="text" placeholder="Your nickname…" maxlength="24"
+      <input id="ac-login-nick" type="text" placeholder="Your nickname…" maxlength="24" autocomplete="username"
         style="width:100%;padding:10px 14px;background:#242730;border:1px solid rgba(255,255,255,.08);border-radius:8px;color:var(--an-text,#e4e4e9);font-family:inherit;font-size:13px;outline:none;box-sizing:border-box;text-align:center;margin-bottom:8px;"/>
-      <input id="ac-login-pass" type="password" placeholder="Your password…" maxlength="32"
+      <input id="ac-login-pass" type="password" placeholder="Your password…" maxlength="32" autocomplete="current-password"
         style="width:100%;padding:10px 14px;background:#242730;border:1px solid rgba(255,255,255,.08);border-radius:8px;color:var(--an-text,#e4e4e9);font-family:inherit;font-size:13px;outline:none;box-sizing:border-box;text-align:center;margin-bottom:8px;"
         onkeydown="if(event.key==='Enter') acLoginReturning()"/>
       <button class="anychat-auth-btn op" onclick="acLoginReturning()" style="width:100%;">
         ↩ LOG IN
       </button>
       <div style="display:flex;gap:12px;justify-content:center;margin-top:8px;">
-        <button onclick="acAuthShowRecover()" style="background:none;border:none;color:rgba(212,168,83,.8);font-size:10px;cursor:pointer;">Forgot password?</button>
-        <button onclick="acAuthShowWalletRecover()" style="background:none;border:none;color:rgba(212,168,83,.8);font-size:10px;cursor:pointer;">🦊 Recover via Wallet</button>
+        <button class="ac-auth-link amber" onclick="acAuthShowRecover()" style="background:none;border:none;color:rgba(212,168,83,.8);font-size:10px;cursor:pointer;">Forgot password?</button>
+        <button class="ac-auth-link amber" onclick="acAuthShowWalletRecover()" style="background:none;border:none;color:rgba(212,168,83,.8);font-size:10px;cursor:pointer;">🦊 Recover via Wallet</button>
       </div>
-      <button onclick="acAuthShowMenu()" style="background:rgba(45,212,191,.08);border:1.5px solid rgba(45,212,191,.3);color:var(--an-teal,#2dd4bf);font-size:13px;font-weight:600;cursor:pointer;margin:16px auto 0;display:block;padding:8px 24px;border-radius:20px;letter-spacing:.5px;transition:all .2s;" onmouseenter="this.style.background='rgba(45,212,191,.15)';this.style.borderColor='rgba(45,212,191,.6)'" onmouseleave="this.style.background='rgba(45,212,191,.08)';this.style.borderColor='rgba(45,212,191,.3)'">← Back</button>
+      <button class="ac-auth-back" onclick="acAuthShowMenu()" style="background:rgba(45,212,191,.08);border:1.5px solid rgba(45,212,191,.3);color:var(--an-teal,#2dd4bf);font-size:13px;font-weight:600;cursor:pointer;margin:16px auto 0;display:block;padding:8px 24px;border-radius:20px;letter-spacing:.5px;transition:all .2s;" onmouseenter="this.style.background='rgba(45,212,191,.15)';this.style.borderColor='rgba(45,212,191,.6)'" onmouseleave="this.style.background='rgba(45,212,191,.08)';this.style.borderColor='rgba(45,212,191,.3)'">← Back</button>
     </div>
 
     <!-- ── RECOVERY CODE FLOW ── -->
     <div id="ac-auth-recover" style="display:none;width:100%;">
       <div style="font-size:11px;color:rgba(251,191,36,.85);text-align:center;margin-bottom:12px;font-weight:500;">Enter your recovery code to reset your password.</div>
-      <input id="ac-recover-code" type="text" placeholder="XXXX-XXXX-XXXX-XXXX-XXXX-XXXX" maxlength="34"
+      <input id="ac-recover-code" type="text" placeholder="XXXX-XXXX-XXXX-XXXX-XXXX-XXXX" maxlength="34" autocomplete="off" autocapitalize="characters" spellcheck="false" aria-label="Recovery code"
         style="width:100%;padding:10px 14px;background:#242730;border:1px solid rgba(212,168,83,.15);border-radius:8px;color:#d4a853;font-family:var(--ac-mono,JetBrains Mono,monospace);font-size:13px;outline:none;box-sizing:border-box;text-align:center;letter-spacing:2px;margin-bottom:8px;"/>
-      <input id="ac-recover-newpass" type="password" placeholder="New password…" maxlength="32"
+      <input id="ac-recover-newpass" type="password" placeholder="New password…" maxlength="32" autocomplete="new-password" onkeydown="if(event.key==='Enter') acResetWithCode()"
         style="width:100%;padding:10px 14px;background:#242730;border:1px solid rgba(212,168,83,.15);border-radius:8px;color:var(--an-text,#e4e4e9);font-family:inherit;font-size:13px;outline:none;box-sizing:border-box;text-align:center;margin-bottom:8px;"/>
       <button class="anychat-auth-btn hw" onclick="acResetWithCode()" style="width:100%;">
         🔑 RESET PASSWORD
       </button>
-      <button onclick="acAuthShowLogin()" style="background:rgba(45,212,191,.08);border:1.5px solid rgba(45,212,191,.3);color:var(--an-teal,#2dd4bf);font-size:13px;font-weight:600;cursor:pointer;margin:16px auto 0;display:block;padding:8px 24px;border-radius:20px;letter-spacing:.5px;transition:all .2s;" onmouseenter="this.style.background='rgba(45,212,191,.15)';this.style.borderColor='rgba(45,212,191,.6)'" onmouseleave="this.style.background='rgba(45,212,191,.08)';this.style.borderColor='rgba(45,212,191,.3)'">← Back to Login</button>
+      <button class="ac-auth-back" onclick="acAuthShowLogin()" style="background:rgba(45,212,191,.08);border:1.5px solid rgba(45,212,191,.3);color:var(--an-teal,#2dd4bf);font-size:13px;font-weight:600;cursor:pointer;margin:16px auto 0;display:block;padding:8px 24px;border-radius:20px;letter-spacing:.5px;transition:all .2s;" onmouseenter="this.style.background='rgba(45,212,191,.15)';this.style.borderColor='rgba(45,212,191,.6)'" onmouseleave="this.style.background='rgba(45,212,191,.08)';this.style.borderColor='rgba(45,212,191,.3)'">← Back to Login</button>
     </div>
 
     <!-- ── WALLET RECOVERY ── -->
@@ -31537,13 +31547,13 @@ body.light #geo-info-side-panel .hw-tip-section {
       </button>
       <div id="ac-wallet-recover-status" style="font-size:10px;color:rgba(180,220,235,.7);text-align:center;min-height:16px;"></div>
       <div id="ac-wallet-recover-form" style="display:none;margin-top:8px;">
-        <input id="ac-wallet-recover-pass" type="password" placeholder="Set new password…" maxlength="32"
+        <input id="ac-wallet-recover-pass" type="password" placeholder="Set new password…" maxlength="32" autocomplete="new-password" onkeydown="if(event.key==='Enter') acWalletResetPassword()"
           style="width:100%;padding:10px 14px;background:#242730;border:1px solid rgba(212,168,83,.15);border-radius:8px;color:var(--an-text,#e4e4e9);font-family:inherit;font-size:13px;outline:none;box-sizing:border-box;text-align:center;margin-bottom:8px;"/>
         <button class="anychat-auth-btn hw" onclick="acWalletResetPassword()" style="width:100%;">
           🔑 RESET & LOG IN
         </button>
       </div>
-      <button onclick="acAuthShowLogin()" style="background:rgba(45,212,191,.08);border:1.5px solid rgba(45,212,191,.3);color:var(--an-teal,#2dd4bf);font-size:13px;font-weight:600;cursor:pointer;margin:16px auto 0;display:block;padding:8px 24px;border-radius:20px;letter-spacing:.5px;transition:all .2s;" onmouseenter="this.style.background='rgba(45,212,191,.15)';this.style.borderColor='rgba(45,212,191,.6)'" onmouseleave="this.style.background='rgba(45,212,191,.08)';this.style.borderColor='rgba(45,212,191,.3)'">← Back to Login</button>
+      <button class="ac-auth-back" onclick="acAuthShowLogin()" style="background:rgba(45,212,191,.08);border:1.5px solid rgba(45,212,191,.3);color:var(--an-teal,#2dd4bf);font-size:13px;font-weight:600;cursor:pointer;margin:16px auto 0;display:block;padding:8px 24px;border-radius:20px;letter-spacing:.5px;transition:all .2s;" onmouseenter="this.style.background='rgba(45,212,191,.15)';this.style.borderColor='rgba(45,212,191,.6)'" onmouseleave="this.style.background='rgba(45,212,191,.08)';this.style.borderColor='rgba(45,212,191,.3)'">← Back to Login</button>
     </div>
 
     <!-- ── RECOVERY CODE DISPLAY (shown after registration) ── -->
@@ -31551,13 +31561,13 @@ body.light #geo-info-side-panel .hw-tip-section {
       <div style="font-size:11px;color:var(--an-teal,#2dd4bf);text-align:center;margin-bottom:4px;font-weight:700;">✓ REGISTRATION SUCCESSFUL</div>
       <div style="font-size:9px;color:rgba(180,220,235,.6);text-align:center;margin-bottom:12px;">Save this recovery code — it's the only way to reset your password!</div>
       <div id="ac-recovery-display" style="font-family:var(--ac-font,Outfit,system-ui);font-size:14px;color:var(--an-amber,#fbbf24);text-align:center;padding:12px;background:rgba(251,191,36,.06);border:1px dashed rgba(251,191,36,.3);border-radius:8px;letter-spacing:3px;margin-bottom:8px;user-select:all;cursor:text;">—</div>
-      <button onclick="acCopyRecoveryCode()" style="background:none;border:1px solid rgba(251,191,36,.2);color:var(--an-amber,#fbbf24);font-size:9px;cursor:pointer;padding:4px 12px;border-radius:4px;margin:0 auto 12px;display:block;font-family:'Share Tech Mono',monospace;">📋 Copy to Clipboard</button>
+      <button class="ac-auth-link" onclick="acCopyRecoveryCode()" style="background:none;border:1px solid rgba(251,191,36,.2);color:var(--an-amber,#fbbf24);font-size:9px;cursor:pointer;padding:4px 12px;border-radius:4px;margin:0 auto 12px;display:block;font-family:'Share Tech Mono',monospace;">📋 Copy to Clipboard</button>
       <button class="anychat-auth-btn op" onclick="acDismissRecovery()" style="width:100%;">
         ⬡ ENTER THE LOUNGE
       </button>
     </div>
 
-    <div id="anychat-auth-err" style="font-size:10px;color:#f97316;text-align:center;min-height:14px;margin-top:4px;"></div>
+    <div id="anychat-auth-err" role="status" aria-live="polite" style="font-size:11px;color:#f97316;text-align:center;min-height:14px;margin-top:4px;"></div>
   </div>
 
     <!-- OP MESSENGER LAYOUT — Two column: contacts left, chat right -->
@@ -32806,8 +32816,26 @@ body.light #tz-strip line[stroke-dasharray] { stroke: rgba(8, 145, 178, 0.18) !i
 }
 @keyframes acBrandPulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
 #anychat-panel.ac-on-auth.ac-light #ac-auth-brand { color: #0f766e; }   /* v662: #0d9488 was 3.3:1 on the light auth surface */
-#anychat-panel.ac-on-auth #anychat-auth-sub { color: var(--ac-text-hint, rgba(228,228,233,.55)) !important; }
+#anychat-panel.ac-on-auth #anychat-auth-sub { color: var(--ac-text-hint, rgba(228,228,233,.7)) !important; }
 #anychat-panel.ac-on-auth.ac-light #anychat-auth-sub { color: #64748b !important; }
+/* v669: Lounge auth screen in DAY theme */
+#anychat-panel.ac-light #anychat-auth input { background:#ffffff !important; color:#0f172a !important; border-color:rgba(2,128,175,.28) !important; }
+#anychat-panel.ac-light #anychat-auth input::placeholder { color:#64748b !important; }
+#anychat-panel.ac-light #anychat-auth input:focus { border-color:#0280af !important; box-shadow:0 0 0 2px rgba(2,128,175,.18) !important; }
+#anychat-panel.ac-light #ac-auth-operator > div:first-child, #anychat-panel.ac-light #ac-auth-recover > div:first-child, #anychat-panel.ac-light #ac-auth-wallet-recover > div:first-child, #anychat-panel.ac-light #ac-auth-new > div:first-child, #anychat-panel.ac-light #ac-auth-login > div:first-child { color:#334155 !important; }
+#anychat-panel.ac-light #ac-recovery-display { color:#92400e !important; border-color:rgba(146,64,14,.35) !important; background:rgba(251,191,36,.10) !important; }
+#anychat-panel.ac-light #anychat-auth-err { color:#c2410c !important; }
+#anychat-panel.ac-light #ac-wallet-status { color:#334155 !important; }
+#anychat-panel.ac-light #ac-char-count2 { color:#0e7490 !important; opacity:1 !important; }
+#anychat-panel.ac-light #ac-auth-recovery-show > div:nth-child(1) { color:#0f766e !important; }
+#anychat-panel.ac-light #ac-auth-recovery-show > div:nth-child(2) { color:#475569 !important; }
+#anychat-panel.ac-light .ac-no-wallet a { color:#0e7490 !important; }
+#anychat-panel.ac-light .ac-auth-back { color:#0e7490 !important; border-color:rgba(14,116,144,.4) !important; background:rgba(14,116,144,.06) !important; }
+#anychat-panel.ac-light .ac-auth-link { color:#0f766e !important; border-color:rgba(15,118,110,.35) !important; }
+#anychat-panel.ac-light .ac-auth-link.amber { color:#92400e !important; }
+#anychat-panel.ac-light #ac-gen-nick { color:#0f766e !important; }
+/* the RECOMMENDED tag belongs to the menu's operator button only, not to CONNECT WALLET */
+#anychat-panel.ac-on-auth #ac-auth-operator .anychat-auth-btn.hw::after, #anychat-panel.ac-on-auth #ac-auth-recover .anychat-auth-btn.hw::after, #anychat-panel.ac-on-auth #ac-auth-wallet-recover .anychat-auth-btn.hw::after { content:none; }
 </style>
 <script>
 /* v297+v298 (merged): auth-screen state sync + brand strip.
