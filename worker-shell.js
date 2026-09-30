@@ -34,7 +34,7 @@
  * on next page navigation, which deletes the old cache (the activate
  * handler filters keys !== CACHE) and re-precaches STATIC against the
  * current worker. Bump per release. */
-const WORKER_VERSION = 'v559';
+const WORKER_VERSION = 'v560';
 /* v668: translation packs for the 14 non-English languages, extracted from
  * index.html's I18N table at build time (build-worker v5). English stays inline
  * in the page; a pack is fetched only when its language is selected. */
