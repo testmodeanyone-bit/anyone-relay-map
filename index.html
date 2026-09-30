@@ -283,7 +283,7 @@ var _obSteps = [
     /* v570: the foundation beacon (#foundation-beacon-g / .fb-hex-outer) was
      * replaced by the floating AnyClip character. Both old selectors are null —
      * this step spotlit nothing and its tip fell back to a default position. */
-    target: function(){ return document.getElementById('aclive'); },
+    target: function(){ return document.getElementById('anyclip') || document.getElementById('aclive'); },   /* v665: the mascot itself */
     pos: 'right-of-target',
     arrow: 'arrow-left',
     title: 'Meet AnyClip',
@@ -408,6 +408,20 @@ function obShowStep(idx){
     + '<button class="ob-next" data-h-click="obNext" data-step="' + (idx+1) + '">' + (idx < _obSteps.length - 1 ? 'NEXT' : 'GOT IT') + '</button>'
     + '</div>';
   overlay.appendChild(tip);
+  /* v665: keep the card fully on-screen whatever the placement rule chose.
+   * Step 3 anchors to the AnyClip mascot at the bottom-left; on a short window
+   * (a laptop with the taskbar, ~550 px tall) the card's top was set to the
+   * mascot's centre and the text and buttons ran off the bottom of the screen.
+   * Measure after layout and clamp; when the card had to move off its anchor,
+   * drop the arrow so it does not point at nothing. */
+  (function(){
+    var mg = 12, vh = window.innerHeight || 800, vw = window.innerWidth || 1280;
+    var r = tip.getBoundingClientRect(); var moved = false;
+    if(r.bottom > vh - mg){ tip.style.top = Math.max(mg, vh - mg - r.height) + 'px'; moved = true; }
+    if(r.right > vw - mg){ tip.style.left = Math.max(mg, vw - mg - r.width) + 'px'; moved = true; }
+    if(r.top < mg){ tip.style.top = mg + 'px'; moved = true; }
+    if(moved){ tip.classList.remove('arrow-left','arrow-right','arrow-top','arrow-top-right'); tip.classList.add('no-arrow'); }
+  })();
   // Sequenced reveal: spotlight settles, then card fades in
   setTimeout(function(){ tip.classList.add('visible'); }, 200);
 }
@@ -6543,6 +6557,7 @@ button{
   border-top:1.5px solid var(--an-teal,#2dd4bf);
   transform:rotate(45deg);
 }
+.ob-tooltip.no-arrow::before{display:none}   /* v665: card moved off its anchor by the viewport clamp */
 .ob-tooltip.arrow-top::before{top:-7px;left:24px}
 /* Bug #53 (v160): arrow-top-right variant for when card is right-anchored
    (target near right edge of viewport â card slides left, so arrow needs to
