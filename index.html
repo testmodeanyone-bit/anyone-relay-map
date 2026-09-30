@@ -77,6 +77,8 @@ __H.selRelayKey = function(event){ if(event.key==='Enter'||event.key===' '){ eve
 __H.alertSheetClose = function(){ toggleAlertPanel(); };   /* v667: phone alerts sheet */
 /* v671: tap a name in the lounge feed → that operator's card (CHAT / NUDGE); phone people sheet */
 __H.rbShowMore = function(){ rbShowMore(); };
+__H.btcSheetClose = function(){ if(typeof toggleBtcNodes === 'function' && window._btcVisible !== false) toggleBtcNodes(); };
+__H.dpShowMore = function(){ if(typeof dpShowMore === 'function') dpShowMore(); };
 __H.mobRbShowMore = function(){ mobileShowMore(); };
 __H.nickTap = function(){ if(typeof acNickTap === 'function') acNickTap(this.dataset.nick || '', this); };
 __H.peopleSheetOpen = function(){ if(typeof opPeopleSheet === 'function') opPeopleSheet(true); };
@@ -494,23 +496,41 @@ function _mlBtcShow(data){
       paint:{ 'icon-opacity':['interpolate',['linear'],['zoom'],1,0.7,6,0.85,12,0.95] } }, beforeId);
     /* hover tooltip — mirrors the old SVG <title>. One popup reused, follows the node. */
     if(!window.__btcPopup){ window.__btcPopup = new maplibregl.Popup({ closeButton:false, closeOnClick:false, offset:10, className:'btc-popup' }); }
-    map.on('mouseenter','btc-nodes-layer', function(ev){
-      map.getCanvas().style.cursor='pointer';
-      var f = ev.features && ev.features[0]; if(!f) return;
+    /* v675: city / cc / org come from bitnodes.io and went into setHTML unescaped — a node whose
+     * org name carried markup ran in every visitor's browser (the CSP was the only thing in the
+     * way). Escaped now. Also: the popup opened on mouseenter only, so on phones a node could
+     * never be inspected — a tap opens it too. */
+    var _btcEsc = function(v){ return String(v == null ? '' : v).replace(/[&<>"']/g, function(c){ return { '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c]; }); };
+    var _btcPopupFor = function(f){
       var p = f.properties || {};
       var loc = (p.city ? p.city+', ' : '') + (p.cc||'');
       var org = p.org || ((typeof _i18t==='function')?_i18t('btcUnknownIsp','Unknown ISP'):'Unknown ISP');
       var html = '<div style="font-family:inherit;white-space:nowrap"><b style="color:#f7931a">\u20bf '
-        + ((typeof _i18t==='function')?_i18t('btcTooltipNode','Bitcoin node'):'Bitcoin node') + '</b>'
-        + (loc?'<br><span style="color:#cbd5e1;font-size:11px">'+loc+'</span>':'')
-        + '<br><span style="color:#94a3b8;font-size:10px">'+org+'</span></div>';
+        + _btcEsc((typeof _i18t==='function')?_i18t('btcTooltipNode','Bitcoin node'):'Bitcoin node') + '</b>'
+        + (loc?'<br><span style="color:#cbd5e1;font-size:11px">'+_btcEsc(loc)+'</span>':'')
+        + '<br><span style="color:#94a3b8;font-size:10px">'+_btcEsc(org)+'</span></div>';
       window.__btcPopup.setLngLat(f.geometry.coordinates).setHTML(html).addTo(map);
+    };
+    map.on('mouseenter','btc-nodes-layer', function(ev){
+      map.getCanvas().style.cursor='pointer';
+      var f = ev.features && ev.features[0]; if(!f) return;
+      _btcPopupFor(f);
+    });
+    map.on('click','btc-nodes-layer', function(ev){
+      var f = ev.features && ev.features[0]; if(!f) return;
+      window.__btcHitAt = Date.now();
+      _btcPopupFor(f);
+    });
+    map.on('click', function(){
+      /* tap elsewhere closes it (touch has no mouseleave). The layer handler runs after this one,
+       * so decide on the next tick, when it has had the chance to flag a hit. */
+      setTimeout(function(){ if(Date.now() - (window.__btcHitAt || 0) > 300 && window.__btcPopup) { try { window.__btcPopup.remove(); } catch(_){} } }, 0);
     });
     map.on('mousemove','btc-nodes-layer', function(ev){
       var f = ev.features && ev.features[0]; if(!f || !window.__btcPopup) return;
       window.__btcPopup.setLngLat(f.geometry.coordinates);
     });
-    map.on('mouseleave','btc-nodes-layer', function(){ map.getCanvas().style.cursor=''; if(window.__btcPopup) window.__btcPopup.remove(); });
+    map.on('mouseleave','btc-nodes-layer', function(){ map.getCanvas().style.cursor=''; /* v675: a tap synthesises a mouseleave right after the click — keep the popup a tap just opened */ if(window.__btcPopup && Date.now() - (window.__btcHitAt || 0) > 500) window.__btcPopup.remove(); });
   } else {
     map.setLayoutProperty('btc-nodes-layer','visibility','visible');
   }
@@ -598,6 +618,7 @@ async function toggleBtcNodes() {
   window._btcBusy = true;
   try {
     _btcVisible = !_btcVisible;
+    window._btcVisible = _btcVisible;
     var btn = document.getElementById('sb-btc') || document.getElementById('btn-btc');
     var widget = document.getElementById('btc-stats-widget');
     if (_btcVisible) {
@@ -612,6 +633,7 @@ async function toggleBtcNodes() {
         updateBtcStats(data);
         if (widget) widget.classList.add('visible');
         if (btn) btn.innerHTML = '₿ ' + _i18t('btcBtnLabel','BTC NODES');
+        _btcWidgetPlace(true);
       } else {
         if (btn) btn.innerHTML = '₿ ' + _i18t('btcBtnError','BTC ERROR');  /* v247 (Bug #4): translate error state */
         _btcVisible = false;
@@ -624,9 +646,35 @@ async function toggleBtcNodes() {
       if (window.__mlActive) { _mlBtcHide(); }
       if (_btcLayer) { _btcLayer.remove(); _btcLayer = null; }
       if (widget) widget.classList.remove('visible');
+      _btcWidgetPlace(false);
+      if (window.__btcPopup) { try { window.__btcPopup.remove(); } catch(_){} }
     }
   } finally {
     window._btcBusy = false;
+  }
+}
+/* v675: the stats card (total, snapshot age, the STALE-DATA warning) lived in the sidebar — below
+ * the fold on desktop and invisible on phones, where the sidebar is hidden. Desktop scrolls to it;
+ * phones host it in a sheet above the tab bar while the overlay is on. */
+function _btcWidgetPlace(on){
+  var widget = document.getElementById('btc-stats-widget'); if(!widget) return;
+  var phone = window.innerWidth <= 768;
+  if(phone){
+    var host = document.getElementById('btc-sheet');
+    if(on){
+      if(!host){
+        host = document.createElement('div'); host.id = 'btc-sheet'; host.setAttribute('role','region'); host.setAttribute('aria-label', _i18t('btcCardTitle','Bitcoin Network'));
+        host.innerHTML = '<div class="as-head"><span>\u20bf ' + _i18t('btcCardTitle','Bitcoin Network') + '</span><button type="button" class="as-close" data-h-click="btcSheetClose" aria-label="' + _i18t('btcBtnTitle','Toggle Bitcoin nodes overlay') + '">\u2715</button></div>';
+        document.body.appendChild(host);
+      }
+      if(!window.__btcHome) window.__btcHome = { parent: widget.parentElement, next: widget.nextElementSibling };
+      host.appendChild(widget); host.classList.add('open');
+    } else if(host){
+      host.classList.remove('open');
+      var h = window.__btcHome; if(h && h.parent){ if(h.next && h.next.parentElement === h.parent) h.parent.insertBefore(widget, h.next); else h.parent.appendChild(widget); }
+    }
+  } else if(on){
+    setTimeout(function(){ var sc = widget.parentElement; while(sc && sc !== document.body && !/auto|scroll/.test(getComputedStyle(sc).overflowY)) sc = sc.parentElement; if(!sc || sc === document.body) return; var top = widget.getBoundingClientRect().top - sc.getBoundingClientRect().top + sc.scrollTop - 80; sc.scrollTo({ top: Math.max(0, top), behavior: 'smooth' }); }, 200);
   }
 }
 
@@ -5865,8 +5913,8 @@ body.light #domain-panel .dp-icon{background:linear-gradient(180deg,rgba(10,110,
 .dp-owner{ font-size:8px;color:rgba(138,188,196,.45);letter-spacing:.3px;font-family:'Share Tech Mono',monospace; }
 .dp-new-tag{ font-size:7px;background:rgba(0,255,136,.15);border:1px solid rgba(0,255,136,.35);color:var(--an-green,#00ff88);padding:1px 5px;border-radius:3px;letter-spacing:.5px;flex-shrink:0; }
 #dp-footer{ padding:7px 14px;border-top:1px solid rgba(0,245,255,.07);display:flex;justify-content:space-between;align-items:center;flex-shrink:0; }
-.dp-ft{ font-size:8px;color:rgba(138,188,196,.45); }
-.dp-ft a{ color:rgba(0,245,255,.7);text-decoration:none; }
+.dp-ft{ font-size:9px;color:rgba(160,205,215,.8); }
+.dp-ft a{ color:#5eead4;text-decoration:underline; }
 .dp-ft a:hover{ color:#00f5ff; }
 #btn-domains{
   background:rgba(0,245,255,.07);border:1px solid rgba(0,245,255,.25);
@@ -6184,11 +6232,18 @@ body.light #fb-relay-note{ color:rgba(0,100,160,.45); }
    * the bar, full width, scrollable. */
   /* v659: the mascot (fixed bottom-right, z 9999) sat on the relay card's SHARE
    * button and on the sheet's last rows. Step aside while either is up. */
-  body:has(#bottom-sheet.open) #anyclip, body:has(#relay-detail.rd-floating.visible) #anyclip, body:has(#alert-sheet.open) #anyclip, body:has(#anychat-panel.open) #anyclip{ display:none !important; }
+  body:has(#bottom-sheet.open) #anyclip, body:has(#relay-detail.rd-floating.visible) #anyclip, body:has(#alert-sheet.open) #anyclip, body:has(#btc-sheet.open) #anyclip, body:has(#anychat-panel.open) #anyclip{ display:none !important; }
   /* v667: Signals counter ran off the right edge; alerts get their own sheet */
   #sig-counts{ left:8px !important; right:8px !important; width:auto !important; max-width:none !important; }
   #alert-sheet{ display:none; position:fixed; left:0; right:0; bottom:calc(56px + env(safe-area-inset-bottom)); max-height:60vh; overflow:auto; z-index:9500; background:#020b12; border-top:1px solid rgba(94,234,212,.15); padding:6px 12px 12px; }
   #alert-sheet.open{ display:block; }
+  #btc-sheet{ display:none; position:fixed; left:0; right:0; bottom:calc(56px + env(safe-area-inset-bottom)); max-height:60vh; overflow:auto; z-index:9500; background:#020b12; border-top:1px solid rgba(247,201,72,.3); padding:6px 12px 12px; }
+  #btc-sheet.open{ display:block; }
+  #btc-sheet .as-head{ display:flex; align-items:center; justify-content:space-between; font-family:'Orbitron',sans-serif; font-size:11px; letter-spacing:1px; color:#f7c948; padding:6px 0; }
+  #btc-sheet .as-close{ background:none; border:1px solid rgba(247,201,72,.35); color:inherit; border-radius:8px; width:44px; height:44px; font-size:14px; cursor:pointer; }
+  #btc-sheet #btc-stats-widget{ display:block; margin:0; }
+  body.light #btc-sheet{ background:#fbfaf7; border-top-color:rgba(180,83,9,.3); }
+  body.light #btc-sheet .as-head{ color:#92400e; }
   body:not(.light) #alert-sheet .alert-filter.active{ color:#021017; background:#5eead4; }
   body.light #alert-sheet .alert-filter.active{ color:#fff; background:#0e7490; }
   #alert-sheet .as-head{ display:flex; align-items:center; justify-content:space-between; font-family:'Orbitron',sans-serif; font-size:11px; letter-spacing:2px; color:var(--an-teal-text,#5eead4); padding:6px 0 4px; }
@@ -7334,6 +7389,11 @@ body.light .btc-setup-cta {
 body.light .btc-cta-label { color: #92400E !important; }
 body.light .btc-cta-arrow { color: #B45309 !important; }
 body.light .btc-stat-row { color: var(--an-text-dim, #4A5159) !important; }
+body.light #btc-stats-widget h3.btc-h { color: #b45309 !important; text-shadow: none !important; }
+body.light #btc-stats-widget [data-i18n="btcNote"] { color: #7c4a12 !important; }
+body.light .dp-ft { color: #475569 !important; }
+body.light .dp-ft a { color: #0e7490 !important; text-decoration: underline !important; }
+body.light #dp-chain-status { color: #475569 !important; }
 body.light .btc-coverage-bar {
   background: rgba(140, 132, 114, 0.1) !important;
 }
@@ -14101,7 +14161,7 @@ async function fetchDomainsChain(indexedCount){
     if(newEl && chainUsable && typeof c.new24h === 'number') newEl.textContent = c.new24h > 0 ? '+' + c.new24h : '0';
     if(stEl){
       stEl.textContent = c.synced ? 'Base ⛓' : 'Base ⛓ ' + Number(c.lagBlocks||0).toLocaleString() + ' ' + _i18t('dpBehind','behind');
-      stEl.style.color = c.synced ? 'rgba(138,188,196,.4)' : '#fbbf24';
+      stEl.style.color = c.synced ? '' : (document.body.classList.contains('light') ? '#92400e' : '#fbbf24');   /* v675: inherit the footer colour when synced (was 2.3:1) */
     }
   }catch(e){ console.warn('[Domains] chain fetch:', e.message); }
 }
@@ -14194,7 +14254,9 @@ function renderDomains(newTokenIds = []){
     return;
   }
 
-  feed.innerHTML = list.slice(0, 120).map(d => {
+  /* v675: paged — was a hard 120 with a note telling people to "sort" (the panel has no sort) */
+  const DP_PAGE = 120;
+  const _dpRow = d => {
     const isNew    = newTokenIds.includes(d.tokenId);
     /* v199 SECURITY (stored XSS): .anyone domain names + owner are attacker-
      * controlled — anyone can mint a name containing arbitrary characters, and
@@ -14215,7 +14277,31 @@ function renderDomains(newTokenIds = []){
       </div>
       ${isNew ? '<span class="dp-new-tag">' + _i18t('newBadge','NEW') + '</span>' : ''}
     </a>`;
-  }).join('') + (list.length > 120 ? `<div style="padding:10px;text-align:center;font-size:9px;color:rgba(138,188,196,.4);">${_i18tFmt('rlShowingOf', 'Showing {n} of {total} — search or sort to see others', { n: 120, total: list.length.toLocaleString() })}</div>` : '');   /* v639: was English-only */
+  };
+  feed.innerHTML = list.slice(0, DP_PAGE).map(_dpRow).join('');
+  window._dpState = { full: list, shown: Math.min(DP_PAGE, list.length), row: _dpRow, page: DP_PAGE };
+  dpRenderMore(feed);
+}
+function dpRenderMore(feed){
+  const st = window._dpState; if(!feed || !st) return;
+  const old = feed.querySelector('.rl-more'); if(old) old.remove();
+  if(st.full.length <= st.shown) return;
+  const left = st.full.length - st.shown, next = Math.min(st.page, left);
+  const wrap = document.createElement('div'); wrap.className = 'rl-more';
+  wrap.innerHTML = '<div class="rl-more-note">' + _i18tFmt('rlShowingOfShort', 'Showing {n} of {total}', { n: st.shown.toLocaleString(), total: st.full.length.toLocaleString() }) + '</div>'
+    + '<button type="button" class="rl-more-btn" data-h-click="dpShowMore">' + _i18tFmt('rlShowMore', 'Show {n} more', { n: next }) + '</button>';
+  feed.appendChild(wrap);
+}
+function dpShowMore(){
+  const feed = document.getElementById('dp-feed'); const st = window._dpState; if(!feed || !st) return;
+  const rows = st.full.slice(st.shown, st.shown + st.page);
+  const ctrl = feed.querySelector('.rl-more');
+  const tpl = document.createElement('template'); tpl.innerHTML = rows.map(st.row).join('');
+  if(ctrl) feed.insertBefore(tpl.content, ctrl); else feed.appendChild(tpl.content);
+  const firstNew = feed.querySelectorAll('.dp-item')[st.shown];
+  st.shown += rows.length;
+  dpRenderMore(feed);
+  if(firstNew){ firstNew.focus({ preventScroll: true }); firstNew.scrollIntoView({ block: 'nearest' }); }
 }
 
 function dpSearch(q){
