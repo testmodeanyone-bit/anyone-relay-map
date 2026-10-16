@@ -309,6 +309,24 @@ function main() {
   for (const file of files) {
     if (!fs.existsSync(file)) { console.error(`! skip (not found): ${file}`); continue; }
     const src = fs.readFileSync(file, 'utf8');
+    /* v648 (zero-trust audit): a credential-shaped string, a client-side HMAC
+     * secret, or a token mirrored into web storage can never ship. These are
+     * HIGH regardless of --strict; the 2026-03 history leak was exactly the
+     * second pattern. */
+    const CRED_RULES = [
+      [/sk-ant-[A-Za-z0-9_-]{20,}/, 'Anthropic key shape'],
+      [/AKIA[0-9A-Z]{16}/, 'AWS access key shape'],
+      [/ghp_[A-Za-z0-9]{30,}/, 'GitHub token shape'],
+      [/const\s+HMAC_SECRET\s*=|ANTHROPIC_KEY\s*=\s*['"]/, 'secret assigned in page code'],
+      [/(local|session)Storage\.setItem\(\s*['"][^'"]*(tok|secret|key)[^'"]*['"]/i, 'token/secret written to web storage'],
+      [/x-api-key/i, 'Anthropic auth header in page code']
+    ];
+    let credHigh = 0;
+    for (const [re, why] of CRED_RULES) {
+      const m = re.exec(src);
+      if (m) { credHigh++; console.log(`  \x1b[31mHIGH\x1b[0m  L${src.slice(0, m.index).split('\n').length}  ${why}: ${m[0].slice(0, 24)}…`); }
+    }
+    high += credHigh;
     const findings = findInterpsForFile(src).concat(findAttrConcat(src));
     if (!findings.length) { console.log(`\x1b[32m✓\x1b[0m ${file}: no unescaped sensitive interpolations`); continue; }
     console.log(`\n\x1b[1m${file}\x1b[0m`);
