@@ -20,6 +20,8 @@
  *
  * Deployed at: https://anyonemap.anyoneregiontvmap.workers.dev
  * v676: account renamed — host allowlist, CSP connect-src and /bitcoin canonical now use anyoneregiontvmap.workers.dev (old host returned 403 "Unauthorized domain").
+ * v647 (proxy-side companion; shell unchanged in behavior except): /basemap/hd bounds-checks z/x/y and supports an
+ *       optional RL_BASEMAP rate-limit binding so the paid MapTiler key cannot be billed by unbounded tile enumeration.
  * v677: the Operators Lounge is gone from the page — CSP connect-src no longer allows partykit, Ably or Pinata (only the Lounge talked to them).
  * Bindings:    SNAPSHOT_KV (shared with anyclip-proxy), ANALYTICS,
  *              RL_ANALYTICS, RL_BITNODES (rate-limit counters)
@@ -36,7 +38,7 @@
  * on next page navigation, which deletes the old cache (the activate
  * handler filters keys !== CACHE) and re-precaches STATIC against the
  * current worker. Bump per release. */
-const WORKER_VERSION = 'v561';
+const WORKER_VERSION = 'v559';
 /* v668: translation packs for the 14 non-English languages, extracted from
  * index.html's I18N table at build time (build-worker v5). English stays inline
  * in the page; a pack is fetched only when its language is selected. */
@@ -395,6 +397,19 @@ async function _bmHandle(request, env, ctx) {
       const m = path.match(/\/basemap\/hd\/(\d+)\/(\d+)\/(\d+)\.(?:pbf|mvt)$/);
       if (!m) resp = new Response('bad hd tile', { status: 400 });
       else if (!env.MAPTILER_KEY) resp = new Response('', { status: 204 });
+      /* v647: bound z/x/y before touching the paid MapTiler key. MapTiler v3
+       * tops out at z14; an out-of-range tuple is an unbounded stream of unique
+       * cache-miss URLs, each a billed API call — reject locally. The edge cache
+       * check at the top of _bmHandle means only genuine misses reach here, so the
+       * optional per-IP limit (active once an RL_BASEMAP Cloudflare Rate Limiting
+       * binding is added in the dashboard) caps billed calls without throttling
+       * repeat views. */
+      else if ((() => { const z=+m[1],x=+m[2],y=+m[3]; return z>14||x<0||y<0||x>=2**z||y>=2**z; })()) {
+        resp = new Response('', { status: 204 });
+      }
+      else if (env.RL_BASEMAP && !(await env.RL_BASEMAP.limit({ key: request.headers.get('CF-Connecting-IP') || 'unknown' }).catch(() => ({ success: true }))).success) {
+        resp = new Response('', { status: 429 });
+      }
       else {
         const up = 'https://api.maptiler.com/tiles/v3/' + m[1] + '/' + m[2] + '/' + m[3] + '.pbf?key=' + env.MAPTILER_KEY;
         const r = await fetch(up, { cf: { cacheTtl: 86400, cacheEverything: true } });
