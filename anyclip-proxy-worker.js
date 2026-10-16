@@ -4,6 +4,8 @@
  *
  * Deployed at: https://anyclip-proxy.anyoneregiontvmap.workers.dev
  * v643: account renamed — ALLOWED_ORIGIN, link allow-list, sign-challenge text and outbound UA now use anyoneregiontvmap.workers.dev.
+ * v646: audit hardening. /api/chat messages are validated (text only, user/assistant, 2,000 chars each, last one from
+ *       the user — no content blocks, so no vision pricing); /api/img only fetches from the Anyone docs hosts.
  * v645: AI spend governor. Two days of a bot farm draining the Anthropic budget through the OPEN /api/chat
  *       (the key never left Cloudflare — per-IP limits were the only ceiling). Now: a global hourly and daily
  *       call budget (AI_HOUR_CAP / AI_DAY_CAP vars, default 150 / 1500, fail-closed when D1 is unreachable),
@@ -3789,6 +3791,12 @@ var worker_source_default = {
       let t; try { t = new URL(target); } catch (_) { return cors(JSON.stringify({ error: "bad url" }), 400); }
       if (t.protocol !== "https:") return cors(JSON.stringify({ error: "https only" }), 400);
       if (/^(localhost|127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|169\.254\.|\[?::1)/.test(t.hostname)) return cors(JSON.stringify({ error: "blocked host" }), 400);
+      /* v646 (audit): this was an open image fetcher for any https host (120/min
+       * per IP) — free egress for anyone. The map only loads logos from the
+       * Anyone docs; everything else is refused. Extend IMG_HOSTS when a new
+       * logo source is added. */
+      const IMG_HOSTS = ["docs.anyone.io", "anyone.io", "www.anyone.io", "content.gitbook.com"];
+      if (!IMG_HOSTS.includes(t.hostname.toLowerCase())) return cors(JSON.stringify({ error: "host not allowed" }), 403);
       if (await _rlExceeded(env, "img:" + (request.headers.get("CF-Connecting-IP") || "unknown"), 120, 60)) return cors(JSON.stringify({ error: "rate limited" }), 429);
       const cache = caches.default;
       const cacheKey = new Request("https://img-cache.anyonemap.internal/" + encodeURIComponent(target));
@@ -4308,6 +4316,20 @@ if (url.pathname === "/api/exit-relays" && request.method === "GET") {
         if (body.messages.length > 20) {
           return cors(JSON.stringify({ error: { message: "Too many messages" } }), 400);
         }
+        /* v646 (audit): messages were forwarded to Anthropic as sent. The widget
+         * only ever sends {role, content:string}; anything else — content
+         * blocks (images, documents: vision pricing), extra keys, odd roles — is
+         * refused, and each message is capped so the per-request total cannot
+         * be reached with one giant turn. */
+        for (const _m of body.messages) {
+          if (!_m || typeof _m !== "object" || Array.isArray(_m)) return cors(JSON.stringify({ error: { message: "Invalid message" } }), 400);
+          const _keys = Object.keys(_m);
+          if (_keys.length !== 2 || !_keys.includes("role") || !_keys.includes("content")) return cors(JSON.stringify({ error: { message: "Invalid message shape" } }), 400);
+          if (_m.role !== "user" && _m.role !== "assistant") return cors(JSON.stringify({ error: { message: "Invalid message role" } }), 400);
+          if (typeof _m.content !== "string") return cors(JSON.stringify({ error: { message: "Message content must be text" } }), 400);
+          if (_m.content.length > 2000) return cors(JSON.stringify({ error: { message: "Message too long" } }), 400);
+        }
+        if (body.messages[body.messages.length - 1].role !== "user") return cors(JSON.stringify({ error: { message: "Last message must be from the user" } }), 400);
         /* audit fix #33: bound the COST of the Anthropic call. The rate limits
          * above are per-request COUNT and implicitly assume the cheap default
          * model — but two things let a caller blow past that cost basis:
