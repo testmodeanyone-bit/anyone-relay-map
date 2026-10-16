@@ -5,6 +5,8 @@
 
   This file IS the user-facing webpage at https://anyonemap.anyoneregiontvmap.workers.dev/.
   v676: account renamed — every anyonerelaysmap.workers.dev reference (proxy URLs, preconnect, trusted-domain lists) now points at anyoneregiontvmap.workers.dev.
+  v680: MapLibre JS and CSS are loaded with subresource integrity (sha384), closing the last unpinned third-party script on the page.
+  v679: the AnyClip input is capped at 2,000 characters, matching the proxy's per-message limit (v646).
   v678: when the proxy's AI budget is exhausted or switched off (v645, `paused: true`), AnyClip answers from its built-in knowledge base instead of showing an error.
   v677: the Operators Lounge is retired — panel, guest/operator auth, DMs, polls, reactions, quests, games, E2E, Ably/longpoll client, IPFS routing, the dimension-entry animation, the phone Chat tab, the C shortcut, the overflow-menu entry, the Ably include and the Lounge-only CSS are gone. AnyClip (mascot + AI assistant) stays; AC_PROXY and acSanitize are kept because the rest of the map uses them. The Foundation beacon is a plain landmark again.
   It's a single-file SPA: HTML + CSS + JS all in one document, no separate
@@ -9772,11 +9774,20 @@ function initMapLibre(zones){
     return { type:'FeatureCollection', features:feats };
   }
 
-  function loadScript(src){ return new Promise((res,rej)=>{ const s=document.createElement('script'); s.src=src; s.onload=res; s.onerror=()=>rej(new Error('load failed '+src)); document.head.appendChild(s); }); }
-  function loadCss(href){ if([...document.querySelectorAll('link')].some(l=>l.href.includes('maplibre'))) return; const l=document.createElement('link'); l.rel='stylesheet'; l.href=href; document.head.appendChild(l); }
+  /* v680: subresource integrity on the dynamically loaded MapLibre bundle. D3 and
+   * TopoJSON were already SRI-pinned in their <script> tags; MapLibre (the largest
+   * third-party script on the page) was fetched by this helper with no integrity,
+   * so a compromised CDN could have run arbitrary code inside the CSP's allowed
+   * origin. The hashes are sha384 of maplibre-gl@4.7.1/dist as served by jsdelivr,
+   * byte-identical to unpkg's copy. Bumping the version means recomputing them:
+   *   openssl dgst -sha384 -binary maplibre-gl.js | openssl base64 -A */
+  function loadScript(src, integrity){ return new Promise((res,rej)=>{ const s=document.createElement('script'); s.src=src; if(integrity){ s.integrity=integrity; s.crossOrigin='anonymous'; } s.onload=res; s.onerror=()=>rej(new Error('load failed '+src)); document.head.appendChild(s); }); }
+  function loadCss(href, integrity){ if([...document.querySelectorAll('link')].some(l=>l.href.includes('maplibre'))) return; const l=document.createElement('link'); l.rel='stylesheet'; l.href=href; if(integrity){ l.integrity=integrity; l.crossOrigin='anonymous'; } document.head.appendChild(l); }
+  const MAPLIBRE_JS_SRI  = 'sha384-SYKAG6cglRMN0RVvhNeBY0r3FYKNOJtznwA0v7B5Vp9tr31xAHsZC0DqkQ/pZDmj';
+  const MAPLIBRE_CSS_SRI = 'sha384-MinO0mNliZ3vwppuPOUnGa+iq619pfMhLVUXfC4LHwSCvF9H+6P/KO4Q7qBOYV5V';
 
   (async () => {
-    loadCss('https://cdn.jsdelivr.net/npm/maplibre-gl@4.7.1/dist/maplibre-gl.css');
+    loadCss('https://cdn.jsdelivr.net/npm/maplibre-gl@4.7.1/dist/maplibre-gl.css', MAPLIBRE_CSS_SRI);
     /* v450: Eliminate the self-hosted worker dependency. We previously loaded the
      * maplibre-gl-CSP build and pointed its worker at our own /basemap/maplibre-worker.js
      * (served from R2). That R2-served worker script intermittently hung ("pending"),
@@ -9787,7 +9798,7 @@ function initMapLibre(zones){
      * "blob: workers are blocked" assumption no longer holds), and we also add
      * `worker-src 'self' blob:` to the CSP (worker-shell.js) to make this explicit.
      * No setWorkerUrl() call — the standard build handles its own worker. */
-    if(!window.maplibregl) await loadScript('https://cdn.jsdelivr.net/npm/maplibre-gl@4.7.1/dist/maplibre-gl.js');
+    if(!window.maplibregl) await loadScript('https://cdn.jsdelivr.net/npm/maplibre-gl@4.7.1/dist/maplibre-gl.js', MAPLIBRE_JS_SRI);
 
     // overlay container on top of the existing map
     const wrap = document.getElementById('map-wrap') || document.body;
@@ -20400,7 +20411,7 @@ body.light #geo-info-side-panel .hw-tip-section {
     <div id="ac-sr-live" aria-live="polite" aria-atomic="true" style="position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;border:0;"></div>
     <div id="ac-chips" aria-label="Suggested questions"></div>
     <div id="ac-bubble-input-row">
-      <input id="ac-input" placeholder="How can I help?" data-i18n-placeholder="acInputPlaceholder" autocomplete="off" aria-label="Ask AnyClip a question"/>
+      <input id="ac-input" maxlength="2000" placeholder="How can I help?" data-i18n-placeholder="acInputPlaceholder" autocomplete="off" aria-label="Ask AnyClip a question"/>
       <button id="ac-send" aria-label="Send message">➤</button>
     </div>
   </div>
