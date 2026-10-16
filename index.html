@@ -5,6 +5,7 @@
 
   This file IS the user-facing webpage at https://anyonemap.anyoneregiontvmap.workers.dev/.
   v676: account renamed — every anyonerelaysmap.workers.dev reference (proxy URLs, preconnect, trusted-domain lists) now points at anyoneregiontvmap.workers.dev.
+  v684: the welcome card's stats no longer freeze on a mid-load reading (poll ran 10 s flat; now until stable) and its Health cell no longer shows the donut's placeholder dash before the Health panel has been opened.
   v683: bug hunt. A crafted ?fp= share link injected HTML/CSS into the relay panel (the CSP blocked scripts; links and styling still landed) — fingerprints are now validated (40 hex) at the URL and in fetchRelayDetail, and fp/ISP/location are HTML-escaped in the card. AnyClip: English is a detected language (common English words no longer flip the answer into de/pt/es/tr; an English question after a foreign one is answered in English); the 10-minute local-answer window is set only by a real proxy refusal, so a re-enabled assistant is noticed; short native keywords must be whole words (German 'hell' no longer turns 'hello' into the dark-mode answer); 2-letter English keys take no plural ('hi' no longer matches 'his').
   v682: AnyClip answers in the visitor's language — all knowledge-base answers and native keywords for the 15 site languages live in the I18N packs (kbA_* / kbK_*); language = the one the question is typed in, else AnyClip's/site's chosen language, else English; numbers formatted per language; Arabic answers render right-to-left. The install command is a constant outside the translations.
   v681: AnyClip runs keyless — the built-in knowledge base gains 14 topics sourced from the docs.anyone.io facts the AI prompt carried (lock, staking, rewards, token, specs, flags, freshness, growth, domains, Bitcoin, who made the map, docs, anon/Tor, greetings); keyword matching is word-boundary based ("operator" no longer matches "tor", "online" no longer matches "line"); the relay-count, hardware and health answers are computed when asked (they were frozen at page load); a paused proxy is not retried and the widget answers locally for 10 minutes instead of re-asking.
@@ -3826,6 +3827,12 @@ body:not(.light) #onboarding #ob-close:hover { color: var(--p1-type-0) !importan
   line-height: 1 !important;
 }
 #onboarding .p1-stat-val--live { color: var(--p1-signal) !important; }
+/* v684: four tiles in 375px — values wrapped ("B+ ·" / "72"); keep them on one line and let the tile breathe */
+@media (max-width: 480px){
+  #onboarding .p1-stat { padding: 12px 8px !important; min-width: 0 !important; }
+  #onboarding .p1-stat-val { font-size: 13px !important; letter-spacing: -0.02em !important; white-space: nowrap !important; }
+  #onboarding .p1-stat-label { font-size: 8px !important; letter-spacing: .04em !important; }
+}
 #onboarding .p1-stat-label {
   font-size: 10px !important;
   font-weight: 500 !important;
@@ -12611,8 +12618,13 @@ function _p1ReadStat(id, fallback){
   return t;
 }
 function _p1ComposeHealth(){
-  var grade = _p1ReadStat('donut-grade', '');
-  var score = _p1ReadStat('btn-health-score', _p1ReadStat('sb-health', ''));
+  /* v684: #donut-grade is only drawn once the Health panel has been opened, so
+   * on a first visit the welcome card read its placeholder dash ("— · 72").
+   * Use the score object the rest of the page computes from; DOM is the fallback. */
+  var _ph = function(v){ return (!v || v === '—' || v === '…' || v === '-' || v === '?') ? '' : String(v); };
+  try { if(typeof computeHealthScore === 'function'){ var _h = computeHealthScore(); if(_h && Number.isFinite(_h.total)){ var _g = _ph(_h.grade); return (_g ? _g + ' · ' : '') + _h.total; } } } catch(_){}
+  var grade = _ph(_p1ReadStat('donut-grade', ''));
+  var score = _ph(_p1ReadStat('btn-health-score', _p1ReadStat('sb-health', '')));
   if(grade && score) return grade + ' · ' + score;
   return score || grade || '…';
 }
@@ -12646,13 +12658,22 @@ function _p1StartPoll(strip){
   // up to 20 ticks (10 seconds total). Stops automatically once the modal
   // closes or when all four values are non-placeholder.
   if(_p1PollHandle){ clearInterval(_p1PollHandle); _p1PollHandle = null; }
-  var ticks = 0;
+  /* v684: the poll used to stop after 10 s no matter what. On a phone the
+   * registry (1.4 MB) often lands later, so the card froze on a mid-load
+   * reading (785 relays, no grade) until closed. Now it keeps polling while
+   * the card is open and stops once the numbers have been stable for 3 s, with
+   * a 2-minute ceiling. */
+  var ticks = 0, _last = '', _same = 0;
   _p1PollHandle = setInterval(function(){
-    if(++ticks > 20){ clearInterval(_p1PollHandle); _p1PollHandle = null; return; }
+    if(++ticks > 240){ clearInterval(_p1PollHandle); _p1PollHandle = null; return; }
     var ob = document.getElementById('onboarding');
     if(!ob || ob.classList.contains('hidden')){ clearInterval(_p1PollHandle); _p1PollHandle = null; return; }
     var s = document.getElementById('phase1-stats');
     if(s) _p1RenderStats(s);
+    var _key = _p1ReadStat('sR', '') + '|' + _p1ComposeHealth();
+    var _ready = /\d/.test(_p1ReadStat('sR', '')) && /\d/.test(_p1ComposeHealth()) && !(typeof _p3CounterBusy !== 'undefined' && _p3CounterBusy);
+    _same = (_ready && _key === _last) ? _same + 1 : 0; _last = _key;
+    if(_same >= 6){ clearInterval(_p1PollHandle); _p1PollHandle = null; }
   }, 500);
 }
 function _p1InjectWelcomeStats(){
