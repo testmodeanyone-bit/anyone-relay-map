@@ -4,6 +4,13 @@
  *
  * Deployed at: https://anyclip-proxy.anyoneregiontvmap.workers.dev
  * v643: account renamed — ALLOWED_ORIGIN, link allow-list, sign-challenge text and outbound UA now use anyoneregiontvmap.workers.dev.
+ * v645: AI spend governor. Two days of a bot farm draining the Anthropic budget through the OPEN /api/chat
+ *       (the key never left Cloudflare — per-IP limits were the only ceiling). Now: a global hourly and daily
+ *       call budget (AI_HOUR_CAP / AI_DAY_CAP vars, default 150 / 1500, fail-closed when D1 is unreachable),
+ *       an AI_ENABLED kill switch, the token's ipTag is finally CHECKED on /api/chat, the dead 5-part Lounge
+ *       token path is gone, the client-controlled input is capped at 8,000 chars (total 24,000 unchanged),
+ *       optional Cloudflare Turnstile on /api/token (active only when TURNSTILE_SECRET is set), and /health
+ *       reports the hour/day counts so the 08:00 check can alarm on a spike.
  * v644: the Operators Lounge is retired — 55 routes removed (chat-* except /api/chat, user/*, room/*, dm-*, ably-token, ws, ipfs-route,
  *       lounge/persist, presence-update, moderate, link-meta, wallet-relay-count, the D1 user-admin routes and migrate-registry) with their
  *       helpers (SIWE/secp256k1, keccak, KDF, message MACs, session seals, D1 user mirror, Pinata registry, Ably publish). The ChatRoom
@@ -1412,6 +1419,41 @@ async function _rlExceededSliding(env, key, limit, windowSeconds) {
  * Fails OPEN when D1 is unavailable, matching the existing posture of the login
  * limiter (_atomicIncrCounter returns null then). Failing closed here would take
  * the whole API down on a D1 blip. */
+/* v645: read a counter without touching it (for /health). null = no D1 or error. */
+async function _readCounter(env, key) {
+  if (!env.USER_DB) return null;
+  try {
+    const row = await env.USER_DB.prepare("SELECT count, expires_at FROM counters WHERE key = ?1").bind(key).first();
+    if (!row) return 0;
+    return row.expires_at < Date.now() ? 0 : row.count;
+  } catch (_) { return null; }
+}
+/* v645: global AI spend governor. Returns null when the call may proceed, else a
+ * {status, message} to send. Fail-CLOSED: if the counter cannot be read or
+ * written (D1 down), the assistant pauses — unbounded spend is the failure this
+ * guards against, and the map has offline answers. Caps come from vars so they
+ * can be tuned in the dashboard without a deploy. */
+const AI_HOUR_CAP_DEFAULT = 150, AI_DAY_CAP_DEFAULT = 1500;
+function _aiCaps(env) {
+  const h = parseInt(env.AI_HOUR_CAP, 10), d = parseInt(env.AI_DAY_CAP, 10);
+  return { hour: Number.isFinite(h) && h > 0 ? h : AI_HOUR_CAP_DEFAULT, day: Number.isFinite(d) && d > 0 ? d : AI_DAY_CAP_DEFAULT };
+}
+function _aiEnabled(env) {
+  const v = String(env.AI_ENABLED == null ? "1" : env.AI_ENABLED).trim().toLowerCase();
+  return !(v === "0" || v === "false" || v === "off" || v === "no");
+}
+function _aiDayKey() { return "ai-global-day:" + new Date().toISOString().slice(0, 10); }
+async function _aiGovernor(env) {
+  if (!_aiEnabled(env)) return { status: 503, message: "The assistant is switched off right now." };
+  const caps = _aiCaps(env);
+  const h = await _atomicIncrCounter(env, "ai-global-hour", 3600);
+  if (h === null) return { status: 503, message: "The assistant is paused (budget counter unavailable)." };
+  if (h > caps.hour) return { status: 429, message: "The assistant has reached its hourly budget. Try again later." };
+  const d = await _atomicIncrCounter(env, _aiDayKey(), 86400);
+  if (d === null) return { status: 503, message: "The assistant is paused (budget counter unavailable)." };
+  if (d > caps.day) return { status: 429, message: "The assistant has reached its daily budget. Back tomorrow." };
+  return null;
+}
 async function _rlExceeded(env, key, limit, ttlSeconds) {
   const n = await _atomicIncrCounter(env, key, ttlSeconds);
   if (n === null) return false;
@@ -3474,6 +3516,8 @@ var worker_source_default = {
          * provisional (v613) and /bitcoin is on its last good copy (v614). */
         fpIndex: { builtAt: fpBuiltAt, ageMin: fpBuiltAt ? Math.round((now - fpBuiltAt) / 6e4) : null, stale: !fpBuiltAt || (now - fpBuiltAt) > FP_SNAPSHOT_MAX_AGE_MS },
         cron: cronHealth,
+        /* v645: AI spend governor state, for the daily check */
+        ai: await (async () => { const caps = _aiCaps(env); return { enabled: _aiEnabled(env), hour: await _readCounter(env, "ai-global-hour"), hourCap: caps.hour, day: await _readCounter(env, _aiDayKey()), dayCap: caps.day, turnstile: !!env.TURNSTILE_SECRET }; })(),
         failingTasks,
         staleTasks,   /* v612 */
         note: healthy ? "all cron tasks healthy" : (fpStale ? "relay index is stale — rebuilds are failing" : enrichmentStale ? "enrichment data stale — cron may have stalled" : failingTasks.length ? "cron task(s) failing: " + failingTasks.join(", ") : "cron task(s) silent past their cadence: " + staleTasks.join(", "))
@@ -4158,6 +4202,24 @@ if (url.pathname === "/api/exit-relays" && request.method === "GET") {
     }
     if (url.pathname === "/api/token" && request.method === "GET") {
       const ip = request.headers.get("CF-Connecting-IP") || "unknown";
+      if (!_aiEnabled(env)) return cors(JSON.stringify({ error: "assistant off" }), 503);
+      /* v645: optional Cloudflare Turnstile. Only enforced when TURNSTILE_SECRET is
+       * set; the client sends the widget's response as ?cf=<token> or the
+       * cf-turnstile-response header. Script bots cannot mint a token without it. */
+      if (env.TURNSTILE_SECRET) {
+        const cfResp = url.searchParams.get("cf") || request.headers.get("cf-turnstile-response") || "";
+        if (!cfResp || cfResp.length > 2048) return cors(JSON.stringify({ error: "verification required" }), 403);
+        let okCf = false;
+        try {
+          const vr = await fetchT("https://challenges.cloudflare.com/turnstile/v0/siteverify", {
+            method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ secret: env.TURNSTILE_SECRET, response: cfResp, remoteip: ip })
+          }, 5000);
+          const vj = await vr.json();
+          okCf = !!(vj && vj.success);
+        } catch (_) { okCf = false; }
+        if (!okCf) return cors(JSON.stringify({ error: "verification failed" }), 403);
+      }
       /* v532: atomic. Was a KV read-modify-write, so a parallel burst incremented
        * the counter once instead of N times — and this token is what gates
        * /api/chat, which bills our Anthropic key. */
@@ -4197,25 +4259,18 @@ if (url.pathname === "/api/exit-relays" && request.method === "GET") {
          * /api/token, which mints the 4-part shape). The 4-part path is forced
          * to guest-tier and short-lived (25s issuance, 30s ceiling for clock
          * skew); it cannot escalate to op/hw. */
+        /* v645: only the 4-part anonymous shape remains (ts:nonce:ipTag:sig). The
+         * 5-part Lounge token went with the Lounge, and the ipTag is now CHECKED:
+         * a token minted from one address is refused from another. */
         const parts = token.split(":");
-        let ts, payload, tokenSig;
-        let cleanedWh = null;
-        let isAnon = false;
-        if (parts.length === 5) {
-          const [tsStr5, nonce5, nickB64, whHex, sig5] = parts;
-          payload = `${tsStr5}:${nonce5}:${nickB64}:${whHex}`;
-          ts = parseInt(tsStr5, 10);
-          tokenSig = sig5;
-          cleanedWh = /^[0-9a-f]{64}$/.test(whHex) ? whHex : null;
-        } else if (parts.length === 4) {
-          const [tsStr4, nonce4, ipTag, sig4] = parts;
-          payload = `${tsStr4}:${nonce4}:${ipTag}`;
-          ts = parseInt(tsStr4, 10);
-          tokenSig = sig4;
-          isAnon = true;
-        } else {
+        if (parts.length !== 4) {
           return cors(JSON.stringify({ error: { message: "Invalid token format" } }), 401);
         }
+        const [tsStr4, nonce4, ipTag, sig4] = parts;
+        const payload = `${tsStr4}:${nonce4}:${ipTag}`;
+        const ts = parseInt(tsStr4, 10);
+        const tokenSig = sig4;
+        const isAnon = true;
         const age = Date.now() - ts;
         /* 5-part tokens: 1h validity (matches /api/chat-token issuance).
          * 4-part tokens: 30s ceiling (issuer returns expires=ts+25s; 5s skew). */
@@ -4227,35 +4282,25 @@ if (url.pathname === "/api/exit-relays" && request.method === "GET") {
         if (!timingSafeEqual(tokenSig, expectedSig)) {
           return cors(JSON.stringify({ error: { message: "Invalid token" } }), 403);
         }
+        {
+          const _d = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(ip + env.HMAC_SECRET));
+          const _expectTag = Array.from(new Uint8Array(_d)).slice(0, 8).map((b) => b.toString(16).padStart(2, "0")).join("");
+          if (!timingSafeEqual(String(ipTag), _expectTag)) {
+            return cors(JSON.stringify({ error: { message: "Token not valid from this address" } }), 403);
+          }
+        }
         /* whHex (if present) is now trusted (HMAC-verified). Use it as the
          * rate-limit key for authenticated users; anonymous (4-part) callers
          * stay on the IP-keyed guest bucket below. */
-        let aiTier = "guest";
-        if (!isAnon && cleanedWh && env.FP_INDEX) {
-          const sd = await env.FP_INDEX.get(`verified-session:${cleanedWh}`, { type: "json" }).catch(() => null);
-          if (sd && (sd.tier === "hw" || sd.tier === "op")) aiTier = sd.tier;
+        const aiTier = "guest";
+        /* Guest: 20/hr per IP (v532: atomic — this is the direct cost path). */
+        if (await _rlExceeded(env, `chat-rl:${ip}`, 20, 3600)) {
+          return cors(JSON.stringify({ error: { message: "AI limit: 20/hr. Try again later." } }), 429);
         }
-        if (env.FP_INDEX) {
-          if (aiTier === "hw") {
-            /* HW: unlimited — skip rate checks. */
-          } else if (aiTier === "op" && cleanedWh) {
-            /* OP: 30/hr per wallet hash. */
-            /* v532: atomic. The manual ts-based window is dropped — the D1 counter
-             * carries its own expires_at and resets itself, which is the same
-             * fixed-hour window without the read-modify-write race. The exact
-             * "resets in N min" figure is no longer available from the counter,
-             * so the message states the window instead of a countdown. */
-            if (await _rlExceeded(env, `ai-op:${cleanedWh}`, 30, 3600)) {
-              return cors(JSON.stringify({ error: { message: "OP AI limit: 30/hr reached. Resets within the hour. Run a hardware relay for unlimited." } }), 429);
-            }
-          } else {
-            /* Guest: 20/hr per IP. */
-            /* v532: atomic — this is the direct cost path. */
-            if (await _rlExceeded(env, `chat-rl:${ip}`, 20, 3600)) {
-              return cors(JSON.stringify({ error: { message: "AI limit: 20/hr. Connect your wallet for higher limits." } }), 429);
-            }
-          }
-        }
+        /* v645: the global budget. Checked after the per-IP limit and before the
+         * body is parsed, so a refused call costs nothing. */
+        const _gov = await _aiGovernor(env);
+        if (_gov) return cors(JSON.stringify({ error: { message: _gov.message, paused: true } }), _gov.status);
         const body = await request.json();
         if (!body.messages || !Array.isArray(body.messages)) {
           return cors(JSON.stringify({ error: { message: "Invalid request" } }), 400);
@@ -4407,6 +4452,11 @@ if (url.pathname === "/api/exit-relays" && request.method === "GET") {
          * tokens on our key. */
         if (_aiInputChars > 24000) {
           return cors(JSON.stringify({ error: { message: "Request too large" } }), 400);
+        }
+        /* v645: the client-controlled part on its own. The widget sends a short
+         * question plus a capped history; 8,000 chars is several times that. */
+        if (_aiInputChars - _sysPrompt.length > 8000) {
+          return cors(JSON.stringify({ error: { message: "Messages too large" } }), 400);
         }
         const anthropicRes = await fetchT("https://api.anthropic.com/v1/messages", {
           method: "POST",
