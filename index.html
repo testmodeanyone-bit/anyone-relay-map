@@ -5,6 +5,7 @@
 
   This file IS the user-facing webpage at https://anyonemap.anyoneregiontvmap.workers.dev/.
   v676: account renamed — every anyonerelaysmap.workers.dev reference (proxy URLs, preconnect, trusted-domain lists) now points at anyoneregiontvmap.workers.dev.
+  v681: AnyClip runs keyless — the built-in knowledge base gains 14 topics sourced from the docs.anyone.io facts the AI prompt carried (lock, staking, rewards, token, specs, flags, freshness, growth, domains, Bitcoin, who made the map, docs, anon/Tor, greetings); keyword matching is word-boundary based ("operator" no longer matches "tor", "online" no longer matches "line"); the relay-count, hardware and health answers are computed when asked (they were frozen at page load); a paused proxy is not retried and the widget answers locally for 10 minutes instead of re-asking.
   v680: MapLibre JS and CSS are loaded with subresource integrity (sha384), closing the last unpinned third-party script on the page.
   v679: the AnyClip input is capped at 2,000 characters, matching the proxy's per-message limit (v646).
   v678: when the proxy's AI budget is exhausted or switched off (v645, `paused: true`), AnyClip answers from its built-in knowledge base instead of showing an error.
@@ -21066,6 +21067,63 @@ body.light #geo-info-side-panel .hw-tip-section {
   }
 
   const STATIC_KB = [
+    /* v681: topics below are sourced from the FACTS / WHAT THIS MAP SHOWS /
+     * REFRESH sections of the proxy's AnyClip prompt (docs.anyone.io, quoted
+     * there "do not embellish"). Keep the two in agreement. */
+    {k:['stake','staking','staker','unstake','delegate','apy','apr','vault','cooldown'],
+     a:"Holders stake $ANYONE to a relay family (an operator's wallet) on dashboard.anyone.io, and the operator receives 5% of the staking rewards. A stake earns only while at least half of that family's registered relays are active in the hourly epoch. Unstaking moves tokens to a vault with a cooldown period, and APY is variable because a fixed daily outflow is shared by all stakers. Guide: docs.anyone.io/dashboard"},
+    {k:['reward','earn','payout','income','profit','multiplier','epoch','how much can i'],
+     a:"Relay rewards are a fixed daily token outflow (5,000 tokens a day at the time of the docs) split across eligible relays by uptime, bandwidth and multipliers for location, family and hardware. How much a given machine earns can't be predicted from here. Details: docs.anyone.io/relay"},
+    {k:['lock','locked','locking','lock token','need to lock','100 $anyone','collateral','bond'],
+     a:"Each non-hardware relay needs 100 $ANYONE locked per relay fingerprint, with all of an operator's relays under one wallet; you lock on dashboard.anyone.io. Hardware relays (Anyone Router) need no lock. Guide: docs.anyone.io/relay"},
+    {k:['price','token','tokenomics','$anyone','buy','sell','trade','trading','invest','investment','market cap','wen','moon','pump'],
+     a:"I can't give price, trading or investment advice. Factually: running a relay needs 100 $ANYONE locked per relay, holders can stake $ANYONE to an operator's relay family, and relay rewards come from a fixed daily token outflow. Official information is at anyone.io and docs.anyone.io."},
+    {k:['requirement','spec','specs','raspberry','pi','vps','cpu','ram','disk','docker','arm64','minimum','what machine','which machine','server'],
+     a:"A relay runs on any Debian/Ubuntu machine: a VPS, a standalone box, or an arm64 device such as a Raspberry Pi, and Docker images exist for amd64 and arm64. Recommended minimum is 2 CPU cores, 2 GB RAM and about 15 GB of disk. Guide: docs.anyone.io/relay"},
+    {k:['exit','guard','middle','flag','role','relay type','type of relay','kinds of relay'],
+     a:()=>{
+       let st = {}; try { st = acCollectStats(); } catch(_){}
+       const n = v => (v != null && /^\d+$/.test(String(v))) ? Number(v).toLocaleString('en-US') : (v == null ? '?' : String(v));
+       const ex = n(st.exitRelays || '?'), gd = n(st.guardRelays || '?'), md = n(st.middleRelays || '?');
+       const nums = (ex !== '?' && gd !== '?') ? ` Right now ${ex} wallet-linked relays carry the Exit flag, ${gd} carry the Guard flag and ${md} are middle-only.` : ' The live counts have not loaded yet.';
+       return "Anyone uses Tor's relay flags, and one relay can carry both Exit and Guard, so the counts overlap and don't add up to the total." + nums + " The Exit / Guard / Middle / Hardware filters show each group on the map.";
+     }},
+    {k:['grow','growth','growing','trend','decline','declining','shrink','increase','decrease','this week','this month','last month','history'],
+     a:()=>{
+       let st = {}; try { st = acCollectStats(); } catch(_){}
+       const wk = st.growthWeek, mo = st.growthMonth;
+       if (!wk || /not available/.test(wk)) return "Growth figures haven't loaded yet. The Network Growth panel keeps one row per UTC day with relays, bandwidth and zones.";
+       return `Relay change this week: ${wk}. Over the last 30 days: ${/not available/.test(mo||'') ? 'not available yet' : mo}. The Network Growth panel keeps one row per UTC day.`;
+     }},
+    {k:['fresh','real-time','realtime','real time','refresh','how often','how old','delay','lag','outdated','stale','not showing','not appear','not on the map','new relay'],
+     a:()=>{
+       let age = ''; try { const ca = window._registryCachedAt; if (ca) age = ` The current registry snapshot is ${Math.max(0, Math.floor((Date.now() - ca) / 60000))} min old.`; } catch(_){}
+       return "The relay registry is rebuilt every 15 minutes and the map refreshes every 3 minutes, so a change can take up to about 18 minutes to show. Network consensus itself is hourly, so a brand-new relay can take an hour or more to appear." + age + " Domains refresh every 15 minutes, Bitcoin nodes every 30 minutes, and the hardware registry every 6 hours.";
+     }},
+    {k:['domain','.anyone','unstoppable','mint','minted','base chain','web3 name'],
+     a:()=>{
+       let st = {}; try { st = acCollectStats(); } catch(_){}
+       const n = st.anyoneDomains && st.anyoneDomains !== '?' ? `${st.anyoneDomains} have been minted so far, counted from on-chain mint events. ` : '';
+       return ".anyone domains are Unstoppable Domains names minted on the Base blockchain. " + n + "The Domains panel lists names and owners (domains are not placed on the map). To get one: get.unstoppabledomains.com/anyone";
+     }},
+    {k:['bitcoin','btc','bitnodes','satoshi','bitcoin.conf','bitcoin core'],
+     a:()=>{
+       let st = {}; try { st = acCollectStats(); } catch(_){}
+       const n = st.bitcoinNodes && st.bitcoinNodes !== '?' ? ` (${st.bitcoinNodes} reachable nodes right now, refreshed every 30 minutes)` : '';
+       return "The Bitcoin layer draws reachable Bitcoin nodes from bitnodes.io" + n + ". The /bitcoin page (Anyone for Bitcoin) generates a bitcoin.conf that routes a Bitcoin Core node's outbound traffic through Anyone as a SOCKS5 proxy, with onion=0 so .onion peers are not sent to Anyone.";
+     }},
+    {k:['who made','who built','who created','who runs','who owns','who is behind','made this','built this','developer','creator','author','nexoniam','affiliated','endorsed','official','is this official'],
+     a:"AnyoneMap is an independent, community-built project by one developer (@Nexoniam on X). It is not run, hosted or endorsed by the Anyone Protocol team. Its data comes from Anyone's public network endpoints, the Arweave/AO hardware registry, the Base blockchain (domains) and bitnodes.io."},
+    {k:['anon','fork','ator','difference','vs tor','versus','compare','compared','onion'],
+     a:"Anyone's relay software is anon, a fork of Tor, and the network was formerly named ATOR. As with Tor, traffic passes through several relays so no single one knows both who you are and what you're reaching; Anyone adds on-chain relay registration, a 100 $ANYONE lock per relay, staking and token rewards for operators."},
+    {k:['docs','documentation','guide','tutorial','manual','learn more','website','dashboard','official docs','official site'],
+     a:"Official docs: docs.anyone.io (relay setup at /relay, hardware at /hardware, the dashboard at /dashboard). Project site: anyone.io. Operator and staking dashboard: dashboard.anyone.io. Community: t.me/anyoneprotocol"},
+    {k:['who are you','what are you','anyclip','are you ai','are you a bot','bot','chatgpt','claude'],
+     a:"I'm AnyClip, this map's guide. I answer from a built-in knowledge base and the map's live numbers, so ask about relays, staking, rewards, hardware routers, .anyone domains, the Bitcoin layer or how to read the map."},
+    {w:0.5, k:['thanks','thank you','thx','ty'],
+     a:"You're welcome! Ask any time about relays, staking, rewards, hardware or the map."},
+    {w:0.5, k:['hello','hi','hey','gm','yo'],
+     a:"Hi! Ask me about relay counts, running a relay, staking, rewards, hardware routers, .anyone domains, the Bitcoin layer or how to read the map."},
     {k:['overview only'],
      a:"ANyone Protocol is a decentralized privacy network. Visit anyone.io to learn more!"},
     {k:['color','colour','white','cyan','green','gold','orange','legend','mean'],
@@ -21097,46 +21155,46 @@ body.light #geo-info-side-panel .hw-tip-section {
      a:"Scroll to zoom, click & drag to pan. Use the +/−/⊙ buttons on the right. ⊙ resets to world view. You can zoom in to level 15 — street scale."},
     {k:['dark','light','mode','theme','☀'],
      a:"Click ☀ MODE in the top bar to switch between dark and light mode. Dark mode makes the glowing relay nodes really pop!"},
-    {k:['how many','total','count','number','stat'],
-     a:(()=>{
-       const r  = document.getElementById("sR")?.textContent||"—";
-       const z  = document.getElementById("sZ")?.textContent||"468";
-       const ex = document.getElementById("sX")?.textContent||"?";
-       const gd = document.getElementById("sG")?.textContent||"?";
-       const md = document.getElementById("sMD")?.textContent||"?";
-       const hw = document.getElementById("sHW")?.textContent||"?";
-       const bw = document.getElementById("sBW")?.textContent||"?";
-       const cn = (typeof networkCounts === 'function' && networkCounts().countries) ? String(networkCounts().countries) : "?";   /* v648: was the FILTERED list's count, fallback "62" */
-       const _ca2 = window._registryCachedAt; const _age2 = _ca2 ? Math.floor((Date.now() - _ca2) / 60000) : null;
-       return `${r} total relays — ${ex} exits, ${gd} guards, ${md} middles, ${hw} hardware routers. ${bw} total bandwidth across ${z} zones in ${cn} countries.` + (_age2 == null ? '' : ` From the relay registry snapshot taken ${_age2} min ago.`);
-     })()},
+    {k:['how many','total','count','number','stat','statistic'],
+     /* v681: computed when asked (was frozen at page load), and phrased so the
+      * overlapping Exit/Guard counts are not presented as separate groups. */
+     a:()=>{
+       let st = {}; try { st = acCollectStats(); } catch(_){}
+       const n = v => (v != null && /^\d+$/.test(String(v))) ? Number(v).toLocaleString('en-US') : (v == null ? '?' : String(v));
+       if (!st.totalRelays || st.totalRelays === '?') return "The relay counts have not loaded yet — give the map a few seconds and ask again.";
+       let out = `${n(st.totalRelays)} relays are in consensus across ${n(st.zones)} zones in ${n(st.countries)} countries, with ${st.totalBW || '?'} of total bandwidth.`;
+       if (st.exitRelays && st.exitRelays !== '?') out += ` Of the wallet-linked relays, ${n(st.exitRelays)} carry the Exit flag and ${n(st.guardRelays)} the Guard flag (many carry both), and ${n(st.middleRelays)} are middle-only.`;
+       if (st.hwFpsCount && st.hwFpsCount !== '?' && st.hwActiveInConsensus !== '?') out += ` ${n(st.hwActiveInConsensus)} of ${n(st.hwFpsCount)} registered hardware relays are active.`;
+       try { const ca = window._registryCachedAt; if (ca) out += ` Registry snapshot: ${Math.max(0, Math.floor((Date.now() - ca) / 60000))} min ago.`; } catch(_){}
+       return out;
+     }},
     {k:['private','privacy','anonymous','encrypt','vpn','tor','secure'],
      a:"ANyone Protocol routes traffic through multiple relays so no single node knows both who you are and what you're accessing. Built for speed and real privacy."},
-    {k:['run','node','volunteer','host','join','participate'],
-     a:"To run a relay on Debian/Ubuntu, use this one command: sudo /bin/bash -c \"$(curl -fsSL https://raw.githubusercontent.com/anyone-protocol/anon-install/refs/heads/main/install.sh)\" — it sets up everything interactively. Then lock 100 $ANYONE at the Dashboard to register for rewards. Source on GitHub: github.com/anyone-protocol/anon-install"},
+    {k:['run','running','become an operator','set up','setup','install','node','volunteer','host','join','participate'],
+     a:"To run a relay on Debian/Ubuntu, use this one command: sudo /bin/bash -c \"$(curl -fsSL https://raw.githubusercontent.com/anyone-protocol/anon-install/refs/heads/main/install.sh)\" — it sets up everything interactively. Then lock 100 $ANYONE per relay at dashboard.anyone.io to register for rewards (hardware relays need no lock). Full guide: docs.anyone.io/relay"},
     {k:['github','source code','open source','code','repository','repo','repos'],
      a:'The ANyONe Protocol has 56 public repositories at https://github.com/anyone-protocol. Key repos: ator-protocol (C core relay), smart-contracts (AO/Lua + EVM), hodler (staking contract), facilitator (reward claims), registrator (relay registration), anon-install (one-command installer), anon-android (Maven library), AnyoneBrowser (iOS), AnyoneVPN (Android), ator-relay-dashboard (Vue operator dashboard). All actively maintained — last commit March 2026.'},
     {k:['contract','solidity','evm','arweave','ao','lua','blockchain','on-chain','onchain','smart contract'],
      a:'ANyONe uses a dual-chain architecture: AO (Arweave compute) for on-chain relay data via 6 Lua contracts (operator-registry, relay-directory, relay-rewards, staking-rewards, staking-snapshots), and Ethereum EVM for token operations via 3 Solidity contracts (HodlerV3 for locking/staking, Facilitator for claiming rewards, Registrator for relay registration). All source at https://github.com/anyone-protocol/smart-contracts.'},
     {k:['android','ios','mobile','browser','vpn','app'],
      a:'ANyONe has mobile apps: AnyoneBrowser (iOS, open-source, forked from OnionBrowser — github.com/anyone-protocol/AnyoneBrowser), AnyoneVPN (Android, forked from Orbot/Guardian Project — github.com/anyone-protocol/AnyoneVPN), and anon-android (Android library for developers — Maven: io.anyone:anon-android:0.4.9.11, requires Android API 21+). All available on GitHub.'},
-    {k:['hardware','hw','router','device','anyone router','diamond','🔧'],
-     a:(()=>{
-       const hw = document.getElementById("sHW")?.textContent||"?";
-       const hwFpsN = (typeof hwFps !== 'undefined') ? hwFps.size : '?';
-       return `Right now there are ${hw} registered hardware relays with ${hwFpsN} confirmed in consensus. Hardware relays are verified ANyone Router devices — they appear as gold spinning diamonds on the map. They earn from a dedicated 20% hardware rewards pool and don't require staking 100 $ANYONE tokens!`;
-     })()},
-    {k:['health','score','grade','decentralized','diversity'],
-     a:(()=>{
-       const hs = document.getElementById("btn-health-score")?.textContent||"?";
-       const hg = document.getElementById("health-grade")?.textContent||"?";
-       const cn = document.getElementById("rs-countries")?.textContent||"?";
-       const isps = document.getElementById("rs-isps")?.textContent||"?";
-       return `The network health score is ${hs}/100 (grade ${hg}). This measures geographic spread, ISP diversity, exit relay ratio, bandwidth strength, and network size. Currently ${cn} countries and ${isps} ISPs — click the HEALTH button for the full breakdown!`;
-     })()},
-    {k:['community','telegram','chat','group','social','discord','where','t.me','twitter','x.com','follow','announcement'],
+    {k:['hardware','hw','router','device','anyone router','diamond','🔧','rk3399','atornaut','nft'],
+     a:()=>{
+       let st = {}; try { st = acCollectStats(); } catch(_){}
+       const act = st.hwActiveInConsensus, reg = st.hwFpsCount;
+       const live = (act != null && act !== '?' && reg != null && reg !== '?') ? `Right now ${act} hardware relays are active in consensus out of ${reg} registered. ` : 'The hardware counts have not loaded yet. ';
+       return live + "Hardware relays are the official Anyone Router (Rockchip RK3399-T, 4 GB RAM, gigabit Ethernet), registered on-chain in the AO registry and drawn as gold diamonds on the map. They need no 100 $ANYONE lock and earn a bonus pool on top of normal relay rewards; the first devices required an Atornaut NFT, which gives a 100% reward bonus when staked. Setup guide: docs.anyone.io/hardware";
+     }},
+    {k:['health','score','grade','decentralized','decentralised','diversity','isp'],
+     a:()=>{
+       let st = {}; try { st = acCollectStats(); } catch(_){}
+       const hs = st.healthScore || '?', hg = st.healthGrade || '?', cn = st.countries || '?', isps = st.isps || '?';
+       if (hs === '?' || hs === '—') return "The health score has not loaded yet. It measures geographic spread, ISP diversity, exit relay ratio, bandwidth strength and network size; open the HEALTH panel to see it.";
+       return `The network health score is ${hs}/100 (grade ${hg}), from geographic spread, ISP diversity, exit relay ratio, bandwidth strength and network size. Relays are in ${cn} countries across ${isps} ISPs.`;
+     }},
+    {k:['community','telegram','chat','group','social','discord','t.me','twitter','x.com','follow','announcement'],
      a:"The Anyone Protocol community is on Telegram at https://t.me/anyoneprotocol and Twitter/X at https://x.com/AnyoneFDN — join Telegram for operator help and follow X for the latest announcements!"},
-    {k:['how','read','map','use','work','feature','help'],
+    {w:0.3, k:['how','read','map','use','work','feature','help'],
      a:"Each dot is a relay zone — bigger & brighter means more relays. Hover nodes for details, hover countries to highlight them, zoom with scroll, and hit ⚡ SIGNALS for live animations!"},
   ];
 
@@ -21164,19 +21222,45 @@ body.light #geo-info-side-panel .hw-tip-section {
     var bundle = _staticFallbacks[lang] || _staticFallbacks.en;
     return bundle[key] || _staticFallbacks.en[key];
   }
+  /* v681: a keyword must start a word ("operator" no longer hits 'tor',
+   * "online" no longer hits 'line', "happen" no longer hits 'app'); keys of
+   * four letters or fewer must also end the word, allowing a plural ('node'
+   * still matches "nodes", 'ao' no longer matches "chaos"). Keys that start
+   * with a symbol ('$anyone', '.anyone', emoji) are plain substring matches.
+   * Score = matched keys, longer keys slightly ahead, times the entry weight. */
+  const _kbReCache = new Map();
+  function _kbHit(lq, k){
+    if(!/^[a-z0-9]/.test(k)) return lq.includes(k);
+    let re = _kbReCache.get(k);
+    if(!re){
+      const esc = k.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      re = new RegExp('(^|[^a-z0-9])' + esc + (k.length <= 4 ? '(s|es)?(?![a-z0-9])' : ''));
+      _kbReCache.set(k, re);
+    }
+    return re.test(lq);
+  }
   function findStaticAnswer(q){
     if(!q) return _staticFb('empty');
     const lq = q.toLowerCase();
     let best = null, bestScore = 0;
     STATIC_KB.forEach(e=>{
-      const s = e.k.filter(k=>lq.includes(k)).length;
+      let s = 0;
+      e.k.forEach(k=>{ if(_kbHit(lq, k)) s += 1 + k.length / 50; });
+      s *= (e.w || 1);
       if(s > bestScore){ bestScore=s; best=e; }
     });
-    if(bestScore <= 0) return _staticFb('noMatch');
-    return typeof best.a === 'function' ? best.a() : best.a;   /* v609: answers may be computed */
+    if(bestScore <= 0) return _staticFb('noMatch') + ' docs.anyone.io · t.me/anyoneprotocol';
+    try { return typeof best.a === 'function' ? best.a() : best.a; }   /* v609: answers may be computed */
+    catch(_){ return _staticFb('noMatch') + ' docs.anyone.io · t.me/anyoneprotocol'; }
   }
 
+
   let _cachedToken = null;
+  /* v681: when the proxy says the assistant is paused (switched off, no key,
+   * or over budget) the widget answers locally for 10 minutes instead of
+   * spending a token + chat round trip (and the visitor's 20/h limit) on
+   * every question just to be told the same thing. */
+  let _acAiPausedUntil = 0;
   let _tokenExpires = 0;
 
   async function getToken(forceRefresh){
@@ -21189,6 +21273,16 @@ body.light #geo-info-side-panel .hw-tip-section {
     const r = await fetch(AC_PROXY + '/api/token');
     if(!r.ok){
       const txt = await r.text().catch(()=>'')
+      /* v681: the proxy refuses tokens with 503 {"error":"assistant off"} when the
+       * assistant is switched off or has no key (v645/v650). That is the paused
+       * state, not an expired session — hand it to the knowledge-base path. */
+      let _tj = null; try { _tj = JSON.parse(txt); } catch(_){}
+      if(r.status === 503 && _tj && (_tj.paused === true || _tj.error === 'assistant off')){
+        const perr = new Error('assistant_off');
+        perr.status = 503;
+        perr.body = { paused: true };
+        throw perr;
+      }
       const err = new Error('token_fetch_failed');
       err.kind = 'token_fetch';
       err.status = r.status;
@@ -21310,6 +21404,9 @@ body.light #geo-info-side-panel .hw-tip-section {
     showThinking();
 
     try{
+      if(Date.now() < _acAiPausedUntil){
+        const _pe = new Error('paused_local'); _pe.status = 503; _pe.body = { paused: true }; throw _pe;
+      }
       const token = await getToken();
 
       /* v322: capture res for status-aware error handling. The catch below
@@ -21357,7 +21454,8 @@ body.light #geo-info-side-panel .hw-tip-section {
         data = ct.includes('json') ? await res.json().catch(()=>({})) : {};
         if(res.ok && !data.error) break;
         /* Decide whether to retry. */
-        const transientNet = res.status === 0 || (res.status >= 500 && res.status < 600);
+        const _isPaused   = !!(data && data.error && data.error.paused === true);   /* v681: not transient — don't retry */
+        const transientNet = !_isPaused && (res.status === 0 || (res.status >= 500 && res.status < 600));
         const authBad     = res.status === 401 || res.status === 403;
         const canRetry    = attempt < 2 && (transientNet || authBad);
         if(!canRetry){
@@ -21427,6 +21525,7 @@ body.light #geo-info-side-panel .hw-tip-section {
        * not an error the visitor can fix — answer from the built-in knowledge base
        * instead, the way an empty reply already does. */
       if(e && e.body && e.body.paused === true){
+        _acAiPausedUntil = Date.now() + 10 * 60 * 1000;   /* v681 */
         const _kbReply = findStaticAnswer(question);
         history.push({role:'assistant', content: _kbReply});
         if(history.length > 20){ history.splice(0, history.length - 20); }
