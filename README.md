@@ -6,7 +6,7 @@
 
 Live, interactive map of the [Anyone Protocol](https://anyone.io) relay network — a decentralized onion routing network with staked relay operators. Built and operated by a community contributor running 300+ relays and 2 hardware nodes on the network.
 
-**Live deploy:** [anyonemap.anyonerelaysmap.workers.dev](https://anyonemap.anyonerelaysmap.workers.dev/)
+**Live deploy:** [anyonemap.anyoneregiontvmap.workers.dev](https://anyonemap.anyoneregiontvmap.workers.dev/)
 
 This repository contains the source for two Cloudflare Workers (`anyonemap-worker`, `anyclip-proxy`) plus the SPA they serve, the shared KV schema between them, a bitnodes snapshot mirror used by the Bitcoin comparison page, and the GitHub Actions automation that keeps it all running.
 
@@ -14,10 +14,10 @@ This repository contains the source for two Cloudflare Workers (`anyonemap-worke
 
 | Route | What it shows |
 |---|---|
-| [`/`](https://anyonemap.anyonerelaysmap.workers.dev/) | World map with 22-hub timezone strip, live relay positions, network health score, Anyone-vs-Tor stats |
-| [`/bitcoin`](https://anyonemap.anyonerelaysmap.workers.dev/bitcoin) | Anyone for Bitcoin — privacy-preserving `bitcoin.conf` generator, live network comparison vs Tor |
-| [`/style-guide`](https://anyonemap.anyonerelaysmap.workers.dev/style-guide) | Design tokens and component reference |
-| [`/healthcheck`](https://anyonemap.anyonerelaysmap.workers.dev/healthcheck) | JSON status — worker version, KV bindings, snapshot freshness |
+| [`/`](https://anyonemap.anyoneregiontvmap.workers.dev/) | World map with 22-hub timezone strip, live relay positions, network health score, Anyone-vs-Tor stats |
+| [`/bitcoin`](https://anyonemap.anyoneregiontvmap.workers.dev/bitcoin) | Anyone for Bitcoin — privacy-preserving `bitcoin.conf` generator, live network comparison vs Tor |
+| [`/style-guide`](https://anyonemap.anyoneregiontvmap.workers.dev/style-guide) | Design tokens and component reference |
+| [`/healthcheck`](https://anyonemap.anyoneregiontvmap.workers.dev/healthcheck) | JSON status — worker version, KV bindings, snapshot freshness |
 
 ## Architecture
 
