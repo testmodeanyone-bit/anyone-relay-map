@@ -5,6 +5,7 @@
 
   This file IS the user-facing webpage at https://anyonemap.anyoneregiontvmap.workers.dev/.
   v676: account renamed — every anyonerelaysmap.workers.dev reference (proxy URLs, preconnect, trusted-domain lists) now points at anyoneregiontvmap.workers.dev.
+  v678: when the proxy's AI budget is exhausted or switched off (v645, `paused: true`), AnyClip answers from its built-in knowledge base instead of showing an error.
   v677: the Operators Lounge is retired — panel, guest/operator auth, DMs, polls, reactions, quests, games, E2E, Ably/longpoll client, IPFS routing, the dimension-entry animation, the phone Chat tab, the C shortcut, the overflow-menu entry, the Ably include and the Lounge-only CSS are gone. AnyClip (mascot + AI assistant) stays; AC_PROXY and acSanitize are kept because the rest of the map uses them. The Foundation beacon is a plain landmark again.
   It's a single-file SPA: HTML + CSS + JS all in one document, no separate
   asset files. Loaded D3.js comes from cdnjs.
@@ -21410,6 +21411,17 @@ body.light #geo-info-side-panel .hw-tip-section {
         th: { network:'ข้อผิดพลาดเครือข่าย', auth:'เซสชันหมดอายุ', rate_limit:'กรุณารอสักครู่', server:'เซิร์ฟเวอร์มีปัญหา', client:'คำขอถูกปฏิเสธ', unknown:'เกิดข้อผิดพลาด' },
         id: { network:'Galat jaringan.', auth:'Sesi kedaluwarsa.', rate_limit:'Tunggu sebentar.', server:'Server bermasalah.', client:'Permintaan ditolak.', unknown:'Terjadi kesalahan.' }
       };
+      /* v678: the proxy's AI budget (v645) answers 429/503 with `paused: true`
+       * when the hourly/daily cap is hit or the assistant is switched off. That is
+       * not an error the visitor can fix — answer from the built-in knowledge base
+       * instead, the way an empty reply already does. */
+      if(e && e.body && e.body.paused === true){
+        const _kbReply = findStaticAnswer(question);
+        history.push({role:'assistant', content: _kbReply});
+        if(history.length > 20){ history.splice(0, history.length - 20); }
+        typewrite(_kbReply, ()=>{ typing=false; restoreInput(); chipsEl.style.display=''; });
+        return;
+      }
       const _ueLang = (memory && memory.userProfile && memory.userProfile.lang) || 'en';
       const _catLine = (_catMsgs[_ueLang] && _catMsgs[_ueLang][_cat]) || _catMsgs.en[_cat] || _catMsgs.en.unknown;
       /* Append the backend's own short message in parens when it adds info
