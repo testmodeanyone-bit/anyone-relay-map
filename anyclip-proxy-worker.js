@@ -4,6 +4,12 @@
  *
  * Deployed at: https://anyclip-proxy.anyoneregiontvmap.workers.dev
  * v643: account renamed — ALLOWED_ORIGIN, link allow-list, sign-challenge text and outbound UA now use anyoneregiontvmap.workers.dev.
+ * v647: abuse-lever audit (repo hunt). /api/all-uptimes?build=1 is admin-only; /api/consensus is per-IP limited,
+ *       KV-cached and single-flighted (was an unauthenticated 5 MB amplifier against the directory authorities);
+ *       /api/relay-info?forceip and /api/wallet-ips no longer fan out uncached (KV-first reads + per-IP limits);
+ *       all_uptimes_v1 TTL 7200->7d with single-flight on the cold miss; D1 counters pruned each cron tick;
+ *       enrich/relay-info/relay-health/wallet-ips rate limits fail CLOSED when D1 is down. HMAC_SECRET and
+ *       ADMIN_SECRET were rotated 2026-10-16 after a 2026-03 git-history leak of an old client-side HMAC_SECRET.
  * v646: audit hardening. /api/chat messages are validated (text only, user/assistant, 2,000 chars each, last one from
  *       the user — no content blocks, so no vision pricing); /api/img only fetches from the Anyone docs hosts.
  * v645: AI spend governor. Two days of a bot farm draining the Anthropic budget through the OPEN /api/chat
@@ -325,6 +331,8 @@ var CONSENSUS_URLS = CONSENSUS_AUTH_DIRS.flatMap(function (a) {
 });
 var CONSENSUS_MAX_BYTES = 5 * 1024 * 1024;
 var CONSENSUS_STATUS_KEY = "consensus:last-fetch";
+var CONSENSUS_BODY_KEY = "consensus:body";   /* v647: cache the validated body */
+var CONSENSUS_BODY_FRESH_MS = 10 * 60 * 1e3;   /* v647: consensus is hourly; 10 min fresh is ample */
 var WALLET_LOOKUP = "https://dev.anyone-wallet-lookup.info/network?format=json";
 var IPS_BASE = "https://dev.anyone-wallet-lookup.info/ips?format=json&wallet=";
 /* v530: single source of truth for the AO compute-unit host. The base URL used to be
@@ -1370,8 +1378,8 @@ async function _atomicIncrCounter(env, key, ttlSeconds) {
  * Returns true when the caller is OVER the limit. Fails OPEN when D1 is
  * unavailable, matching _rlExceeded and the existing login limiter: a D1 blip
  * must not lock every user out of authentication. */
-async function _rlExceededSliding(env, key, limit, windowSeconds) {
-  if (!env.USER_DB) return false;
+async function _rlExceededSliding(env, key, limit, windowSeconds, failClosed = false) {
+  if (!env.USER_DB) return failClosed;
   if (typeof key !== "string" || !key) return false;
   const windowMs = windowSeconds * 1e3;
   const now = Date.now();
@@ -1382,7 +1390,7 @@ async function _rlExceededSliding(env, key, limit, windowSeconds) {
    * is irrelevant to the estimate. */
   const ttlSeconds = windowSeconds * 2 + 60;
   const current = await _atomicIncrCounter(env, `${key}|${bucket}`, ttlSeconds);
-  if (current === null) return false;            // D1 unavailable -> fail open
+  if (current === null) return failClosed;       // v647: D1 unavailable -> fail closed on amplification routes, open elsewhere
 
   let prev = 0;
   try {
@@ -2482,7 +2490,7 @@ async function buildAndStoreUptimes(env) {
         const prev = JSON.parse(prevRaw);
         if (prev && prev.relays && Object.keys(prev.relays).length > result.count) {
           prev.lastDegradedAttempt = { ts: Date.now(), walletTimeouts: _walletsTimeout, dropRate: result.dropRate, partialCount: result.count };
-          await env.FP_INDEX.put(KV_UPTIME_KEY, JSON.stringify(prev), { expirationTtl: 7200 });
+          await env.FP_INDEX.put(KV_UPTIME_KEY, JSON.stringify(prev), { expirationTtl: KV_TTL_SECS });   /* v647: was 7200; freshness is judged by builtAt/UPTIME_STALE_MS, so a 2h TTL only created the cold-start thundering herd */
           console.log(`[all-uptimes] kept previous good cache (${Object.keys(prev.relays).length} relays) instead of partial (${result.count})`);
           return prev;
         }
@@ -2494,7 +2502,7 @@ async function buildAndStoreUptimes(env) {
     try {
       const _kvT0 = Date.now();
       const payload = JSON.stringify(result);
-      await env.FP_INDEX.put(KV_UPTIME_KEY, payload, { expirationTtl: 7200 });
+      await env.FP_INDEX.put(KV_UPTIME_KEY, payload, { expirationTtl: KV_TTL_SECS });   /* v647: was 7200 (see above) */
       const _kvDt = Date.now() - _kvT0;
       console.log(`[all-uptimes] KV WRITE OK \u2014 ${result.count} relays, ${Math.round(payload.length / 1024)}KB, ${_kvDt}ms, total_build=${elapsed}s, timeouts(pages/wallets)=${_pagesTimeout}/${_walletsTimeout}`);
     } catch (e) {
@@ -3397,6 +3405,13 @@ var worker_source_default = {
       const forceBuild = url.searchParams.get("build") === "1";
       const _reqT0 = Date.now();
       console.log(`[all-uptimes] REQUEST forceBuild=${forceBuild} ua=${(request.headers.get("user-agent") || "").slice(0, 40)}`);
+      /* v647: a full rebuild (hundreds of upstream fetches + a ~1 MB KV write)
+       * is admin-only now. The same lever on fp-index/hw-relays was already
+       * gated; this one was the straggler. The SPA never sends build=1. */
+      if (forceBuild) {
+        const _authFail = await _checkGrowthAdminAuth(request, env);
+        if (_authFail) return _authFail;
+      }
       if (!forceBuild && env.FP_INDEX) {
         try {
           const _kvT0 = Date.now();
@@ -3436,7 +3451,14 @@ var worker_source_default = {
       console.log(`[all-uptimes] CACHE MISS \u2014 running synchronous build`);
       try {
         const _buildT0 = Date.now();
-        const result = await buildAndStoreUptimes(env);
+        /* v647: an organic cold miss funnels through single-flight so one
+         * dead-cache moment cannot spawn N concurrent 600-fetch builds that
+         * hammer the upstream and race the same KV key. The admin forceBuild
+         * path bypasses the lock so an operator can always force a rebuild. */
+        const result = forceBuild
+          ? await buildAndStoreUptimes(env)
+          : await withSingleFlight(env, KV_UPTIME_KEY, 300, () => buildAndStoreUptimes(env));
+        if (result === null) return cors(JSON.stringify({ error: "warming", retryAfter: 30 }), 503, { "Retry-After": "30" });
         const _buildDt = ((Date.now() - _buildT0) / 1e3).toFixed(1);
         const _totalDt = ((Date.now() - _reqT0) / 1e3).toFixed(1);
         console.log(`[all-uptimes] MISS build ok \u2014 ${result.count} relays in ${_buildDt}s (total ${_totalDt}s)`);
@@ -3553,7 +3575,7 @@ var worker_source_default = {
       if (env.FP_INDEX) {
         const erIp = request.headers.get("CF-Connecting-IP") || "unknown";
         /* v546: atomic (see _rlExceededSliding) - same 60s sliding window, now race-free. */
-        if (await _rlExceededSliding(env, `enrich-rl:${erIp}`, 30, 60)) { return cors(JSON.stringify({ error: "Rate limit reached" }), 429); }
+        if (await _rlExceededSliding(env, `enrich-rl:${erIp}`, 30, 60, true)) { return cors(JSON.stringify({ error: "Rate limit reached" }), 429); }
       }
       const relays = {};
       let resolved = 0, notFound = 0, failed = 0, cacheHits = 0;
@@ -3855,7 +3877,7 @@ if (url.pathname === "/api/exit-relays" && request.method === "GET") {
     if (url.pathname === "/api/wallet-ips" && request.method === "GET") {
       const wallet = url.searchParams.get("wallet") || "";
       if (!wallet) return cors(JSON.stringify({ error: "wallet param required" }), 400);
-      if (!/^0x[0-9a-fA-F]{40}$/.test(wallet)) return cors(JSON.stringify({ error: "wallet must be a 0x-prefixed 40-hex address" }), 400);   /* v642: junk went upstream and came back as a 502 */
+      if (!/^0x[0-9a-fA-F]{40}$/.test(wallet)) return cors(JSON.stringify({ error: "wallet must be a 0x-prefixed 40-hex address" }), 400);   /* v647: per-IP limit below; v642: junk went upstream and came back as a 502 */
       /* v536: KV cache + timeout + stale-on-error.
        *
        * Measured 2026-09-10: the fp-index build failed 127 of 510 wallets, every
@@ -3887,6 +3909,12 @@ if (url.pathname === "/api/exit-relays" && request.method === "GET") {
        * Deliberately NOT touching /api/exit-relays: its pagination cost is
        * intentional. This is the per-wallet timeout rate, which is a different
        * problem with the same upstream. */
+      /* v647: without a per-IP limit, iterating random valid-shaped addresses
+       * was unbounded upstream fetches and one 7-day KV write each. Fail-closed:
+       * a D1 blip must not reopen the enumeration lever. */
+      if (await _rlExceededSliding(env, `wallet-ips-rl:${request.headers.get("CF-Connecting-IP") || "unknown"}`, 30, 60, true)) {
+        return cors(JSON.stringify({ error: "Rate limit reached" }), 429);
+      }
       const _wiKey = `wallet-ips:${wallet.toLowerCase()}`;
       const _WI_FRESH_MS = 30 * 60 * 1e3;
       let _wiCached = null;
@@ -3923,11 +3951,13 @@ if (url.pathname === "/api/exit-relays" && request.method === "GET") {
           lm: relay.ao_location_multiplier || 1,
           fm: relay.ao_family_multiplier || 1
         }));
-        if (env.FP_INDEX) {
+        if (env.FP_INDEX && relays.length > 0) {
           /* 7-day TTL, freshness judged by builtAt — same shape as the v530
            * hw-relays cache. The long TTL is what makes the stale fallback below
            * possible; a 30-minute TTL would delete the copy we want to fall back
-           * onto at exactly the moment upstream starts failing. */
+           * onto at exactly the moment upstream starts failing.
+           * v647: only persist NON-empty results, so iterating addresses that
+           * never existed cannot fill the namespace with permanent relays:[] rows. */
           ctx.waitUntil(env.FP_INDEX.put(
             _wiKey,
             JSON.stringify({ relays, builtAt: Date.now() }),
@@ -3968,7 +3998,7 @@ if (url.pathname === "/api/exit-relays" && request.method === "GET") {
       if (env.FP_INDEX) {
         const riIp = request.headers.get("CF-Connecting-IP") || "unknown";
         /* v546: atomic (see _rlExceededSliding) - same 60s sliding window, now race-free. */
-        if (await _rlExceededSliding(env, `relay-info-rl:${riIp}`, 30, 60)) {
+        if (await _rlExceededSliding(env, `relay-info-rl:${riIp}`, 30, 60, true)) {
           return cors(JSON.stringify({ error: "Rate limit reached" }), 429);
         }
       }
@@ -4023,16 +4053,28 @@ if (url.pathname === "/api/exit-relays" && request.method === "GET") {
         /* v20: cap the cache-miss fanout. Was: up to 5 pages × ~50 wallets × 1 fetch
          * each = 250 outbound fetches per request. Now: same iteration logic but the
          * per-IP rate limit above prevents abuse. */
+        /* v647: hard per-request cap on upstream fetches, shared across pages. */
+        const _riBudget = { left: 50 };
         for (let page = 1; page <= 5 && !found; page++) {
           /* v607: shared reader — per_page=50 and retries, so this fallback
            * covers 250 wallets instead of 50 and survives a reset. */
           let netData;
           try { netData = await fetchWalletLookupPage(page); } catch (_) { break; }
           const wallets = (netData.wallets || []).filter((w) => w.in_consensus_ips > 0).map((w) => w.wallet);
+          /* v647: route per-wallet lookups through readWalletIps (KV-first, 4 h
+           * window) instead of a direct uncached fetch. forceip used to skip the
+           * all-uptimes cache AND fetch all ~50 wallets/page live = up to 255
+           * uncached fetches per request; now the per-wallet reads hit the
+           * wallet-ips KV the cron warms, and _riBudget caps the live misses. */
           const results = await Promise.all(wallets.map(
-            (wallet) => fetchT(`${IPS_BASE}${encodeURIComponent(wallet)}`).then((r) => r.json()).then((data) => {
-              const match = (data.ips || []).find((r) => (r.fingerprint || "").toUpperCase() === fp);
-              return match ? { wallet, relay: match } : null;
+            (wallet) => readWalletIps(env, wallet, 4 * 3600 * 1e3, _riBudget).then((wi) => {
+              const m = wi && wi.relays && wi.relays.find((r) => (r.fp || "").toUpperCase() === fp);
+              return m ? { wallet, relay: {
+                uptime_seconds: m.up, bandwidth: m.bw, descriptor_nickname: m.n,
+                ip: m.ip, country: m.co, country_iso: m.cc, flags: m.fl,
+                consensus_weight: m.cw, in_consensus: m.ic, ao_is_hardware: m.hw,
+                ao_location_multiplier: m.lm, ao_family_multiplier: m.fm
+              } } : null;
             }).catch(() => null)
           ));
           found = results.find((r) => r !== null) || null;
@@ -4095,6 +4137,36 @@ if (url.pathname === "/api/exit-relays" && request.method === "GET") {
        * single layer's failure → 502, no poisoned body served. We also
        * write a short status snapshot to KV for the /api/consensus/status
        * diagnostic endpoint. */
+      /* v647: this doc is hourly and up to 5 MB. Served live and uncached it was
+       * an unauthenticated amplifier against the Anyone directory authorities.
+       * Now: a per-IP limit, a 10-minute KV cache, and a self-expiring 60 s lock
+       * so at most one origin fetch runs per colo at a time (consensus changes
+       * hourly, so serving a slightly stale copy to concurrent callers is fine). */
+      const _cIp = request.headers.get("CF-Connecting-IP") || "unknown";
+      if (await _rlExceeded(env, `consensus-rl:${_cIp}`, 10, 60)) {
+        return cors(JSON.stringify({ error: "Rate limit reached" }), 429);
+      }
+      const _serveCachedConsensus = (c, label) => new Response(c.body, { headers: {
+        "Content-Type": "text/plain; charset=utf-8",
+        "Access-Control-Allow-Origin": ALLOWED_ORIGIN,
+        "Cache-Control": "public, max-age=300",
+        "X-Cache": label || "HIT",
+        "X-Consensus-Source": c.scheme || "",
+        "X-Consensus-Signature": c.sigMode || ""
+      } });
+      if (env && env.FP_INDEX) {
+        try {
+          const _cc = await env.FP_INDEX.get(CONSENSUS_BODY_KEY, { type: "json" });
+          if (_cc && _cc.body && (Date.now() - (_cc.ts || 0)) < CONSENSUS_BODY_FRESH_MS) return _serveCachedConsensus(_cc, "HIT");
+        } catch (_) {}
+        let _inflight = false;
+        try { _inflight = !!(await env.FP_INDEX.get("consensus:fetch-lock")); } catch (_) {}
+        if (_inflight) {
+          try { const _cc = await env.FP_INDEX.get(CONSENSUS_BODY_KEY, { type: "json" }); if (_cc && _cc.body) return _serveCachedConsensus(_cc, "STALE"); } catch (_) {}
+          return cors(JSON.stringify({ error: "warming", retryAfter: 15 }), 503, { "Retry-After": "15" });
+        }
+        try { await env.FP_INDEX.put("consensus:fetch-lock", "1", { expirationTtl: 60 }); } catch (_) {}
+      }
       const t0 = Date.now();
       /* v55: per-URL timeout lowered 10e3 → 4e3. CONSENSUS_URLS grew from 2 to
        * 14 entries (7 authorities × https/http). _fetchConsensusBytes tries them
@@ -4177,11 +4249,17 @@ if (url.pathname === "/api/exit-relays" && request.method === "GET") {
           CONSENSUS_STATUS_KEY, JSON.stringify(snap), { expirationTtl: 3600 }
         ).catch(() => {}));
       }
+      if (env && env.FP_INDEX) {
+        ctx.waitUntil(env.FP_INDEX.put(CONSENSUS_BODY_KEY, JSON.stringify({ body: fetched.body, scheme: snap.scheme, sigMode: verified.mode, ts: Date.now() }), { expirationTtl: 3600 }).catch(() => {}));
+      }
       return new Response(fetched.body, {
         headers: {
+          /* v647: was no-store; the validated body is public and identical for
+           * the hour, so edge caching is desirable and intended. */
           "Content-Type": "text/plain; charset=utf-8",
           "Access-Control-Allow-Origin": ALLOWED_ORIGIN,
-          "Cache-Control": "no-store",
+          "Cache-Control": "public, max-age=300",
+          "X-Cache": "MISS",
           /* Hint to downstream consumers about which scheme + sig state the
            * upstream supplied. Lets a careful client refuse http+disabled
            * data on its own without changing the body. */
@@ -4734,7 +4812,7 @@ if (url.pathname === "/api/relay-health" && request.method === "GET") {
         if (env.FP_INDEX) {
           const rhIp = request.headers.get("CF-Connecting-IP") || "unknown";
           /* v546: atomic (see _rlExceededSliding) - same 60s sliding window, now race-free. */
-          if (await _rlExceededSliding(env, `relay-health-rl:${rhIp}`, 20, 60)) { return cors(JSON.stringify({ relays: [], error: "Rate limit reached" }), 429); }
+          if (await _rlExceededSliding(env, `relay-health-rl:${rhIp}`, 20, 60, true)) { return cors(JSON.stringify({ relays: [], error: "Rate limit reached" }), 429); }
           /* 30s cache served to all callers — relay up/down state changes
            * over minutes, not seconds. */
           const cached = await env.FP_INDEX.get("relay-health-cache", { type: "json" }).catch(() => null);
@@ -4907,6 +4985,13 @@ return cors("Not found", 404);
         return;
       }
       ctx.waitUntil(env.FP_INDEX.put(lockKey, String(Date.now()), { expirationTtl: 60 }).catch(() => {}));
+    }
+    /* v647: prune expired D1 rate-limit counters. Sliding-window keys embed the
+     * bucket (…|<minute>), so each distinct IP-minute inserts a row that is
+     * never reused; without this the counters table grows without bound (an
+     * IPv6 /64 rotation = one permanent row per request). */
+    if (env.USER_DB) {
+      ctx.waitUntil(env.USER_DB.prepare("DELETE FROM counters WHERE expires_at < ?1").bind(Date.now()).run().catch((e) => { try { console.warn("[cron] counter prune failed:", e.message); } catch (_) {} }));
     }
     /* v612: the growth snapshot was the one cron task that never reported. */
     ctx.waitUntil(storeSnapshot(env).then(() => recordCronOutcome(env, "snapshot", true)).catch(e => { console.warn("[cron] snapshot failed:", e.message); return recordCronOutcome(env, "snapshot", false, e.message); })
